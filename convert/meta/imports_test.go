@@ -131,6 +131,9 @@ func TestOnlyTheConverterReachesGGUF(t *testing.T) {
 		modPath + "/tui":                frontConverts,
 		modPath + "/server":             daemonConverts,
 		modPath + "/server/cmd/jitllmd": daemonConverts,
+		// docs/models.md is rendered from the converter's lists themselves
+		// (convert.Architectures, HFClasses, Projectors); it converts nothing.
+		modPath + "/internal/modelsdoc": "renders docs/models.md from the converter's own lists; converts nothing",
 	}
 	g := pkgGraph(t, filepath.Join("..", ".."))
 	if len(g) < 10 {

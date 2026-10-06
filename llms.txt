@@ -26,6 +26,7 @@ Things to know before using or changing it:
 - [README](https://github.com/samyfodil/jitllm/blob/main/README.md): install, convert, serve, run, memory and device flags, vision, the desktop app, embedding in Go
 - [AGENTS.md](https://github.com/samyfodil/jitllm/blob/main/AGENTS.md): the project's binding rules, covering measurement, correctness gates, architecture scope and the no-mmap and no-Go-compute rules
 - [ROADMAP](https://github.com/samyfodil/jitllm/blob/main/ROADMAP.md): the seven planned items and where each stands
+- [Supported models](https://github.com/samyfodil/jitllm/blob/main/docs/models.md): every GGUF architecture, Hugging Face class and vision projector that converts, and the models each covers; generated from the converter's lists
 - [Testing](https://github.com/samyfodil/jitllm/blob/main/docs/testing.md): how tests find models (`JITLLM_MODELS`), and `internal/testmodels/fetch.sh`
 - [Performance scoreboard](https://github.com/samyfodil/jitllm/blob/main/docs/perf/current.md): ratios against llama.cpp by host, backend and model
 

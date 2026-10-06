@@ -29,6 +29,7 @@ matching evidence file and leave a pointer.
 | what is open, and the levers shelved for being small | `docs/open-questions.md` |
 | the designs: block paging, device sessions, KV paging, vision as blocks, the coverage survey | `docs/design/` |
 | which models a test reads, and every model-selecting test variable | `docs/testing.md` |
+| every architecture, class and projector that converts, and the models each covers | `docs/models.md` (generated from the converter's lists) |
 
 Those files carry the reasoning and the failed attempts. Skipping them is how an
 idea gets proposed for the fourth time; several have a section that exists
@@ -305,10 +306,15 @@ balance (fewer instructions, 13.5% slower).
 
 `convert.archOf` (`convert/config.go`) is the list of GGUF architectures,
 `hfArchTable` (`convert/safetensors.go`) the list of safetensors classes, and
-`convert.visionOf`'s switch the list of projectors. An architecture not in them
-does not convert (`configOf`: "architecture %q is not implemented"); an unknown
-projector is refused at conversion with `ErrNotImplemented`. Adding one is the
-user's decision.
+`convert.projectorOf` (`convert/config.go`, a case each in `visionOf`) the list
+of projectors. An architecture not in them does not convert (`configOf`:
+"architecture %q is not implemented"); an unknown projector is refused at
+conversion with `ErrNotImplemented`. Adding one is the user's decision.
+
+`docs/models.md` is generated from those lists, never written by hand: an entry
+adds its models' line to `internal/modelsdoc/describe.go` (the generator refuses
+a name without one) and reruns `go run ./scripts/genmodels docs/models.md`;
+`srcgate.TestModelsDocIsGenerated` fails until it does.
 
 **Scope is jitllm's only defence.** llama.cpp has 176 `LLM_ARCH_` cases and 50
 graph builders; Ollama had a funded team, covered ~21 architectures, and deleted
@@ -383,15 +389,15 @@ A new architecture adds one row here and its narrative in
 
 | architecture (source names) | what is special about its graph | gates | evidence |
 |---|---|---|---|
-| llama (llama2, llama3; ernie4_5 dense; `MixtralForCausalLM`) | the base block; ERNIE 4.5 dense is this graph exactly | `TestGreedyMatchesLlamaCpp`, `TestBatchMatchesForward`, `TestSafetensorsMatchTransformers` | MC "RULE 7: SEVEN architectures" |
+| llama (Llama 2 and 3 declare it; ernie4_5 dense; `MixtralForCausalLM`) | the base block; ERNIE 4.5 dense is this graph exactly | `TestGreedyMatchesLlamaCpp`, `TestBatchMatchesForward`, `TestSafetensorsMatchTransformers` | MC "RULE 7: SEVEN architectures" |
 | qwen2 | biased q/k/v | `TestAttentionBiasesReachTheModel`, `TestDeviceMatchesHostOnABiasedModel`, `TestGreedyMatchesLlamaCpp` | MC "RULE 7q", "RULE 7f" |
 | qwen3 | per-head q/k norm | `TestGreedyMatchesLlamaCpp`, `TestSafetensorsMatchTransformers` | MC "RULE 7: SEVEN architectures" |
 | qwen3moe | softmax top-k mixture | `TestGreedyMatchesLlamaCpp`, `TestMoEFFNRunsBatched`, `TestSafetensorsMatchTransformers` | MC "RULE 14: MIXTURE OF EXPERTS" |
 | olmoe | mixture with a whole-projection q/k norm | `TestGreedyMatchesLlamaCpp`, `TestMoEFFNRunsBatched` | MC "RULE 7k" |
-| gemma (gemma1) | embedding scale, GELU, NEOX rotary | `TestGreedyMatchesLlamaCpp` | MC "RULE 7 (original)" |
+| gemma (Gemma 1) | embedding scale, GELU, NEOX rotary | `TestGreedyMatchesLlamaCpp` | MC "RULE 7 (original)" |
 | gemma2 | post-norms, attention and final softcap, sliding layers | `TestGemma2SoftcapOnDevice`, `TestFinalSoftcapReachesTheDeviceHead`, `TestSpecOverAFinalSoftcap` | GK "gemma2 never stepped" |
 | gemma3 | local/global layers, two rotary bases, a linearly scaled global rotary | `TestGemma3GlobalLayersAreLinearlyScaled`, `TestSlidingWindowIsHonouredEverywhere`, `TestSlidingWindowRunsOnTheDevice` | MC "gemma3 on the device" |
-| phi3 (phi4) | fused qkv and gate/up, split at conversion (`convert.unfuse`) | `convert.TestUnfuseSplitsAFusedQKVBias`, `convert.TestPhi3SlidesEveryLayer`, `TestGreedyMatchesLlamaCpp` | GK "RULE 11c's cases" |
+| phi3 (Phi-4 declares it) | fused qkv and gate/up, split at conversion (`convert.unfuse`) | `convert.TestUnfuseSplitsAFusedQKVBias`, `convert.TestPhi3SlidesEveryLayer`, `TestGreedyMatchesLlamaCpp` | GK "RULE 11c's cases" |
 | qwen2vl | qwen2's block with M-RoPE, a property of the row | `TestMRopeMatchesTransformers`, `TestMRopeKeepsTheFivePrinciples`, `TestQwenVLMatchesTransformersEndToEnd` | MC "M-RoPE, the 2-D vision rotary" |
 | qwen3vl (qwen3vlmoe) | qwen3 / qwen3moe under the INTERLEAVED M-RoPE (`nn.IMRopeRuns`; qwen35 takes the same split), deepstack rows added into the first text blocks (`Span.Deep`) | `TestMRopeMatchesTransformers`, `TestQwen3VLRotaryIsInterleaved`, `TestQwen3VLPictureCarriesItsTaps` | MC "Qwen3-VL: deepstack rows" |
 | qwen3next (qwen35, qwen35moe) | the first hybrid: gated delta rule beside attention, shared expert, gated double-width query, partial rotary; qwen35's value heads tiled | `TestHybridRuns`, `TestHybridAttentionBlockOnDevice`, `TestDeltaKeyTiledIsTheDeltaRulesPairing`, `convert.TestQwen35ConvertsIntoQwen3NextsContainer` | MC "qwen3next, qwen35 and qwen35moe"; PL "Qwen3-Next-80B on the card" |
