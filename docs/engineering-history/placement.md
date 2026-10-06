@@ -2760,6 +2760,57 @@ prefetch, which can start block N+1's reads and transfers a block early with
 60% of them right. A device expert cache is the smallest lever: 41% of the
 transfer at the VRAM there is.
 
+### 16c-1. What was built on that attribution, and what each step measured.
+
+Same box, same container, same prompt, `-n 32`, one run per row (each run is
+three to five minutes and RULE 2's twenty interleaved rounds were not taken,
+so no row is a ratio). "Decode" is the run's own decode line over 32 tokens.
+
+| build | prompt | decode s/token | fill split (whole run) |
+|---|---|---|---|
+| attribution build, `JITLLM_GPU_STREAM=1` | 89.9 s | 17.0 | lookup 173 s, gather 327 s, H2D 121 s |
+| + every group's read issued at once, sheets sent from their frames, `STREAM_GROUPS=4` | 44.8 s | 5.56 | H2D 155 s (5.76 GiB/s pageable), read wait 39 s |
+| + page-locked halves (32 MiB) | 46.5 s | 5.46 | H2D 116 s (7.70 GiB/s), copy wait 48 s |
+| + per-block expert cache, 18 sheets (`STREAM_CACHE=18`), 93/93 on the cards | 36.2 s | 3.87 | 37.5% hit, H2D 70 s, read wait 48 s, copy wait 29 s |
+| + cross-layer prefetch (`STREAM_PREFETCH=1`) | 44.4 s | **8.35** | read wait 135 s, decode read 7.7 GB/token |
+| prefetch off, `STREAM_GROUPS=16` | 43.4 s | 4.74 | copy wait 62 s |
+| 12 MiB halves copied a megabyte a goroutine, groups 4, cache 18 | 38.8 s | **3.55** | H2D 79 s, read wait 44 s, copy wait 13 s |
+| `-devices cpu`, same binary family | 59.6-61.0 s | 3.61-3.69 | decode reads 6.0 GB/token at 2.0 GiB/s |
+
+- **The link is the wall.** `cuda.BenchmarkHostToDevicePinned` on the box:
+  8.88 GB/s (8.27 GiB/s) from node 0, 8.03 from node 1; pageable 7.98. Every
+  card is on node 0 behind PCIe switches, and two cards at once aggregate
+  ~11 GB/s. The pinned fill reached 7.3-7.95 GiB/s, so the transfer runs at
+  88-96% of the link. 24.1 GiB of routed experts a token is 2.9 s at the
+  link; the cache's ~38% brings it to ~1.8 s.
+- **The disk is not the wall.** Sixteen parallel 16 MiB `O_DIRECT` reads of the
+  container ran at 5.7 GiB/s (one at 5.3). The host path reads its 6.0 GB a
+  token at 2.0 GiB/s of blocked wall; its decode is read-bound, not compute.
+- **★ The cross-layer prefetch measured worse, not better.** 60.4% of the next
+  block's experts were predicted, and reading them a block early took the
+  token from 3.87 to 8.35 s: the demand reads waited 135 s against 48, and
+  decode read 7.7 GB a token against 6.5. The prefetch's reads queue in
+  front of the reads the fill needs now, and its wrong 40% are bytes the
+  disk serves first. A second opinion (codex) at this fork had expected at
+  best 3.1-3.6 s and named the exact risk (prediction coverage of the MISSES
+  is what pays, and wrong guesses spend the same disk); the mechanism stays as
+  `Config.StreamPrefetch`, off.
+- **Hybrid expert execution was priced, not built.** The host run's decode is
+  3.6 s with ~2.9 s of it blocked on reads; hybrid moves only attention to the
+  card and keeps that read, so it lands at the host's rate. It pays only after
+  the host's own expert read is fixed, and then the host path gains the same.
+- **Placement reads nothing to refuse.** `-devices cuda` without streaming:
+  load read 1.16 GiB (was 55.43) and the run took 3m19.8s wall (was 25m06s),
+  every mixture block refused from the tensor table (`nn.SizeDecliner`).
+- **The default now streams such a block** (`nn.AutoStreamer`,
+  `tier.GPU.AutoStream`), with a cache sized by `autoCacheSlots` (18 on this
+  box). Two runs: 78/93 blocks on the cards (15 on the host: the auto run's
+  cards held 10 blocks each where the forced `STREAM=1 STREAM_CACHE=18` run
+  held up to 16 -- not yet explained), prompt 36.9-41.5 s, decode 3.51-3.66
+  s/token, against the host's 59.9-61.0 s and 3.61-3.69 interleaved with them
+  (auto, cpu, auto, cpu, auto). Faster to first token, level in decode; no
+  ratio is claimed (RULE 2 not met).
+
 ## GPU.Layers' head-on-another-device arm is dead code
 
 ★★★ **AND `GPU.Layers`' HEAD-ON-ANOTHER-DEVICE ARM IS DEAD CODE, ESTABLISHED

@@ -768,6 +768,21 @@ Vulkan, model-correctness.md "kimi-k3") plus these answers.
   with a read. If a fill moves the 16 routed expert pages (268 MiB) that is
   ~1.4 GiB/s over PCIe, far under the link.
 
+### Kimi-K3 streamed on the cards (k3-streaming)
+
+Same box, container and prompt as above, `-n 32`, one run a row, runs
+interleaved device/host; no ratio (RULE 2's paired rounds were not taken).
+placement.md 16c has the attribution.
+
+| run | prompt | decode s/token | tok/s | decode B/token | peak RSS | blocks on cards |
+|---|---|---|---|---|---|---|
+| `-devices cpu` (x3) | 59.9-61.0 s | 3.61-3.69 | 0.27-0.28 | 6.01 GB | 330.7 GiB | 0 |
+| `-devices cuda`, default (auto-stream, cache 18) (x3) | 36.9-41.5 s | 3.51-3.66 | 0.27-0.29 | 6.54-6.57 GB | 347-348 GiB | 78/93 |
+| `-devices cuda`, `STREAM=1 STREAM_GROUPS=4 STREAM_CACHE=18` | 38.8 s | 3.55 | 0.28 | 6.04 GB | 333.4 GiB | 93/93 |
+| `-devices cuda`, `JITLLM_GPU_NO_AUTOSTREAM=1` | 63.5 s | 3.68 | 0.27 | 6.54 GB | 347.2 GiB | 1/93 (load 1.16 GiB, 3m20s wall) |
+
+Link ceiling measured in the same session: 8.27 GiB/s pinned to one V100.
+
 ## ★ THE V100 BOARD (sweep5, one pass, main at c07936d + fixes)
 
 Host: the 8x V100 server, 2x Xeon E5-2680 v4, 8x Tesla V100-SXM2-16GB (sm_70), CUDA.
