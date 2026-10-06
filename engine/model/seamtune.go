@@ -35,6 +35,7 @@ type seamTuner struct {
 	runFrom time.Time
 	verbose bool
 	why     string // what settled it
+	trial   bool   // the stream trial (initStreamTrial), not the seam tuner
 }
 
 // SeamTuneMargin is how much faster a challenger must be to be adopted. It is
@@ -80,6 +81,7 @@ func (s *State) initStreamTrial() {
 	full := s.gpuLayers
 	s.seam = &seamTuner{
 		on:      true,
+		trial:   true,
 		cands:   []int{full, 0},
 		best:    full,
 		chal:    0,
@@ -96,7 +98,11 @@ func (s *State) initStreamTrial() {
 // Off is the default and leaves the load-time placement as it is.
 func (s *State) SetSeamTuning(on bool) {
 	if !on {
-		s.seam = nil
+		// The stream trial is not the seam tuner and has its own switch
+		// (WithStreamTrial): turning seam tuning off leaves it running.
+		if s.seam != nil && !s.seam.trial {
+			s.seam = nil
+		}
 		return
 	}
 	if s.seam == nil {

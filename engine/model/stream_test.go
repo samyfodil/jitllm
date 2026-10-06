@@ -315,8 +315,11 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 		}
 		s := m.NewState(64)
 		s.SetDeviceLayers(g, m.Cfg.NLayer)
+		// The CLI turns seam tuning off after placement; that must not
+		// disarm the trial.
+		s.SetSeamTuning(false)
 		if s.seam == nil {
-			t.Fatal("the stream trial was not armed")
+			t.Fatal("the stream trial was not armed, or seam tuning off disarmed it")
 		}
 		s.seam.warmup, s.seam.perRun, s.seam.rounds = 1, 1, 1
 		for i := 0; i < 40 && !s.seam.settled; i++ {
