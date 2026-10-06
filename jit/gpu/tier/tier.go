@@ -381,6 +381,11 @@ type Config struct {
 	// no cache, and a device without room for a block's cache gives that
 	// block the plain bank (Stats.StreamCacheShort).
 	StreamCacheSlots int
+	// StreamPrefetch runs the cross-layer probe (StreamProbe's launches) at
+	// each streamed block's suspension and starts reading the next block's
+	// predicted experts into host frames behind this block's transfers. Host
+	// reads only; see streamBank.prefetch.
+	StreamPrefetch bool
 	// StreamProbe runs, at each streamed block's suspension, the next block's
 	// router over this block's normed row and scores its top-k against the
 	// selection that block then makes (Stats.ProbeHits): the measurement of a
@@ -683,6 +688,10 @@ type Stats struct {
 	// and missing from a block's expert cache; StreamCacheShort counts blocks
 	// given the plain bank for want of room.
 	StreamCacheHits, StreamCacheMisses, StreamCacheShort int
+	// StreamPrefetched counts experts the cross-layer prefetch read, and
+	// TStreamPrefetchWait the wall a fill spent joining it.
+	StreamPrefetched    int
+	TStreamPrefetchWait time.Duration
 	// ProbeHits of ProbeExperts routed experts were in the previous block's
 	// cross-layer prediction (Config.StreamProbe); ProbeFused counts probes
 	// skipped because the route fuses the rank with the weights.
@@ -970,6 +979,8 @@ func (s *Stats) add(o Stats) {
 	s.StreamCacheHits += o.StreamCacheHits
 	s.StreamCacheMisses += o.StreamCacheMisses
 	s.StreamCacheShort += o.StreamCacheShort
+	s.StreamPrefetched += o.StreamPrefetched
+	s.TStreamPrefetchWait += o.TStreamPrefetchWait
 	s.ProbeHits += o.ProbeHits
 	s.ProbeExperts += o.ProbeExperts
 	s.ProbeFused += o.ProbeFused

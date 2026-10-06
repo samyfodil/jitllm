@@ -271,6 +271,12 @@ type streamBank struct {
 	tick    uint64
 	slotSel []uint32
 	bank    *resident
+	// The cross-layer prefetch (prefetch): the experts it reads, whether a
+	// read is in flight, its join and its error.
+	pfWant []uint32
+	pfOn   bool
+	pfWG   sync.WaitGroup
+	pfErr  error
 	// pred is this block's selection as the previous block's probe predicted
 	// it (Config.StreamProbe), valid while havePred; score compares it with
 	// the real one and clears it.
@@ -354,6 +360,15 @@ func (st *streamBank) fill(g *devTier, s backend.Session, l *layer, nExpert int)
 	}
 	grp := st.groups(g, len(st.items))
 	t0 := time.Now()
+	// The previous block's prefetch of this one is joined first: its reads
+	// are this fill's reads when the prediction was right, and a frame still
+	// being read is the eviction hazard above.
+	if st.pfOn {
+		tw := time.Now()
+		st.pfWG.Wait()
+		st.pfOn = false
+		g.TStreamPrefetchWait += time.Since(tw)
+	}
 	if st.pre != nil {
 		if cap(st.rd) < len(grp) {
 			st.rd = make([]streamRead, len(grp))
@@ -398,6 +413,39 @@ func (st *streamBank) fill(g *devTier, s backend.Session, l *layer, nExpert int)
 		}
 	}
 	return err
+}
+
+// prefetch starts reading this block's predicted experts into host frames
+// while the block before it finishes (Config.StreamPrefetch). It reads and
+// never uploads: a wrong guess costs disk bytes, not link bytes or cache
+// slots, and the fill that follows still reads, maps and sends exactly the
+// experts the router chose. An expert the cache already holds is not read.
+func (st *streamBank) prefetch(g *devTier) {
+	if st.pre == nil || st.pfOn {
+		return
+	}
+	st.pfWant = st.pfWant[:0]
+	for _, e := range st.pred {
+		if st.cached() && int(e) < len(st.slotOf) && st.slotOf[e] >= 0 {
+			continue
+		}
+		st.pfWant = append(st.pfWant, e)
+	}
+	if len(st.pfWant) == 0 {
+		return
+	}
+	g.StreamPrefetched += len(st.pfWant)
+	st.pfOn = true
+	st.pfWG.Add(1)
+	go st.prefetchRun()
+}
+
+// prefetchRun is prefetch's read on its own goroutine. Its error is kept
+// and not returned: a failed guess is not a failed token, and the fill's own
+// read of anything it needs reports a real failure.
+func (st *streamBank) prefetchRun() {
+	defer st.pfWG.Done()
+	st.pfErr = st.pre(st.pfWant)
 }
 
 // streamItem is one sheet set a fill sends: expert e into compact slot slot.
@@ -1603,6 +1651,9 @@ type blockScratch struct {
 	route                   backend.Kernel // rank+weights in one launch, the plain softmax route
 	quantX                  backend.Kernel
 	rlogits, rsel, rtop, rw backend.Buf
+	// rwProbe is the cross-layer probe's routing weights, kept off rw, which
+	// holds the block's own until its combine reads them.
+	rwProbe backend.Buf
 	// The V3 family's grouped selection: gscore writes one score per expert
 	// group into rgs, gmask writes the masked selection plane into rbm, and
 	// rank then counts over rbm instead of over the logits. Both are nil on
@@ -3523,6 +3574,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		al(&bs.ident, k*4)
 		al(&bs.rtop, (k+1)*4)
 		al(&bs.rw, (k+1)*4) // slot k is ExpertRoute's bin
+		al(&bs.rwProbe, (k+1)*4)
 		if p.DenseMoE {
 			al(&bs.hr, rows*p.NEmbd*4)
 			al(&bs.rwS, k*4)
@@ -7337,9 +7389,16 @@ func (g *devTier) layersSession(s backend.Session) {
 						switch {
 						case fusedRoute:
 							// Rank and weights in one workgroup (kernels.ExpertRoute).
-							if err == nil && weights {
+							// The probe's weights go to a scratch of their own:
+							// this block's are already in bs.rw and still to
+							// be read.
+							rwDst := bs.rw
+							if !weights {
+								rwDst = bs.rwProbe
+							}
+							if err == nil {
 								err = lc.launch(bs.route, 1, bs.routeWidth,
-									logits, bs.rsel, bs.rtop, bs.rw)
+									logits, bs.rsel, bs.rtop, rwDst)
 							}
 						case bs.gscore != nil:
 							lc.la(bs.rank, bs.nExpert, logits, bs.rsel, bs.rtop, plane)
@@ -7360,7 +7419,7 @@ func (g *devTier) layersSession(s backend.Session) {
 								err = lc.launch(bs.weights, 1, 1, bs.rtop, bs.rw)
 							}
 						}
-						return fusedRoute
+						return false
 					}
 					route(l, true)
 					// The suspension, for a streamed bank: the selection comes home, k
@@ -7394,7 +7453,7 @@ func (g *devTier) layersSession(s backend.Session) {
 						if err == nil && !g.StreamFixedSel {
 							l.stream.score(g, li)
 						}
-						if err == nil && g.StreamProbe && li+1 < hi {
+						if err == nil && (g.StreamProbe || g.StreamPrefetch) && li+1 < hi {
 							// The cross-layer probe: the next block's router over this
 							// block's normed row, ranked by that block's own launches.
 							// It clobbers rsel and rtop, which nothing below reads on a
@@ -7407,6 +7466,9 @@ func (g *devTier) layersSession(s backend.Session) {
 									nx.stream.pred = growU32(nx.stream.pred, len(nx.stream.sel))
 									err = s.Read(bs.rsel, u32b(nx.stream.pred))
 									nx.stream.havePred = err == nil
+									if err == nil && g.StreamPrefetch {
+										nx.stream.prefetch(g)
+									}
 								}
 							}
 						}

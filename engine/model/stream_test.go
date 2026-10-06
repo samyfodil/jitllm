@@ -88,6 +88,7 @@ func TestStreamedExpertBankMatchesTheResidentOne(t *testing.T) {
 		{"direct, a piece a half", func(c *tier.Config) { c.StreamDirectBytes = 1; c.StreamGroups = 1; c.StreamPinHalf = 1 }, true, false},
 		{"expert cache", func(c *tier.Config) { c.StreamCacheSlots = 13; c.StreamGroups = 1 }, true, false},
 		{"expert cache, four groups", func(c *tier.Config) { c.StreamCacheSlots = 13; c.StreamGroups = 4 }, true, true},
+		{"expert cache, prefetch", func(c *tier.Config) { c.StreamCacheSlots = 13; c.StreamGroups = 1; c.StreamPrefetch = true }, true, false},
 		{"direct, four groups", func(c *tier.Config) { c.StreamDirectBytes = 1; c.StreamGroups = 4 }, true, true},
 	}
 	for _, arm := range arms {
@@ -127,6 +128,13 @@ func streamedMatches(t *testing.T, run func(func(*tier.Config)) ([][]float32, ti
 	}
 	if c.StreamCacheSlots > 0 {
 		t.Logf("expert cache: %d hits, %d misses", ss.StreamCacheHits, ss.StreamCacheMisses)
+	}
+	if c.StreamPrefetch && (ss.StreamPrefetched == 0 || ss.ProbeExperts == 0) {
+		t.Fatalf("the prefetch arm read %d experts ahead and scored %d: it did not run",
+			ss.StreamPrefetched, ss.ProbeExperts)
+	}
+	if !c.StreamPrefetch && ss.StreamPrefetched != 0 {
+		t.Fatalf("an arm without the prefetch read %d experts ahead", ss.StreamPrefetched)
 	}
 	if overlap != (ss.StreamOverlaps > 0) {
 		t.Fatalf("%d reads issued behind a transfer, want overlap %v", ss.StreamOverlaps, overlap)
