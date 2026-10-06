@@ -944,9 +944,16 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 					sec(ds.TStreamWait), sec(ds.TStreamRead), sec(ds.TStreamPut),
 					ds.StreamFills, ds.StreamOverlaps)
 				fmt.Fprintf(os.Stderr,
-					"stream upload: sheet lookup %.2f s, gather %.2f s, host-to-device %.2f s for %.2f GiB (%.2f GiB/s)\n",
+					"stream upload: sheet lookup %.2f s, gather %.2f s, host-to-device %.2f s for %.2f GiB (%.2f GiB/s); "+
+						"%d plane(s) direct (%d page-locked), %d gathered\n",
 					sec(ds.TStreamSheet), sec(ds.TStreamCopy), sec(ds.TStreamH2D),
-					float64(ds.StreamBytes)/(1<<30), float64(ds.StreamBytes)/(1<<30)/max(sec(ds.TStreamH2D), 1e-9))
+					float64(ds.StreamBytes)/(1<<30), float64(ds.StreamBytes)/(1<<30)/max(sec(ds.TStreamH2D), 1e-9),
+					ds.StreamDirect, ds.StreamPinned, ds.StreamGathered)
+			}
+			if ds.StreamCacheHits+ds.StreamCacheMisses > 0 || ds.StreamCacheShort > 0 {
+				fmt.Fprintf(os.Stderr, "expert cache: %d hit(s), %d miss(es) (%.1f%% hit), %d block(s) without room for one\n",
+					ds.StreamCacheHits, ds.StreamCacheMisses,
+					100*float64(ds.StreamCacheHits)/max(float64(ds.StreamCacheHits+ds.StreamCacheMisses), 1), ds.StreamCacheShort)
 			}
 			if ds.ProbeExperts > 0 || ds.ProbeFused > 0 {
 				fmt.Fprintf(os.Stderr, "cross-layer probe: %d of %d routed experts predicted (%.1f%%), %d probe(s) skipped on a fused route\n",

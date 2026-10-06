@@ -4,6 +4,7 @@ package model
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/samyfodil/jitllm/jit/gpu/tier"
@@ -37,11 +38,11 @@ func TestStreamedExpertBankMatchesTheResidentOne(t *testing.T) {
 	}
 
 	ids := []int32{1, 2, 3, 4, 5, 6, 7, 8}
-	run := func(stream bool) ([][]float32, tier.Stats, int, uint64) {
+	run := func(stream func(*tier.Config)) ([][]float32, tier.Stats, int, uint64) {
 		t.Helper()
 		opts := []tier.Option{tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff)}
-		if stream {
-			opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.StreamExperts = true }))
+		if stream != nil {
+			opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.StreamExperts = true; stream(c) }))
 		}
 		g, err := tier.OpenWith(opts...)
 		if err != nil || g == nil {
@@ -59,7 +60,7 @@ func TestStreamedExpertBankMatchesTheResidentOne(t *testing.T) {
 		for i, id := range ids {
 			l, err := s.Forward(id)
 			if err != nil {
-				t.Fatalf("stream=%v: %v", stream, err)
+				t.Fatalf("stream=%v: %v", stream != nil, err)
 			}
 			out[i] = append([]float32(nil), l...)
 		}
@@ -68,8 +69,68 @@ func TestStreamedExpertBankMatchesTheResidentOne(t *testing.T) {
 		return out, g.Stats(), placed, g.Bytes()
 	}
 
-	want, rs, rp, rb := run(false)
-	got, ss, sp, sb := run(true)
+	want, rs, rp, rb := run(nil)
+	// Four streamed arms: the fixture's sheets are small, so the default
+	// gathers them; StreamDirectBytes 1 sends every sheet straight from its
+	// frame; four groups put reads in flight behind the transfers. Each
+	// must be the resident answer bit for bit, and each must have taken its
+	// path (StreamDirect, StreamGathered, StreamOverlaps).
+	arms := []struct {
+		name    string
+		cfg     func(*tier.Config)
+		direct  bool
+		overlap bool
+	}{
+		{"gathered", func(c *tier.Config) { c.StreamGroups = 1 }, false, false},
+		{"gathered, four groups", func(c *tier.Config) { c.StreamGroups = 4 }, false, true},
+		{"direct, pageable", func(c *tier.Config) { c.StreamDirectBytes = 1; c.StreamGroups = 1; c.StreamNoPin = true }, true, false},
+		{"direct", func(c *tier.Config) { c.StreamDirectBytes = 1; c.StreamGroups = 1 }, true, false},
+		{"direct, a piece a half", func(c *tier.Config) { c.StreamDirectBytes = 1; c.StreamGroups = 1; c.StreamPinHalf = 1 }, true, false},
+		{"expert cache", func(c *tier.Config) { c.StreamCacheSlots = 13; c.StreamGroups = 1 }, true, false},
+		{"expert cache, four groups", func(c *tier.Config) { c.StreamCacheSlots = 13; c.StreamGroups = 4 }, true, true},
+		{"direct, four groups", func(c *tier.Config) { c.StreamDirectBytes = 1; c.StreamGroups = 4 }, true, true},
+	}
+	for _, arm := range arms {
+		t.Run(arm.name, func(t *testing.T) {
+			streamedMatches(t, run, arm.cfg, arm.direct, arm.overlap, ids, want, rs, rp, rb)
+		})
+	}
+}
+
+func streamedMatches(t *testing.T, run func(func(*tier.Config)) ([][]float32, tier.Stats, int, uint64),
+	cfg func(*tier.Config), direct, overlap bool, ids []int32, want [][]float32, rs tier.Stats, rp int, rb uint64) {
+	got, ss, sp, sb := run(cfg)
+	if direct && (ss.StreamDirect == 0 || ss.StreamGathered != 0) {
+		t.Fatalf("%d planes sent direct and %d gathered: the direct path did not run alone",
+			ss.StreamDirect, ss.StreamGathered)
+	}
+	if !direct && (ss.StreamGathered == 0 || ss.StreamDirect != 0) {
+		t.Fatalf("%d planes gathered and %d sent direct: the gathered path did not run alone",
+			ss.StreamGathered, ss.StreamDirect)
+	}
+	// A direct arm on a device with page-locked memory goes through it unless
+	// told not to; the pageable arm must not.
+	if pinned := direct && !noPin(cfg) && ss.StreamPinned == 0 && ss.StreamDirect > 0; pinned && pinsHost(t) {
+		t.Fatalf("%d planes sent direct and none through page-locked memory", ss.StreamDirect)
+	}
+	if noPin(cfg) && ss.StreamPinned != 0 {
+		t.Fatalf("the pageable arm sent %d planes through page-locked memory", ss.StreamPinned)
+	}
+	// A cache of 13 sheets for a selection of 10 out of 512 both hits and
+	// evicts over eight tokens; a cache arm that did neither tested the plain
+	// bank.
+	var c tier.Config
+	cfg(&c)
+	if c.StreamCacheSlots > 0 && (ss.StreamCacheHits == 0 || ss.StreamCacheMisses == 0 || ss.StreamCacheShort != 0) {
+		t.Fatalf("expert cache: %d hits, %d misses, %d blocks without room: the cache did not run",
+			ss.StreamCacheHits, ss.StreamCacheMisses, ss.StreamCacheShort)
+	}
+	if c.StreamCacheSlots > 0 {
+		t.Logf("expert cache: %d hits, %d misses", ss.StreamCacheHits, ss.StreamCacheMisses)
+	}
+	if overlap != (ss.StreamOverlaps > 0) {
+		t.Fatalf("%d reads issued behind a transfer, want overlap %v", ss.StreamOverlaps, overlap)
+	}
 	t.Logf("resident: %d blocks placed, %d streamed, %d fills, %d device bytes",
 		rp, rs.StreamBlocks, rs.StreamFills, rb)
 	t.Logf("streamed: %d blocks placed, %d streamed, %d fills, %d device bytes (%.2fx less)",
@@ -118,4 +179,22 @@ func TestStreamedExpertBankMatchesTheResidentOne(t *testing.T) {
 			}
 		}
 	}
+}
+
+// noPin reports whether an arm's configuration turns page-locked transfers off.
+func noPin(cfg func(*tier.Config)) bool {
+	var c tier.Config
+	cfg(&c)
+	return c.StreamNoPin
+}
+
+// pinsHost reports whether the gate's device can page-lock host memory, which
+// is CUDA's alone (backend.HostPinner).
+func pinsHost(t *testing.T) bool {
+	g, err := tier.OpenWith(tier.WithDevices("gpu:0"))
+	if err != nil || g == nil {
+		return false
+	}
+	defer g.Close()
+	return strings.HasPrefix(strings.ToLower(g.Name()), "cuda") || strings.Contains(g.Name(), "[ptx]")
 }

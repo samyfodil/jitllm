@@ -53,6 +53,8 @@ var (
 	cuGetErrorString     func(CUresult, *unsafe.Pointer) CUresult
 	cuMemGetInfo         func(*uint64, *uint64) CUresult
 	cuDeviceGetAttribute func(*int32, int32, CUdevice) CUresult
+	cuMemHostAlloc       func(*unsafe.Pointer, uint64, uint32) CUresult
+	cuMemFreeHost        func(unsafe.Pointer) CUresult
 )
 
 // The device identity calls, bound only if the driver has them (binding panics
@@ -241,6 +243,8 @@ func bindCUDA() error {
 	cuGetErrorString = ffi.Fn2[CUresult, CUresult, *unsafe.Pointer](lib, "cuGetErrorString")
 	cuMemGetInfo = ffi.Fn2[CUresult, *uint64, *uint64](lib, "cuMemGetInfo_v2")
 	cuDeviceGetAttribute = ffi.Fn3[CUresult, *int32, int32, CUdevice](lib, "cuDeviceGetAttribute")
+	cuMemHostAlloc = ffi.Fn3[CUresult, *unsafe.Pointer, uint64, uint32](lib, "cuMemHostAlloc")
+	cuMemFreeHost = ffi.Fn1[CUresult, unsafe.Pointer](lib, "cuMemFreeHost")
 	loadGraphs(lib)
 	loadEvents(lib)
 	loadUUID(lib)

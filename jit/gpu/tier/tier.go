@@ -364,6 +364,23 @@ type Config struct {
 	// serial read-then-upload, and is what a host with no PrefetchExperts gets;
 	// see streamBank.fill.
 	StreamGroups int
+	// StreamDirectBytes is the plane size from which a streamed sheet is sent
+	// straight from its host frame rather than gathered; 0 is directSheet. A
+	// field so a gate can force either path on a fixture of any size.
+	StreamDirectBytes int
+	// StreamNoPin sends direct sheets from their host frames as pageable
+	// transfers instead of through page-locked halves: the other arm.
+	StreamNoPin bool
+	// StreamPinHalf is each page-locked half's size; 0 is pinHalf. A gate
+	// sets it to one byte so every piece takes its own half and the
+	// pipeline's second stage runs on a fixture's small sheets.
+	StreamPinHalf int
+	// StreamCacheSlots makes each streamed block's bank an expert cache of
+	// this many sheets, kept across tokens: a selected expert already there
+	// is neither read nor sent. 0, or anything not above the selection, is
+	// no cache, and a device without room for a block's cache gives that
+	// block the plain bank (Stats.StreamCacheShort).
+	StreamCacheSlots int
 	// StreamProbe runs, at each streamed block's suspension, the next block's
 	// router over this block's normed row and scores its top-k against the
 	// selection that block then makes (Stats.ProbeHits): the measurement of a
@@ -657,6 +674,15 @@ type Stats struct {
 	// StreamBytes.
 	TStreamSheet, TStreamCopy, TStreamH2D time.Duration
 	StreamBytes                           int64
+	// StreamDirect counts sheet planes sent straight from a host frame, and
+	// StreamGathered the gathered transfers: the selection check for put.
+	// StreamPinned counts the direct planes that went through the page-locked
+	// halves (sendPieces).
+	StreamDirect, StreamGathered, StreamPinned int
+	// StreamCacheHits and StreamCacheMisses count selected experts found in
+	// and missing from a block's expert cache; StreamCacheShort counts blocks
+	// given the plain bank for want of room.
+	StreamCacheHits, StreamCacheMisses, StreamCacheShort int
 	// ProbeHits of ProbeExperts routed experts were in the previous block's
 	// cross-layer prediction (Config.StreamProbe); ProbeFused counts probes
 	// skipped because the route fuses the rank with the weights.
@@ -938,6 +964,12 @@ func (s *Stats) add(o Stats) {
 	s.TStreamCopy += o.TStreamCopy
 	s.TStreamH2D += o.TStreamH2D
 	s.StreamBytes += o.StreamBytes
+	s.StreamDirect += o.StreamDirect
+	s.StreamGathered += o.StreamGathered
+	s.StreamPinned += o.StreamPinned
+	s.StreamCacheHits += o.StreamCacheHits
+	s.StreamCacheMisses += o.StreamCacheMisses
+	s.StreamCacheShort += o.StreamCacheShort
 	s.ProbeHits += o.ProbeHits
 	s.ProbeExperts += o.ProbeExperts
 	s.ProbeFused += o.ProbeFused
@@ -1165,6 +1197,19 @@ type devTier struct {
 	layerGen uint64
 	// tabPend are page-table writes waiting for flushTabs (kvpool.go).
 	tabPend []tabWrite
+	// sheetStage is the streamed fill's gather buffer per (matrix, plane);
+	// see streamStage.
+	sheetStage [9][]byte
+	// pin is the streamed fill's two page-locked halves, nil until the first
+	// direct sheet or on a device with no page-locked memory; pieces is
+	// put's list of direct sheets, kept so a token allocates none. See
+	// sendPieces.
+	pin     [2][]byte
+	noPin   bool
+	pieces  []sheetPiece
+	packWG  sync.WaitGroup
+	copyWG  sync.WaitGroup
+	packEnd int
 	*Config
 	Stats
 	mu sync.Mutex
@@ -1949,6 +1994,14 @@ func (g *devTier) Close() {
 		return
 	}
 	g.closed = true
+	if hp, ok := g.dev.(backend.HostPinner); ok {
+		for i, b := range g.pin {
+			if b != nil {
+				hp.UnpinHost(b)
+				g.pin[i] = nil
+			}
+		}
+	}
 	// nil entries are compile failures, cached so they are not retried; Close
 	// on one would panic.
 	for _, k := range g.kerns {
