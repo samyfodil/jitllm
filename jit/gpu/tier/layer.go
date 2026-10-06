@@ -2352,7 +2352,7 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 	// Weight.Rows, so the charge and the refund cannot disagree. slots > 1 is a
 	// kernel constraint: at experts <= 1 mkkID returns the plain matvec, which
 	// has no pSel parameter.
-	_, auto := g.autoStream[li]
+	mode, auto := g.autoStream[li]
 	stream := moe && (g.StreamExperts || auto) && slots < bank && slots > 1
 	// cslots is the streamed bank's size in sheets, decided at the first bank
 	// matrix (cacheSlotsFor): slots without an expert cache, more with one.
@@ -2781,7 +2781,13 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 				// told otherwise: on Kimi-K3 over the V100s that decoded 1.43x
 				// the host's rate where sending the sheets lost to it
 				// (placement.md 16c-2).
-				l.stream.hybrid = l.stream.host != nil && (g.HybridExperts || auto && !g.NoHybrid)
+				switch {
+				case l.stream.host == nil || auto && mode == expCard:
+				case auto && mode == expHost, g.HybridExperts:
+					l.stream.hybrid = true
+				default:
+					l.stream.hybrid = auto && !g.NoHybrid
+				}
 				l.stream.initCache(cslots, bank)
 				g.StreamBlocks++
 			}

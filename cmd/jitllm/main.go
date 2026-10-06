@@ -1553,6 +1553,11 @@ func loadOpts(t []tok.Option, budget uint64) []model.Option {
 	}
 	// JITLLM_SH_OVERLAP=0 runs a mixture's shared experts after its routed
 	// read instead of behind it.
+	// JITLLM_EXPERTS=host|card places every mixture block's routed experts
+	// off the card (model.WithExperts); -placement's %host / %card per block.
+	if e := os.Getenv("JITLLM_EXPERTS"); e != "" {
+		o = append(o, model.WithExperts(e))
+	}
 	// JITLLM_STREAM_TRIAL=0 keeps an auto-streamed placement unmeasured.
 	if os.Getenv("JITLLM_STREAM_TRIAL") == "0" {
 		o = append(o, model.WithStreamTrial(false))

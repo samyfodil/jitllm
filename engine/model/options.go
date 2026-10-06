@@ -28,6 +28,8 @@ type modelOpts struct {
 	// noStreamTrial keeps an auto-streamed placement without measuring it
 	// against the host; see WithStreamTrial.
 	noStreamTrial bool
+	// experts is WithExperts' choice.
+	experts string
 
 	// chatClock is the clock a chat template's strftime_now reads; nil is the
 	// wall clock.
@@ -101,6 +103,12 @@ func defaultOpts() modelOpts {
 // (TestSharedOverlapIsTheSameSum); off is the other arm.
 func WithSharedOverlap(on bool) Option { return func(l *loadOpts) { l.opt.noShOverlap = !on } }
 
+// WithExperts places the routed experts of every mixture block a device
+// takes: "host" (hybrid), "card" (sheets streamed every token), or "" (the
+// engine decides; the default). A -placement entry's %host or %card wins for
+// its blocks.
+func WithExperts(where string) Option { return func(l *loadOpts) { l.opt.experts = where } }
+
 // WithStreamTrial sets whether a placement that streamed mixture blocks no
 // card could hold resident is measured against running them on the host
 // (State.initStreamTrial) and the faster kept. On by default.
@@ -144,6 +152,13 @@ type Place struct {
 	// host when it does not fit. On must name a device. With Pin, the block
 	// stays on that device and keeps streaming.
 	Stream bool
+	// Experts places a mixture block's routed experts off the card: "host"
+	// runs them on the host's kernels while the rest of the block runs on
+	// device On (hybrid), "card" streams their sheets to it every token. ""
+	// leaves it to the engine: resident when the block fits, otherwise
+	// streamed with the experts on the host and measured against the host
+	// (WithStreamTrial). Written "N=DEV%host" or "N=DEV%card".
+	Experts string
 }
 
 // Placement is an explicit map of where blocks run, for the blocks it names;
@@ -286,6 +301,13 @@ func ParsePlacement(spec string, strict bool) (Placement, error) {
 		}
 		where = strings.TrimSpace(where)
 		var pl Place
+		if w, ex, ok := strings.Cut(where, "%"); ok {
+			if ex != "host" && ex != "card" {
+				return Placement{}, fmt.Errorf("model: placement %q: %q places the experts on %q; "+
+					"the choices are %%host and %%card", spec, e, ex)
+			}
+			where, pl.Experts = strings.TrimSpace(w), ex
+		}
 		for {
 			switch {
 			case strings.HasSuffix(where, "!"):
@@ -300,6 +322,9 @@ func ParsePlacement(spec string, strict bool) (Placement, error) {
 		pl.On = where
 		if pl.On != "host" {
 			pl.On = nn.DeviceName(pl.On)
+		} else if pl.Experts != "" {
+			return Placement{}, fmt.Errorf("model: placement %q: %q places a block's experts beside "+
+				"a block that is on the host already", spec, e)
 		} else if pl.Stream {
 			return Placement{}, fmt.Errorf("model: placement %q: %q streams a block through the host, "+
 				"which has no slots to stream through", spec, e)

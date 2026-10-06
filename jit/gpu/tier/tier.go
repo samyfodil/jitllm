@@ -1242,10 +1242,13 @@ type devTier struct {
 	layerGen uint64
 	// tabPend are page-table writes waiting for flushTabs (kvpool.go).
 	tabPend []tabWrite
-	// autoStream holds the blocks GPU.AutoStream marked; such a block is
-	// placed streamed whatever StreamExperts says, and given its expert cache
-	// after placement (sizeAutoCaches). Under mu.
-	autoStream map[int]int
+	// autoStream holds the blocks placed with their routed experts off the
+	// card, and where those experts run: GPU.AutoStream's mark (expAuto) or a
+	// placement's (GPU.PlaceExperts). Such a block is placed streamed whatever
+	// StreamExperts says, and given its expert cache after placement
+	// (sizeAutoCaches). It is set on every device, so a block that moves
+	// keeps it. Under mu.
+	autoStream map[int]expertMode
 	// gtune measures the streamed fill's group count (streamtune.go).
 	gtune *groupTuner
 	// sheetStage is the streamed fill's gather buffer per (matrix, plane);

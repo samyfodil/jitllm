@@ -584,13 +584,83 @@ func (g *GPU) AutoStream(li int, total, bank uint64, nExpert, nUsed, blocks int,
 	for _, d := range g.devs {
 		d.mu.Lock()
 		if d.autoStream == nil {
-			d.autoStream = map[int]int{}
+			d.autoStream = map[int]expertMode{}
 		}
-		d.autoStream[li] = 0
+		if _, set := d.autoStream[li]; !set {
+			d.autoStream[li] = expAuto
+		}
 		d.AutoMeanBase = meanBase
 		d.mu.Unlock()
 	}
 	return true
+}
+
+// expertMode is where a streamed block's routed experts run.
+type expertMode int
+
+const (
+	// expAuto is GPU.AutoStream's mark: the block's experts run where the
+	// tier's defaults say (on the host unless Config.NoHybrid).
+	expAuto expertMode = iota
+	// expHost runs them on the host (hybrid), whatever the defaults.
+	expHost
+	// expCard sends their sheets to the card each token.
+	expCard
+)
+
+// PlaceExperts is nn.ExpertPlacer: it places block li's routed experts off
+// the card -- "host" runs them on the host (hybrid), "card" streams their
+// sheets to it -- on every device, so the block keeps the choice wherever it
+// moves; "" clears the choice. It reports false for a word it does not know.
+func (g *GPU) PlaceExperts(li int, where string) bool {
+	var m expertMode
+	switch where {
+	case "host":
+		m = expHost
+	case "card":
+		m = expCard
+	case "":
+	default:
+		return false
+	}
+	for _, d := range g.devs {
+		d.mu.Lock()
+		if d.autoStream == nil {
+			d.autoStream = map[int]expertMode{}
+		}
+		if where == "" {
+			delete(d.autoStream, li)
+		} else {
+			d.autoStream[li] = m
+		}
+		d.mu.Unlock()
+	}
+	return len(g.devs) > 0
+}
+
+// SetExpertMode re-decides where every marked block's experts run, for the
+// trial: "host", "card", or "" for the defaults. A block takes it the next
+// time it is placed. It reports how many blocks it touched.
+func (g *GPU) SetExpertMode(where string) int {
+	m := expAuto
+	switch where {
+	case "host":
+		m = expHost
+	case "card":
+		m = expCard
+	}
+	n := 0
+	for i, d := range g.devs {
+		d.mu.Lock()
+		for li := range d.autoStream {
+			d.autoStream[li] = m
+			if i == 0 {
+				n++
+			}
+		}
+		d.mu.Unlock()
+	}
+	return n
 }
 
 // sizeAutoCaches gives every streamed block on its plain bank an expert

@@ -1335,6 +1335,23 @@ type AutoStreamer interface {
 	AutoStream(li int, total, bank uint64, nExpert, nUsed, blocks int, meanBase uint64) bool
 }
 
+// ExpertPlacer is an optional LayerDevice that can place a mixture block's
+// routed experts off the card: "host" runs them on the host (hybrid
+// execution), "card" streams their sheets to the card each token, "" leaves
+// the device to decide. The choice holds on every device, so a block that
+// moves keeps it.
+type ExpertPlacer interface {
+	PlaceExperts(li int, where string) bool
+}
+
+// ExpertModer is an optional LayerDevice that re-decides where every block
+// placed with its experts off the card runs them ("host", "card", or "" for
+// its defaults), for a measured trial; it takes effect when a block is next
+// placed, and reports how many blocks it touched.
+type ExpertModer interface {
+	SetExpertMode(where string) int
+}
+
 // DeviceName is a device name as a placement compares it: lower case, and the
 // API spellings (ptx, spirv, msl) under the backend ones -devices prints, so
 // "PTX:0" and "cuda:0" are one device.

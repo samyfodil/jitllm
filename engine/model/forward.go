@@ -1519,6 +1519,18 @@ func (s *State) offerRange(lo, hi int) {
 				continue
 			}
 		}
+		// Where the block's routed experts run, when a placement or the caller
+		// says: set before the size check, so a block placed with its experts
+		// off the card is not refused for a bank it will not hold.
+		if ep, ok := ld.(nn.ExpertPlacer); ok && c.MoEAt(li) {
+			where := s.m.opt.experts
+			if named && place.Experts != "" {
+				where = place.Experts
+			}
+			if where != "" {
+				ep.PlaceExperts(li, where)
+			}
+		}
 		// The same for a size no device can hold: a mixture block with its
 		// bank can be bigger than a card, and reading it to learn that cost
 		// minutes a block on a model that size.
