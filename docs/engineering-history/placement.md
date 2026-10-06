@@ -2914,6 +2914,63 @@ longer makes, for a reduction across cards per block. The dense base pages
 cards, so a smaller base page would not cut what a token reads either. No
 converter change is warranted by these numbers.
 
+### 16c-3. Is auto-stream a limitation? An audit, and what it removed.
+
+Where a mixture block's routed experts run is now a placement like any other:
+`model.WithExperts("host"|"card")`, `-placement N=DEV%host` / `%card`,
+`tier.WithHybridExperts`, `tier.WithAutoStream`, and the choice is kept on every
+device (`nn.ExpertPlacer`), so a block that hops tiers, goes home and comes back
+keeps it (`TestOffCardExpertsRelocate`, which counts the off-card runs at each
+destination and fails when a returning block arrives unmarked). The stream trial
+measures three arms -- the placement made, the host, and the same blocks with
+their experts on the other side of the bus -- under the same margin
+(`TestStreamTrialTriesEveryArm`).
+
+What "auto" restricted, read at the source and measured:
+
+- **It fired only for a block bigger than every card, not for one refused for
+  room. Artificial; removed.** A model whose blocks each fit but whose whole does
+  not left the overflow on the host. gpt-oss-20b Q4_K_M on the laptop's 4 GB RTX
+  3050 Ti (CUDA, 6 P-cores, 48 tokens, one run each): default 2/24 blocks
+  resident, the rest host, 4.84 tok/s; every block streamed with its experts on
+  the host, 9.56 tok/s, the host's ids; the same with the sheets sent, 2.90-2.99;
+  `-devices cpu` 2.29. Now a mixture block refused for room streams, and the
+  trial measures the result against the host. With the change, the default run
+  (2 resident, 22 hybrid) read 8.18 tok/s.
+- **A block that fits stays resident by default. Real, priced.** Resident costs
+  no per-token traffic and runs the experts at the card's bandwidth; hybrid only
+  wins where the card cannot hold the experts. Forcing it is one option away
+  (`WithExperts`, `%host`), and the trial is the instrument if a shared card
+  ever argues otherwise.
+- **Streaming needs a pre-packed bank; hybrid inherited it. Partly artificial,
+  priced.** Sent sheets need the sheet layout (real). A hybrid block still
+  allocates the compact bank and compiles the expert kernels it never launches;
+  dropping them frees VRAM for more bases, not yet done.
+- **Top-1 routers (llama4) do not stream** (`slots > 1`): a kernel constraint of
+  the indexed matvec, real for sent sheets, not for hybrid. Priced.
+- **Batched rows refuse a streamed block** (`rows.go`, `prepBatch`): a prompt
+  runs such blocks a row at a time. Real until a hybrid batched path (the host's
+  expert-major `moeBatch` over the rows) is built; it is the next prefill lever.
+- **The expert cache rewrote the selection as slots, and gpt-oss's expert biases
+  are indexed by it.** A real bug, found by the sheets run parting from the host
+  at the thirteenth token: biased banks now keep the plain bank
+  (`TestBiasedExpertsKeepThePlainBank`); a second buffer of true ids would
+  lift it.
+- **Hybrid refused Gemma 4's dense-MLP mixture and ungated experts.** Real: the
+  host's expert path reads one vector and has no ungated fused path; ungated is
+  now refused at offer rather than failing mid-token.
+- **Backends: none.** Streaming uses the generic `WriteAt` (page-locked memory
+  is CUDA's alone, a speed); hybrid uses `Read`/`WriteAt`. gpt-oss-20b on the
+  laptop over Vulkan: hybrid 5.91 tok/s, sheets 2.13, both with the host's
+  tokens over the first twelve. Metal is untested.
+- **Models: no list.** Hybrid runs any gated mixture through `moeFFN` (biases,
+  MXFP4, latent mixtures): Kimi-K3's latent and gpt-oss's biased MXFP4 both held
+  the host's tokens.
+
+So auto-stream was a mode in one respect -- it engaged only past a size -- and
+that is gone: a mixture block that does not get a resident place gets an
+off-card one, and whether that beats the host is measured.
+
 ## GPU.Layers' head-on-another-device arm is dead code
 
 ★★★ **AND `GPU.Layers`' HEAD-ON-ANOTHER-DEVICE ARM IS DEAD CODE, ESTABLISHED
