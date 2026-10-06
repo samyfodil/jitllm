@@ -1465,7 +1465,7 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	// Pages come in during build(), one block at a time, so a container larger
 	// than the host can still be opened.
 	var m *Model
-	if cf := c.Config(); cf != nil && isEncoder(cf.Arch) {
+	if cf := c.Config(); cf != nil && cf.Arch.Encoder() {
 		m, err = buildEncoderModel(c, lo.tok...)
 	} else {
 		if m, err = build(c, lo.tok...); err == nil {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/samyfodil/jitllm/convert/meta"
 	"github.com/samyfodil/jitllm/format/jlm"
@@ -173,15 +174,21 @@ func Architectures() []string {
 	return out
 }
 
+// ArchitectureGraph is the graph a GGUF architecture name converts to, and
+// whether the name is in the list. Several names share one graph. The file can
+// refine it further (olmo2 with a sliding window is jlm.ArchOLMo3, glm4moe
+// with M-RoPE sections jlm.ArchGLM4VMoE); this is the name's own entry.
+func ArchitectureGraph(name string) (jlm.Arch, bool) {
+	a, ok := archOf[name]
+	return a, ok
+}
+
 func configOf(f *meta.File) (*jlm.Config, error) {
 	name := f.Arch()
 	arch, ok := archOf[name]
 	if !ok {
-		return nil, fmt.Errorf("convert: architecture %q is not implemented "+
-			"(llama, llama3, qwen2, qwen2vl, qwen3, qwen3moe, olmoe, gemma, gemma2, "+
-			"gemma3, gpt-oss, phi3/phi4, qwen3next, qwen35, qwen35moe, deepseek2, bert, nomic-bert, "+
-			"llama4, granite, granitemoe, phi2, starcoder, command-r, cohere2, stablelm, starcoder2, falcon, nemotron, dbrx, glm4, glm4moe, qwen2moe, ernie4_5, ernie4_5-moe, hunyuan-moe, hunyuan-dense, minimax-m2, gemma4, deepseek32, gemma3n, minimax-m3, bailingmoe2, dots1, phimoe, apertus, deepseek4, kimi-k3): %w",
-			name, ErrNotImplemented)
+		return nil, fmt.Errorf("convert: architecture %q is not implemented (%s): %w",
+			name, strings.Join(Architectures(), ", "), ErrNotImplemented)
 	}
 	// A state-space hybrid writes its head counts per layer with zeros on the
 	// recurrent layers, and a model with no attention at all writes zero:
@@ -1043,6 +1050,46 @@ func mropeSectionsOf(f *meta.File, name string, c *jlm.Config) error {
 	return nil
 }
 
+// projectorOf is the list of vision projectors (clip.projector_type) the
+// converter implements: an unknown one is refused, as an unknown
+// tokenizer.ggml.pre is. visionOf has a case for each.
+var projectorOf = map[string]jlm.Projector{
+	"idefics3":         jlm.ProjIdefics3,
+	"mlp":              jlm.ProjMLP,
+	"qwen2vl_merger":   jlm.ProjQwen2VL,
+	"gemma3":           jlm.ProjGemma3,
+	"internvl":         jlm.ProjInternVL,
+	"resampler":        jlm.ProjResampler,
+	"janus_pro":        jlm.ProjJanus,
+	"qwen2.5vl_merger": jlm.ProjQwen25VL,
+	"pixtral":          jlm.ProjPixtral,
+	"phi4":             jlm.ProjPhi4,
+	"gemma4v":          jlm.ProjGemma4V,
+	"gemma3nv":         jlm.ProjGemma3nV,
+	"llama4":           jlm.ProjLlama4,
+	"glm4v":            jlm.ProjGLM4V,
+	"hunyuanvl":        jlm.ProjHunyuanVL,
+	"kimivl":           jlm.ProjKimiVL,
+	"qwen3vl_merger":   jlm.ProjQwen3VL,
+}
+
+// Projectors is every name in that list, sorted.
+func Projectors() []string {
+	out := make([]string, 0, len(projectorOf))
+	for name := range projectorOf {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ProjectorOf is the projector a clip.projector_type name converts to, and
+// whether the name is in the list.
+func ProjectorOf(name string) (jlm.Projector, bool) {
+	p, ok := projectorOf[name]
+	return p, ok
+}
+
 // visionOf reads a vision tower's description. A tower is its own container.
 func visionOf(f *meta.File) (*jlm.Vision, error) {
 	if f.Arch() != "clip" {
@@ -1066,32 +1113,37 @@ func visionOf(f *meta.File) (*jlm.Vision, error) {
 		name, _ = f.KV["clip.vision.projector_type"].String()
 	}
 	last := "mm.model.fc.weight"
-	switch name {
-	case "idefics3":
-		v.Projector = jlm.ProjIdefics3
-	case "mlp":
+	p, ok := projectorOf[name]
+	if !ok {
+		return nil, fmt.Errorf("convert: projector_type %q unsupported (only %s): %w",
+			name, strings.Join(Projectors(), ", "), ErrNotImplemented)
+	}
+	v.Projector = p
+	switch v.Projector {
+	case jlm.ProjIdefics3:
+	case jlm.ProjMLP:
 		// llava's: linear, GELU, linear, and no pixel shuffle at all.
-		v.Projector, last = jlm.ProjMLP, "mm.2.weight"
-	case "qwen2vl_merger":
+		last = "mm.2.weight"
+	case jlm.ProjQwen2VL:
 		// Qwen2-VL: the shuffle and the two-matrix MLP. The file does not state
 		// the merge factor, so it is derived below from mm.0's k rather than
 		// defaulted: a wrong one reshapes the sequence without faulting. The tower
 		// has no v.position_embd: position is 2-D rotary over the patch grid.
-		v.Projector, last = jlm.ProjQwen2VL, "mm.2.weight"
+		last = "mm.2.weight"
 		v.Flags |= jlm.FlagVisionRope
-	case "gemma3":
+	case jlm.ProjGemma3:
 		// SigLIP, then average-pool Scale x Scale, RMSNorm and one matrix.
 		// The pool is 4 when the file does not say (llama.cpp's default; only
 		// a test model writes another). The matrix is stored [text, tower],
 		// x @ W in the reference, and transposeGemma3Projection lays it out k
 		// first; its row count before that is therefore the TEXT width.
-		v.Projector, last = jlm.ProjGemma3, "mm.input_projection.weight"
+		last = "mm.input_projection.weight"
 		v.Scale = uint32(f.UintKey("vision.projector.scale_factor", 4))
-	case "internvl":
+	case jlm.ProjInternVL:
 		// InternViT, the shuffle, then LayerNorm, linear, GELU, linear. The
 		// image is cut into up to 12 tiles plus a thumbnail when the file does
 		// not say (llama.cpp's defaults for an older conversion).
-		v.Projector, last = jlm.ProjInternVL, "mm.model.mlp.3.weight"
+		last = "mm.model.mlp.3.weight"
 		v.MinTiles = uint32(f.UintKey("vision.preproc_min_tiles", 1))
 		v.MaxTiles = uint32(f.UintKey("vision.preproc_max_tiles", 12))
 		if v.MinTiles == 0 || v.MinTiles > v.MaxTiles {
@@ -1103,7 +1155,7 @@ func visionOf(f *meta.File) (*jlm.Vision, error) {
 			return nil, fmt.Errorf("convert: clip: this InternViT has a q/k norm (the 6B tower); "+
 				"only InternViT-300M is implemented: %w", ErrNotImplemented)
 		}
-	case "resampler":
+	case jlm.ProjResampler:
 		// MiniCPM-V's perceiver. Versions 3 to 6 (2.6, o-2.6, 4.0, 4.5) share
 		// one graph and one token layout; 2 (Llama3-V 2.5) wraps its slices
 		// differently and asks for 96 queries, so it is refused by name rather
@@ -1113,19 +1165,19 @@ func visionOf(f *meta.File) (*jlm.Vision, error) {
 			return nil, fmt.Errorf("convert: resampler minicpmv_version %d is not implemented "+
 				"(3 to 6 are: MiniCPM-V 2.6, o-2.6, 4.0, 4.5): %w", ver, ErrNotImplemented)
 		}
-		v.Projector, last = jlm.ProjResampler, "resampler.proj.weight"
-	case "janus_pro":
+		last = "resampler.proj.weight"
+	case jlm.ProjJanus:
 		// Janus-Pro's aligner is llava's two matrices with a GELU between, and
 		// the file names the second one mm.1 (llama.cpp's clip.cpp reads
 		// TN_LLAVA_PROJ 0 and 1); sourceOf renames it.
-		v.Projector, last = jlm.ProjJanus, "mm.1.weight"
-	case "qwen2.5vl_merger":
+		last = "mm.1.weight"
+	case jlm.ProjQwen25VL:
 		// Qwen2.5-VL: Qwen2-VL's merger and 2-D rotary behind an RMSNorm,
 		// gated-SiLU tower with window attention. The window is in pixels and
 		// the file states only the pattern; llama.cpp's clip loader defaults the
 		// size to 112 (transformers' window_size) when the key is absent, as
 		// every published mmproj leaves it.
-		v.Projector, last = jlm.ProjQwen25VL, "mm.2.weight"
+		last = "mm.2.weight"
 		v.Flags |= jlm.FlagVisionRope
 		v.WinPattern = uint32(f.UintKey("vision.n_wa_pattern", 0))
 		v.WinSize = uint32(f.UintKey("vision.window_size", 112))
@@ -1133,67 +1185,67 @@ func visionOf(f *meta.File) (*jlm.Vision, error) {
 			return nil, fmt.Errorf("convert: clip: qwen2.5vl_merger with no n_wa_pattern, so which " +
 				"blocks attend inside windows is unknown")
 		}
-	case "pixtral":
+	case jlm.ProjPixtral:
 		// Mistral's ViT and llava's MLP, with Mistral 3's patch merger when
 		// the file states a merge size (Pixtral-12B states none: 1). The
 		// picture is read at its own size, the longest side at most
 		// image_size; the rotary's base is 10000, which llama.cpp's loader
 		// sets for this projector and every published config states.
-		v.Projector, last = jlm.ProjPixtral, "mm.2.weight"
+		last = "mm.2.weight"
 		v.Flags |= jlm.FlagVisionRope
 		v.Scale = uint32(f.UintKey("vision.spatial_merge_size", 1))
 		if v.Scale == 0 {
 			return nil, fmt.Errorf("convert: clip: pixtral states a spatial merge of 0")
 		}
-	case "phi4":
+	case jlm.ProjPhi4:
 		// Phi-4-reasoning-vision: the picture is read at its own size between
 		// two pixel counts the file states; without them a picture has no
 		// size. The converter already dropped the last block and the
 		// post-LayerNorm (the reference reads hidden_states[-2]).
-		v.Projector, last = jlm.ProjPhi4, "mm.2.weight"
+		last = "mm.2.weight"
 		v.MinPixels = uint32(f.UintKey("vision.image_min_pixels", 0))
 		v.MaxPixels = uint32(f.UintKey("vision.image_max_pixels", 0))
 		if v.MinPixels == 0 || v.MaxPixels < v.MinPixels {
 			return nil, fmt.Errorf("convert: clip: phi4 states image_min_pixels %d and "+
 				"image_max_pixels %d; a picture read at its own size needs both", v.MinPixels, v.MaxPixels)
 		}
-	case "gemma4v":
+	case jlm.ProjGemma4V:
 		// Gemma 4's tower. llama.cpp's graph scales the [0, 1] pixels to
 		// 2x - 1 in place of a normalisation, which is mean 0.5 and std 0.5;
 		// the MLP is gelu_pytorch_tanh, which the file does not state; the
 		// pool is 3x3 unless the file says. The rotary's base (100) is the
 		// loader's constant, as llama.cpp's is.
-		v.Projector, last = jlm.ProjGemma4V, "mm.input_projection.weight"
+		last = "mm.input_projection.weight"
 		v.Flags |= jlm.FlagVisionRope | jlm.FlagGELU
 		v.Scale = uint32(f.UintKey("vision.projector.scale_factor", 3))
-	case "gemma3nv":
+	case jlm.ProjGemma3nV:
 		// Gemma 3n's MobileNet-V5: llama.cpp's converter writes a block count
 		// of 128 and a patch of image_size/256 for its own loader, neither
 		// the tower's. The blocks are the file's (stage, place) pairs, one
 		// container block each, and a "patch" is the fusion adapter's output
 		// cell, 16 to a side, so the tower's token count is its 256 soft
 		// tokens. GELU is timm's tanh form; the pixels are [0, 1].
-		v.Projector, last = jlm.ProjGemma3nV, "mm.input_projection.weight"
+		last = "mm.input_projection.weight"
 		v.Flags |= jlm.FlagGELU
 		v.NLayer = uint32(len(mobilenetPlaces(f)))
 		if v.NLayer == 0 || v.ImageSize%16 != 0 {
 			return nil, fmt.Errorf("convert: clip: gemma3nv with %d blocks and a %d-pixel picture", v.NLayer, v.ImageSize)
 		}
 		v.PatchSize, v.Scale = v.ImageSize/16, 1
-	case "llama4":
+	case jlm.ProjLlama4:
 		// Llama 4's ViT and its adapter: the pixel shuffle the file states,
 		// two matrices each followed by a GELU, then the projector's matrix.
 		// The file states neither tile bound; the processor's are one tile
 		// and max_patches 16.
-		v.Projector, last = jlm.ProjLlama4, "mm.model.fc.weight"
+		last = "mm.model.fc.weight"
 		v.Flags |= jlm.FlagVisionRope
 		v.MinTiles, v.MaxTiles = 1, 16
-	case "glm4v":
+	case jlm.ProjGLM4V:
 		// GLM-4.1V / 4.5V / 4.6V: an RMSNorm, gated-SiLU tower with the 2-D
 		// rotary and a learned table resampled BICUBIC, an RMSNorm after the
 		// patch embedding, a 2x2 merging convolution, then linear, LayerNorm,
 		// GELU and a gated MLP. See jlm.ProjGLM4V.
-		v.Projector, last = jlm.ProjGLM4V, "mm.down.weight"
+		last = "mm.down.weight"
 		v.Flags |= jlm.FlagVisionRope
 		mc, ok := f.Get("mm.patch_merger.weight")
 		if !ok || len(mc.Dims) != 4 || mc.Dims[0] != mc.Dims[1] {
@@ -1203,12 +1255,12 @@ func visionOf(f *meta.File) (*jlm.Vision, error) {
 		if _, ok := f.Get("v.position_embd.weight"); !ok {
 			return nil, fmt.Errorf("convert: clip: glm4v with no v.position_embd")
 		}
-	case "hunyuanvl":
+	case jlm.ProjHunyuanVL:
 		// HunyuanVL's tower and merger. See jlm.ProjHunyuanVL. The picture is
 		// read at its own size between the two pixel counts the file states,
 		// to whole merge units; the table's class row is already gone
 		// (llama.cpp's converter drops it).
-		v.Projector, last = jlm.ProjHunyuanVL, "mm.model.fc.weight"
+		last = "mm.model.fc.weight"
 		v.Scale = uint32(f.UintKey("vision.spatial_merge_size", 2))
 		v.MinPixels = uint32(f.UintKey("vision.image_min_pixels", 0))
 		v.MaxPixels = uint32(f.UintKey("vision.image_max_pixels", 0))
@@ -1219,31 +1271,30 @@ func visionOf(f *meta.File) (*jlm.Vision, error) {
 		if _, ok := f.Get("v.position_embd.weight"); !ok {
 			return nil, fmt.Errorf("convert: clip: hunyuanvl with no v.position_embd")
 		}
-	case "kimivl":
+	case jlm.ProjKimiVL:
 		// Kimi-VL's MoonViT and its projector. See jlm.ProjKimiVL. The file
 		// states the 2x2 merge (projector.scale_factor) and names the
 		// projector's matrices mm.1 and mm.2 (towerName).
-		v.Projector, last = jlm.ProjKimiVL, "mm.2.weight"
+		last = "mm.2.weight"
 		v.Flags |= jlm.FlagVisionRope
 		v.Scale = uint32(f.UintKey("vision.projector.scale_factor", 2))
 		if _, ok := f.Get("v.position_embd.weight"); !ok {
 			return nil, fmt.Errorf("convert: clip: kimivl with no v.position_embd")
 		}
-	case "qwen3vl_merger":
+	case jlm.ProjQwen3VL:
 		// Qwen3-VL: Qwen2-VL's merger and 2-D rotary behind a LayerNorm,
 		// GELU-tanh tower that also adds a learned position table, resampled
 		// to each picture's grid; and deepstack mergers on some blocks
 		// (v.deepstack.N.*, which deepstackOf reads). See jlm.ProjQwen3VL.
-		v.Projector, last = jlm.ProjQwen3VL, "mm.2.weight"
+		last = "mm.2.weight"
 		v.Flags |= jlm.FlagVisionRope
 		if _, ok := f.Get("v.position_embd.weight"); !ok {
 			return nil, fmt.Errorf("convert: clip: qwen3vl_merger with no v.position_embd")
 		}
 	default:
-		return nil, fmt.Errorf("convert: projector_type %q unsupported (only \"idefics3\", \"mlp\", "+
-			"\"qwen2vl_merger\", \"qwen2.5vl_merger\", \"qwen3vl_merger\", \"glm4v\", \"kimivl\", \"hunyuanvl\", \"gemma3\", "+
-			"\"internvl\", \"resampler\", \"janus_pro\", \"pixtral\", \"llama4\", \"gemma4v\", \"phi4\", \"gemma3nv\"): %w",
-			name, ErrNotImplemented)
+		// A projector in projectorOf with no case here would convert with
+		// another projector's tensor names; refuse it instead.
+		return nil, fmt.Errorf("convert: projector_type %q has no conversion case", name)
 	}
 	// projection_dim is not the projector's output width: llava-phi-3 carries
 	// CLIP's contrastive projection dim (768) there while mm.2 emits 3072. The

@@ -357,6 +357,11 @@ func (a Arch) name() string {
 // with a name, so a gap between two ranges of codes is not one.
 func (a Arch) Valid() bool { return a != ArchNone && (a <= archMax || a.name() != "") }
 
+// Encoder reports whether a is an embedding encoder (the BERT family): run by
+// the engine's encoder rather than its decoder graph, with no KV cache and no
+// logits. A decoder that pools (FlagPoolMean and its siblings) is not one.
+func (a Arch) Encoder() bool { return a == ArchBERT || a == ArchNomicBERT }
+
 // Config is the model description. Every field is written by the converter and
 // read by the engine; nothing is derived at load from a string.
 type Config struct {

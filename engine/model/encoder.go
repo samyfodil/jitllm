@@ -45,10 +45,6 @@ type encoder struct {
 	swiglu   bool
 }
 
-// isEncoder reports whether an architecture is run by this file rather than by
-// the decoder graph in forward.go.
-func isEncoder(a jlm.Arch) bool { return a == jlm.ArchBERT || a == jlm.ArchNomicBERT }
-
 // buildEncoder loads an encoder container. It touches no block page: every
 // norm and bias is Expanded (dense), and the matrices are bound by pageIn as
 // Embed reaches them -- the same O(bytes read) Open the text model has.

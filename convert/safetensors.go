@@ -1126,13 +1126,30 @@ func hfArchOf(c *hfConfig) (*hfArch, error) {
 	if have == "" {
 		have = "none, and model_type is " + strconv.Quote(c.ModelType)
 	}
+	return nil, fmt.Errorf("convert: %s: architectures %s is not implemented from "+
+		"safetensors (implemented: %s)", c.path, have, strings.Join(HFClasses(), ", "))
+}
+
+// HFClasses is every Hugging Face class (config.json's architectures) the
+// safetensors path converts -- hfArchTable, which is the list -- sorted.
+func HFClasses() []string {
 	names := make([]string, 0, len(hfArchTable))
 	for n := range hfArchTable {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	return nil, fmt.Errorf("convert: %s: architectures %s is not implemented from "+
-		"safetensors (implemented: %s)", c.path, have, strings.Join(names, ", "))
+	return names
+}
+
+// HFClassGraph is the graph a Hugging Face class converts to, and whether the
+// class is in the list. As on the GGUF side, the config can refine it (OLMo 3
+// with a window is jlm.ArchOLMo3); this is the class's own entry.
+func HFClassGraph(class string) (jlm.Arch, bool) {
+	a, ok := hfArchTable[class]
+	if !ok {
+		return jlm.ArchNone, false
+	}
+	return a.arch, true
 }
 
 // identify turns a HuggingFace tensor name into the triple a container stores.
