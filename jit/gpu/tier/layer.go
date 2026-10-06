@@ -523,12 +523,12 @@ func (st *streamBank) forget() {
 }
 
 // cacheSlotsFor is a streamed block's bank size in sheets: the selection, or
-// Config.StreamCacheSlots when that is bigger and the device has room for
+// want (Config.StreamCacheSlots, or GPU.AutoStream's size) when that is bigger and the device has room for
 // the block's own bank of that many beside what it already holds. A model
 // whose expert kernels read the selection itself (DenseMoE's per-expert
 // scale) keeps the plain bank: the cache rewrites the selection as slots.
-func (g *devTier) cacheSlotsFor(p *nn.LayerPlan, ws []nn.Weight, slots, bank int) int {
-	n := min(g.StreamCacheSlots, bank)
+func (g *devTier) cacheSlotsFor(p *nn.LayerPlan, ws []nn.Weight, want, slots, bank int) int {
+	n := min(want, bank)
 	if n <= slots || p.DenseMoE {
 		return slots
 	}
@@ -2313,7 +2313,8 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 	// Weight.Rows, so the charge and the refund cannot disagree. slots > 1 is a
 	// kernel constraint: at experts <= 1 mkkID returns the plain matvec, which
 	// has no pSel parameter.
-	stream := moe && g.StreamExperts && slots < bank && slots > 1
+	autoCache, auto := g.autoStream[li]
+	stream := moe && (g.StreamExperts || auto) && slots < bank && slots > 1
 	// cslots is the streamed bank's size in sheets, decided at the first bank
 	// matrix (cacheSlotsFor): slots without an expert cache, more with one.
 	cslots := -1
@@ -2690,7 +2691,11 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 				// "the same answer, bit for bit" comes from. With an expert
 				// cache it is told the cache's size and indexed by slot.
 				if cslots < 0 {
-					cslots = g.cacheSlotsFor(p, ws, slots, bank)
+					want := g.StreamCacheSlots
+					if auto && want == 0 {
+						want = autoCache
+					}
+					cslots = g.cacheSlotsFor(p, ws, want, slots, bank)
 				}
 				e = cslots
 			}

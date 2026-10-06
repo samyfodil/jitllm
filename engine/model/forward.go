@@ -1495,8 +1495,16 @@ func (s *State) offerRange(lo, hi int) {
 		if d, ok := ld.(nn.SizeDecliner); ok && !(named && place.Stream) {
 			total, bank := s.m.blockBytes(li)
 			if why := d.DeclineSize(li, total, bank); why != "" {
-				s.noteDecline(why)
-				continue
+				// A mixture block too big for any card resident is streamed
+				// there instead when the device offers it: the base on the
+				// card, the routed experts sent per token. A placement that
+				// keeps the block home is honoured above, and the device can
+				// be told not to (tier.Config.NoAutoStream).
+				as, ok := ld.(nn.AutoStreamer)
+				if !ok || bank == 0 || !as.AutoStream(li, total, bank, c.NExpert, c.NExpertUsed, hi-lo) {
+					s.noteDecline(why)
+					continue
+				}
 			}
 		}
 		// A block whose experts are separate tensors has no bank to offer; say

@@ -196,6 +196,7 @@ func gpuOptions() []tier.Option {
 		{"JITLLM_GPU_STREAM_CACHE", num("JITLLM_GPU_STREAM_CACHE") > 0,
 			func(c *tier.Config) { c.StreamCacheSlots = num("JITLLM_GPU_STREAM_CACHE") }},
 		{"JITLLM_GPU_STREAM_PREFETCH", set("JITLLM_GPU_STREAM_PREFETCH"), func(c *tier.Config) { c.StreamPrefetch = true }},
+		{"JITLLM_GPU_NO_AUTOSTREAM", set("JITLLM_GPU_NO_AUTOSTREAM"), func(c *tier.Config) { c.NoAutoStream = true }},
 		{"JITLLM_GPU_STREAM_NOPIN", set("JITLLM_GPU_STREAM_NOPIN"), func(c *tier.Config) { c.StreamNoPin = true }},
 		{"JITLLM_GPU_STREAM_GROUPS", num("JITLLM_GPU_STREAM_GROUPS") > 0,
 			func(c *tier.Config) { c.StreamGroups = num("JITLLM_GPU_STREAM_GROUPS") }},

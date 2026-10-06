@@ -386,6 +386,9 @@ type Config struct {
 	// predicted experts into host frames behind this block's transfers. Host
 	// reads only; see streamBank.prefetch.
 	StreamPrefetch bool
+	// NoAutoStream leaves a mixture block that no device can hold resident
+	// on the host, as before GPU.AutoStream, instead of streaming it.
+	NoAutoStream bool
 	// StreamProbe runs, at each streamed block's suspension, the next block's
 	// router over this block's normed row and scores its top-k against the
 	// selection that block then makes (Stats.ProbeHits): the measurement of a
@@ -1208,6 +1211,10 @@ type devTier struct {
 	layerGen uint64
 	// tabPend are page-table writes waiting for flushTabs (kvpool.go).
 	tabPend []tabWrite
+	// autoStream maps a block GPU.AutoStream marked to the expert cache it
+	// gets (0: none); such a block is placed streamed whatever StreamExperts
+	// says. Under mu.
+	autoStream map[int]int
 	// sheetStage is the streamed fill's gather buffer per (matrix, plane);
 	// see streamStage.
 	sheetStage [9][]byte

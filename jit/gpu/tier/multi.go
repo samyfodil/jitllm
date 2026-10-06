@@ -511,7 +511,8 @@ func (g *GPU) DeclineSize(li int, total, bank uint64) string {
 	var widest uint64
 	for _, d := range g.devs {
 		d.mu.Lock()
-		streams := d.StreamExperts || d.stream[li]
+		_, auto := d.autoStream[li]
+		streams := d.StreamExperts || d.stream[li] || auto
 		lim := d.limit
 		d.mu.Unlock()
 		if streams || total <= lim {
@@ -528,6 +529,70 @@ func (g *GPU) DeclineSize(li int, total, bank uint64) string {
 		"(the largest %.2f GiB), so it runs on the host unread by the device "+
 		"(a placement that streams it -- JITLLM_GPU_STREAM, -placement N=DEV~ -- puts it on a card)",
 		float64(widest)/(1<<30))
+}
+
+// AutoStream marks block li streamed on every device when its base -- the
+// block without its routed bank -- fits one of them, and sizes the expert
+// cache every auto-streamed block gets (autoCacheSlots) the first time it is
+// asked. It is the default for a mixture no card can hold: on Kimi-K3 over
+// eight V100s the streamed blocks, cached, prefilled 1.5x faster than the
+// host and decoded at its rate (placement.md 16c). Config.NoAutoStream turns
+// it off and leaves such blocks on the host.
+func (g *GPU) AutoStream(li int, total, bank uint64, nExpert, nUsed, blocks int) bool {
+	if g.NoAutoStream || len(g.devs) == 0 || bank >= total || nExpert <= nUsed || nUsed < 2 {
+		return false
+	}
+	base := total - bank
+	var sum, widest uint64
+	for _, d := range g.devs {
+		d.mu.Lock()
+		sum += d.limit
+		widest = max(widest, d.limit)
+		d.mu.Unlock()
+	}
+	if base > widest {
+		return false
+	}
+	cache := g.StreamCacheSlots
+	if cache == 0 {
+		cache = autoCacheSlots(sum/uint64(len(g.devs)), base, bank/uint64(nExpert), blocks, len(g.devs), nUsed)
+	}
+	for _, d := range g.devs {
+		d.mu.Lock()
+		if d.autoStream == nil {
+			d.autoStream = map[int]int{}
+		}
+		d.autoStream[li] = cache
+		d.mu.Unlock()
+	}
+	return true
+}
+
+// autoCacheSlots is the expert cache an auto-streamed block gets: what an
+// average card has left once it holds its share of the bases, split among
+// those blocks in sheets, or the selection alone (no cache) when that is all
+// there is. A base's footprint on the card is more than its tensors -- its
+// norms, its history, its share of the scratch -- so it is taken at 1.3x
+// the tensor bytes and a card is filled to 95% of its budget. On Kimi-K3
+// over eight V100s that is 18 sheets a block, the largest cache measured to
+// leave all 93 blocks on the cards (22 left 15 on the host). A block the
+// estimate leaves short still places, with the plain bank
+// (Stats.StreamCacheShort).
+func autoCacheSlots(limit, base, sheet uint64, blocks, devs, nUsed int) int {
+	if blocks <= 0 || devs <= 0 || sheet == 0 {
+		return 0
+	}
+	per := uint64((blocks + devs - 1) / devs)
+	bases := per * base * 130 / 100
+	room := limit * 95 / 100
+	if room <= bases {
+		return 0
+	}
+	n := int((room - bases) / (per * sheet))
+	if n <= nUsed {
+		return 0
+	}
+	return n
 }
 
 // SetBudget retargets every device's weight budget while the model is running,

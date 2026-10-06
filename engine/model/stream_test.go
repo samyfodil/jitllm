@@ -206,3 +206,85 @@ func pinsHost(t *testing.T) bool {
 	defer g.Close()
 	return strings.HasPrefix(strings.ToLower(g.Name()), "cuda") || strings.Contains(g.Name(), "[ptx]")
 }
+
+// TestAutoStreamPlacesWhatCannotFit: on a device budget below a mixture
+// block's resident size and above its base, the default placement streams
+// the block (nn.AutoStreamer) instead of leaving it on the host, with the
+// resident answer bit for bit; NoAutoStream leaves it home. The fixture's
+// blocks are each refused by size first, so the auto path is the only way
+// onto the card.
+func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
+	probe := hybridModelOpt(t, hyOpt{moe: true, wideMoE: true})
+	page := probe.container.H.PageSize
+	probe.Close()
+	m := hybridModelOpt(t, hyOpt{moe: true, wideMoE: true, budget: 2 * page})
+	defer m.Close()
+	ids := []int32{1, 2, 3, 4, 5, 6, 7, 8}
+	var biggest, base uint64
+	for li := 0; li < m.Cfg.NLayer; li++ {
+		total, bank := m.blockBytes(li)
+		if bank > 0 && total > biggest {
+			biggest, base = total, total-bank
+		}
+	}
+	if biggest == 0 {
+		t.Fatal("the fixture has no mixture block")
+	}
+	run := func(opts ...tier.Option) ([][]float32, tier.Stats, int) {
+		t.Helper()
+		opts = append([]tier.Option{tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff)}, opts...)
+		g, err := tier.OpenWith(opts...)
+		if err != nil || g == nil {
+			noDevice(t, "device", err)
+		}
+		defer g.Close()
+		s := m.NewState(16)
+		defer s.Close()
+		s.SetDeviceLayers(g, m.Cfg.NLayer)
+		out := make([][]float32, len(ids))
+		for i, id := range ids {
+			l, err := s.Forward(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out[i] = append([]float32(nil), l...)
+		}
+		return out, g.Stats(), s.GPULayers()
+	}
+	_, rs, rp := run()
+	if rp == 0 || rs.StreamBlocks != 0 {
+		t.Fatalf("the resident arm placed %d blocks, %d streamed", rp, rs.StreamBlocks)
+	}
+	// Between the base and the whole block, with room for scratch: every
+	// mixture block is refused resident and fits streamed.
+	budget := tier.WithBudget(biggest - 1)
+	t.Logf("mixture block %d bytes, base %d; device budget %d", biggest, base, biggest-1)
+	// The cache is stated, not sized: the auto size is a model of a card
+	// this fixture is not, and both arms must hold the same blocks.
+	cache := tier.WithConfig(func(c *tier.Config) { c.StreamCacheSlots = 13 })
+	got, ss, sp := run(budget, cache)
+	// The bar is the forced streamed placement on the same budget: the same
+	// blocks on the card, so bit equality holds (a resident arm places more
+	// blocks and differs in the device-host band).
+	want, fs, fp := run(budget, cache, tier.WithConfig(func(c *tier.Config) { c.StreamExperts = true; c.NoAutoStream = true }))
+	if fp != sp || fs.StreamBlocks != ss.StreamBlocks {
+		t.Fatalf("auto placed %d blocks (%d streamed), forced streaming %d (%d)", sp, ss.StreamBlocks, fp, fs.StreamBlocks)
+	}
+	if ss.StreamBlocks == 0 || ss.StreamFills == 0 {
+		t.Fatalf("auto: %d blocks placed, %d streamed, %d fills: the block was not streamed (%s)",
+			sp, ss.StreamBlocks, ss.StreamFills, "the size decline left it home")
+	}
+	for p := range ids {
+		for i := range want[p] {
+			if want[p][i] != got[p][i] {
+				t.Fatalf("pos %d logit %d: auto-streamed %v, forced %v", p, i, got[p][i], want[p][i])
+			}
+		}
+	}
+	_, ns, _ := run(budget, tier.WithConfig(func(c *tier.Config) { c.NoAutoStream = true }))
+	if ns.StreamBlocks != 0 {
+		t.Fatalf("NoAutoStream streamed %d blocks", ns.StreamBlocks)
+	}
+	t.Logf("auto: %d blocks placed, %d streamed, cache %d hits %d misses; NoAutoStream: %d streamed",
+		sp, ss.StreamBlocks, ss.StreamCacheHits, ss.StreamCacheMisses, ns.StreamBlocks)
+}
