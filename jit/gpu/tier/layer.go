@@ -723,10 +723,16 @@ type sheetPiece struct {
 	release func()
 }
 
-// pinHalf is the size of each page-locked half: a few sheets of Kimi-K3's
-// (5.6 MiB planes), so the copy into one half overlaps the transfer out of
-// the other with little left over at the end of a group.
-const pinHalf = 32 << 20
+// pinHalf is the size of each page-locked half: two of Kimi-K3's 5.6 MiB
+// planes. The first half of every group is copied before any transfer can
+// start, so a smaller half is less of the group spent waiting; 32 MiB cost
+// 29 s of copy wait over a 32-token run, and a sheet a group 62 s
+// (placement.md 16c).
+const pinHalf = 12 << 20
+
+// copyChunk is the most one copy goroutine moves: a 5.6 MiB plane copied by
+// one core ran under the link, so a half is copied by several.
+const copyChunk = 1 << 20
 
 // sendPieces puts direct sheets on the card. With page-locked memory it is a
 // two-stage pipeline: the pieces are copied into one half (concurrently, one
@@ -837,7 +843,7 @@ func (g *devTier) packNext(buf []byte, ps []sheetPiece, i int) {
 }
 
 // packHalf copies pieces from i into buf, back to back, as many as fit, one
-// goroutine a piece, and returns the index after the last one copied. At
+// goroutine a copyChunk, and returns the index after the last one copied. At
 // least one always fits: pinHalves sized buf for the largest.
 func (g *devTier) packHalf(buf []byte, ps []sheetPiece, i int) int {
 	j, n := i, 0
@@ -847,9 +853,13 @@ func (g *devTier) packHalf(buf []byte, ps []sheetPiece, i int) int {
 	}
 	off := 0
 	for k := i; k < j; k++ {
-		g.copyWG.Add(1)
-		go g.copyPiece(buf[off:off+len(ps[k].src)], ps[k].src)
-		off += len(ps[k].src)
+		src := ps[k].src
+		for c := 0; c < len(src); c += copyChunk {
+			e := min(c+copyChunk, len(src))
+			g.copyWG.Add(1)
+			go g.copyPiece(buf[off+c:off+e], src[c:e])
+		}
+		off += len(src)
 	}
 	g.copyWG.Wait()
 	return j
