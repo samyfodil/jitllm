@@ -2881,8 +2881,8 @@ host at every position of Kimi-K3-0.40B (NMSE 2.3e-7, same argmax), failing at
 **The paired comparison, in one process.** The stream trial is RULE 2's harness
 for this question: the same process alternates the hybrid placement (93 blocks)
 and the host (0) in ABBA runs of 8 tokens, migrating between them outside the
-clock and skipping 2 warm-up tokens after each move. `JITLLM_SEAM_RUNS=8
-ROUNDS=10`, 430 tokens, default auto-stream with hybrid experts: 10 quads, 20
+clock and skipping 2 warm-up tokens after each move. `JITLLM_SEAM_RUN=8
+JITLLM_SEAM_ROUNDS=10`, 430 tokens, default auto-stream with hybrid experts: 10 quads, 20
 ratios. Hybrid over host **median 1.873, IQR/median 0.057** (warm quads only:
 1.875, 0.043); the tuner kept hybrid ("0 blocks is not 5% better (0.530)").
 The A/A pairs from the same runs (incumbent against incumbent, challenger
