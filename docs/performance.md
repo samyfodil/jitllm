@@ -18,7 +18,7 @@ GGUF jitllm converted from.
 | NVIDIA V100, batched decode (16-128 sequences) | vLLM 0.18.1 | Llama-3.1-8B | | up to 5.53x |
 | NVIDIA V100, one card, single-stream serving (514-token prompt, 256 tokens) | vLLM 0.18.1, same GGUF | Llama-3.1-8B | first token 5.8x sooner | 1.26x |
 | Xeon E5-2680 v4 (CPU, 12 cores) | llama.cpp | 6 | up to 1.67x | up to 1.06x |
-| Xeon E5-2680 v4 (CPU) | mistral.rs 0.9.4 | 5 | up to 294x | up to 1208x |
+| Xeon E5-2680 v4 (CPU) | mistral.rs 0.9.4 | 5 | up to 1.7x | up to 6x |
 | Xeon E5-2680 v4 (CPU) | ZML (bf16 weights) | 2 | | up to 69x |
 | Apple M4 (Metal) | llama.cpp | 7 | up to 1.02x | up to 1.53x |
 | Apple M4 (CPU) | llama.cpp | 7 | up to 1.67x | up to 1.09x |

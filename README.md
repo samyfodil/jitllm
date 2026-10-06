@@ -24,10 +24,6 @@ page models larger than memory, and move execution without losing the conversati
   Windows; x86 and Arm) that finds CUDA, Vulkan or Metal at run time and
   otherwise runs on the CPU.
 
-The **full Kimi-K3, 2.78 trillion parameters**, runs on one server: 1.4 TiB of
-weights paged from disk through 503 GB of RAM on a dual Xeon E5-2680 v4, at
-5.2 s a token on the CPU ([numbers](docs/perf/current.md#kimi-k3-278t-from-disk-on-the-v100-box)).
-
 Use the engine through an **OpenAI- or Anthropic-compatible server** with streaming
 and tool calling, an embeddable Go library, desktop and terminal apps, or Docker.
 
