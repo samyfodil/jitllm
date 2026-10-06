@@ -1555,6 +1555,14 @@ type GPU struct {
 	held  bool
 	// devs is every device, fastest first; see order().
 	devs []*devTier
+	// spreadAll steers a plan over every device rather than the fewest that
+	// hold it: streamed blocks, whose caches take what the bases leave
+	// (planShares). Under mu.
+	spreadAll bool
+	// streamPlanned says the streamed plan was priced, and streamSeen counts
+	// streamed blocks offered before it was.
+	streamPlanned bool
+	streamSeen    int
 	// own maps a block index to the device holding it. A block with no entry is
 	// on the host.
 	own map[int]*devTier

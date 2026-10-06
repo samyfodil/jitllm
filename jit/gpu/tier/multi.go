@@ -311,6 +311,22 @@ func (g *GPU) PrepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool {
 	// overstates the per-block cost and spreads the plan over a device too
 	// many. The first two blocks land on the first device under any plan.
 	first := g.planN > 1 && g.share == nil && len(g.own) == 1
+	// A streamed plan is priced on the first streamed block after the one it
+	// measures from, not on a dense lead resident whole: Kimi-K3's block 0
+	// priced every base at its own size and the plan fell back to fill-first.
+	if g.spreadAll && g.planN > 1 && !g.streamPlanned {
+		d0 := g.devs[0]
+		d0.mu.Lock()
+		_, auto := d0.autoStream[li]
+		d0.mu.Unlock()
+		first = (auto || g.StreamExperts) && g.streamSeen > 0
+		if auto || g.StreamExperts {
+			g.streamSeen++
+		}
+		if first {
+			g.share, g.streamPlanned = nil, true
+		}
+	}
 	g.mu.Unlock()
 	for _, mayPage := range [2]bool{false, true} {
 		for i := start; i < end; i++ {
@@ -335,7 +351,7 @@ func (g *GPU) PrepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool {
 				// scratch, the session's seat); every device a plan uses
 				// pays them once.
 				var fixed uint64
-				if base := g.planBase[i]; before > base+per {
+				if base := g.planBase[i]; before > base+per && !g.streamPlanned {
 					fixed = before - base - per
 				}
 				g.planShares(per, fixed)
@@ -382,6 +398,8 @@ func (g *GPU) PlanBlocks(n int, extra uint64) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.planN, g.share, g.planExtra = n, nil, extra
+	g.spreadAll = g.StreamExperts && g.StreamCacheSlots == 0
+	g.streamPlanned, g.streamSeen = false, 0
 	if g.Config.FillFirst {
 		g.planN = 0
 	}
@@ -428,7 +446,11 @@ func (g *GPU) planShares(per, fixed uint64) {
 	for k < len(g.devs) {
 		sum += avail(k)
 		k++
-		if fits(sum, k) {
+		// Streamed blocks spread over every device: what the bases leave is
+		// their expert caches (sizeAutoCaches), and a card left empty is
+		// cache nobody uses -- fill-first packed Kimi-K3's 93 bases onto six
+		// of eight V100s, and only the seven blocks on the sixth got a cache.
+		if fits(sum, k) && !g.spreadAll {
 			break
 		}
 	}
@@ -556,6 +578,9 @@ func (g *GPU) AutoStream(li int, total, bank uint64, nExpert, nUsed, blocks int,
 	if base > widest {
 		return false
 	}
+	g.mu.Lock()
+	g.spreadAll = g.StreamCacheSlots == 0
+	g.mu.Unlock()
 	for _, d := range g.devs {
 		d.mu.Lock()
 		if d.autoStream == nil {
@@ -590,6 +615,36 @@ func (g *GPU) sizeAutoCaches() {
 	}
 }
 
+// cacheBlock gives block l a cache of n sheets, or reports false and leaves
+// it on its plain bank. Callers hold g.mu.
+func (g *devTier) cacheBlock(l *layer, n, k int) bool {
+	var got [3]*resident
+	for m, r := range [3]*resident{l.gate, l.up, l.down} {
+		if r == nil {
+			continue // an ungated bank has no gate
+		}
+		nr, _, ok := g.residentCompact(r.t, r.nrows/k, r.k, n)
+		if !ok {
+			for _, r := range got {
+				if r != nil {
+					g.refund(r.bytes())
+					g.freeResident(r)
+				}
+			}
+			return false
+		}
+		got[m] = nr
+	}
+	for m, dst := range [3]**resident{&l.gate, &l.up, &l.down} {
+		if got[m] != nil {
+			*dst = got[m]
+		}
+	}
+	l.stream.initCache(n, l.stream.nExpert)
+	g.StreamCacheSize = max(g.StreamCacheSize, n)
+	return true
+}
+
 // sizeAutoCaches is GPU.sizeAutoCaches on one device. Callers hold g.mu.
 func (g *devTier) sizeAutoCaches() {
 	var ls []*layer
@@ -620,37 +675,17 @@ func (g *devTier) sizeAutoCaches() {
 		return
 	}
 	for _, l := range ls {
-		n := min(n, l.stream.nExpert)
-		var got [3]*resident
-		ok := true
-		for m, r := range [3]*resident{l.gate, l.up, l.down} {
-			if r == nil {
-				continue // an ungated bank has no gate
-			}
-			nr, _, rok := g.residentCompact(r.t, r.nrows/k, r.k, n)
-			if !rok {
-				ok = false
+		// A card's allocations round, so the even share can be a sheet too
+		// many for the last blocks: those step down rather than go without.
+		for ; n > k; n-- {
+			if g.cacheBlock(l, min(n, l.stream.nExpert), k) {
 				break
 			}
-			got[m] = nr
-		}
-		if !ok {
-			for _, r := range got {
-				if r != nil {
-					g.refund(r.bytes())
-					g.freeResident(r)
-				}
-			}
 			g.StreamCacheShort++
+		}
+		if n <= k {
 			return
 		}
-		for m, dst := range [3]**resident{&l.gate, &l.up, &l.down} {
-			if got[m] != nil {
-				*dst = got[m]
-			}
-		}
-		l.stream.initCache(n, l.stream.nExpert)
-		g.StreamCacheSize = max(g.StreamCacheSize, n)
 	}
 }
 
