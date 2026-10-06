@@ -284,7 +284,14 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 	// blocks as the forced arm, which streams them with no cache at all.
 	// The fixture's scratch leaves this budget no room for a cache, so the
 	// cache's sizing is TestStreamedExpertBankMatchesTheResidentOne's.
-	got, ss, sp := run(budget)
+	// By default an auto-streamed block runs its experts on the host
+	// (TestHybridExpertsMatchTheHost holds that path); the bit-equality arm
+	// sends the sheets, as the forced placement does.
+	if _, hs, _ := run(budget); hs.HybridRuns == 0 || hs.StreamFills != 0 {
+		t.Fatalf("the default auto-streamed run made %d hybrid block-steps and %d fills, want hybrid alone",
+			hs.HybridRuns, hs.StreamFills)
+	}
+	got, ss, sp := run(budget, tier.WithConfig(func(c *tier.Config) { c.NoHybrid = true }))
 	// The bar is the forced streamed placement on the same budget: the same
 	// blocks on the card, so bit equality holds (a resident arm places more
 	// blocks and differs in the device-host band).

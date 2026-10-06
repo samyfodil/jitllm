@@ -396,6 +396,10 @@ type Config struct {
 	// block's base, router and shared experts stay on the card, and the
 	// experts' input and output vectors are all that cross the bus.
 	HybridExperts bool
+	// NoHybrid sends an auto-streamed block's expert sheets to the card
+	// instead of running its experts on the host, which is that block's
+	// default (GPU.AutoStream).
+	NoHybrid bool
 	// NoAutoStream leaves a mixture block that no device can hold resident
 	// on the host, as before GPU.AutoStream, instead of streaming it.
 	NoAutoStream bool

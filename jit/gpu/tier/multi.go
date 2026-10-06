@@ -651,7 +651,7 @@ func (g *devTier) sizeAutoCaches() {
 	var sheet uint64
 	k := 0
 	for _, l := range g.layers {
-		if l == nil || l.stream == nil || l.stream.cached() || l.down == nil {
+		if l == nil || l.stream == nil || l.stream.cached() || l.stream.hybrid || l.down == nil {
 			continue
 		}
 		var s uint64

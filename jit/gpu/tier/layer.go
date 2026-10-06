@@ -283,6 +283,7 @@ type streamBank struct {
 	// host is the block's routed experts on the host (hybrid execution), and
 	// hin, hw and hout its input, weights and output, reused every token.
 	host          func(sel []uint32, w, in, out []float32) error
+	hybrid        bool // the experts run on the host (runHost), not sent
 	hin, hw, hout []float32
 	// pred is this block's selection as the previous block's probe predicted
 	// it (Config.StreamProbe), valid while havePred; score compares it with
@@ -2776,6 +2777,11 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 					ensure: w.Ensure, sel2: w.EnsureExperts,
 					pre: w.PrefetchExperts, host: w.HostExperts, w: *w}
 				l.stream.nExpert = bank
+				// An auto-streamed block runs its experts on the host unless
+				// told otherwise: on Kimi-K3 over the V100s that decoded 1.43x
+				// the host's rate where sending the sheets lost to it
+				// (placement.md 16c-2).
+				l.stream.hybrid = l.stream.host != nil && (g.HybridExperts || auto && !g.NoHybrid)
 				l.stream.initCache(cslots, bank)
 				g.StreamBlocks++
 			}
@@ -7506,7 +7512,7 @@ func (g *devTier) layersSession(s backend.Session) {
 						if err == nil && !g.StreamFixedSel {
 							l.stream.score(g, li)
 						}
-						hybrid = g.HybridExperts && l.stream.host != nil && !g.StreamFixedSel
+						hybrid = l.stream.hybrid && !g.StreamFixedSel
 						if err == nil && hybrid {
 							// Hybrid: the experts' input and the routing weights come
 							// home, the host runs the selected experts, and their sum
