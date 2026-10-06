@@ -99,3 +99,98 @@ func argmaxOf(v []float32) int {
 	}
 	return b
 }
+
+// TestOffCardExpertsRelocate holds a block whose experts run off the card to
+// the relocation principle: after the first token the sequence hops to a
+// second tier (blocks, KV pages and all), and later the blocks go home and come
+// back; the greedy tokens are the unmoved run's, and each destination counts
+// the moved blocks running the same way there -- hybrid block-steps for %host,
+// fills for %card -- so a block that arrived unmarked (resident, or refused
+// for its bank) fails.
+func TestOffCardExpertsRelocate(t *testing.T) {
+	path, ok := existingModel(testmodels.Path("kimik3/Kimi-K3-0.40B.Q8_0.gguf"))
+	if !ok {
+		t.Skip("MODEL MISSING: kimik3/Kimi-K3-0.40B.Q8_0.gguf -- this gate proved nothing")
+	}
+	for _, where := range []string{"host", "card"} {
+		t.Run(where, func(t *testing.T) {
+			m, err := Open(jlmOf(t, path), noTune, WithKVF16(false), WithExperts(where), WithStreamTrial(false))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			open := func() *tier.GPU {
+				g, err := tier.OpenWith(tier.WithDevices("cuda:0"), tier.WithDeviceTune(tier.TuneOff))
+				if err != nil || g == nil {
+					noDevice(t, "cuda:0", err)
+				}
+				return g
+			}
+			count := func(g *tier.GPU) int {
+				if where == "host" {
+					return g.Stats().HybridRuns
+				}
+				return g.Stats().StreamFills
+			}
+			const ntok = 10
+			run := func(move bool) []int32 {
+				a, b := open(), open()
+				defer a.Close()
+				defer b.Close()
+				s := m.NewState(ntok + 2)
+				defer s.Close()
+				s.SetDeviceLayers(a, m.Cfg.NLayer)
+				n := s.GPULayers()
+				tok, out := int32(1008), []int32{}
+				for i := 0; i < ntok; i++ {
+					l, err := s.Forward(tok)
+					if err != nil {
+						t.Fatal(err)
+					}
+					tok = int32(argmaxOf(l))
+					out = append(out, tok)
+					if !move {
+						continue
+					}
+					switch i {
+					case 1:
+						// Hop to the second tier, history and all.
+						before := count(b)
+						s.SetDeviceLayers(b, m.Cfg.NLayer)
+						if s.GPULayers() != n {
+							t.Fatalf("the hop placed %d of %d blocks", s.GPULayers(), n)
+						}
+						defer func(c int) {
+							if count(b) <= c {
+								t.Errorf("tier b counted no off-card expert runs after the hop")
+							}
+						}(before)
+					case 4:
+						// Home, then back.
+						s.SetGPULayers(0)
+						if s.GPULayers() != 0 {
+							t.Fatalf("%d blocks stayed on the card", s.GPULayers())
+						}
+					case 6:
+						c := count(b)
+						if got := s.SetGPULayers(n); got != n {
+							t.Fatalf("%d of %d blocks came back", got, n)
+						}
+						defer func() {
+							if count(b) <= c {
+								t.Errorf("the blocks came back and counted no off-card expert runs")
+							}
+						}()
+					}
+				}
+				return out
+			}
+			want, got := run(false), run(true)
+			for i := range want {
+				if want[i] != got[i] {
+					t.Fatalf("token %d: %d moved, %d unmoved (%v against %v)", i, got[i], want[i], got, want)
+				}
+			}
+		})
+	}
+}
