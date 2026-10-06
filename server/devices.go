@@ -42,6 +42,8 @@ type DeviceInfo struct {
 // DeviceKind mirrors the proto enum.
 type DeviceKind int
 
+// The device kinds: the host CPU, a discrete card with its own memory, and an
+// integrated device whose memory is the host's.
 const (
 	KindUnspecified DeviceKind = iota
 	KindHost

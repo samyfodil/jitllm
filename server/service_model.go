@@ -18,6 +18,8 @@ import (
 // ModelService implements jitllm.v1.ModelService.
 type ModelService struct{ E *Engine }
 
+// ListModels lists the loaded models and, unless LoadedOnly is set, the model
+// files in the directory, each container checked by opening it.
 func (s *ModelService) ListModels(ctx context.Context, req *connect.Request[v1.ListModelsRequest]) (*connect.Response[v1.ListModelsResponse], error) {
 	out := &v1.ListModelsResponse{}
 	for _, lm := range s.E.Models() {
@@ -55,6 +57,7 @@ func (s *ModelService) ListModels(ctx context.Context, req *connect.Request[v1.L
 	return connect.NewResponse(out), nil
 }
 
+// GetModel describes one loaded model.
 func (s *ModelService) GetModel(ctx context.Context, req *connect.Request[v1.GetModelRequest]) (*connect.Response[v1.GetModelResponse], error) {
 	lm, err := s.E.Model(req.Msg.ModelId)
 	if err != nil {
@@ -63,6 +66,8 @@ func (s *ModelService) GetModel(ctx context.Context, req *connect.Request[v1.Get
 	return connect.NewResponse(&v1.GetModelResponse{Model: s.E.pbModelInfo(lm)}), nil
 }
 
+// LoadModel opens a container and places it as the request asks, reporting how
+// long the load took.
 func (s *ModelService) LoadModel(ctx context.Context, req *connect.Request[v1.LoadModelRequest]) (*connect.Response[v1.LoadModelResponse], error) {
 	m := req.Msg
 	if m.Path == "" {
@@ -93,6 +98,8 @@ func (s *ModelService) LoadModel(ctx context.Context, req *connect.Request[v1.Lo
 	}), nil
 }
 
+// UnloadModel closes a model and reports how many sessions it closed: a
+// model with open sessions is refused unless Force is set.
 func (s *ModelService) UnloadModel(ctx context.Context, req *connect.Request[v1.UnloadModelRequest]) (*connect.Response[v1.UnloadModelResponse], error) {
 	n, err := s.E.UnloadModel(req.Msg.ModelId, req.Msg.Force)
 	if err != nil {
@@ -195,6 +202,8 @@ func (s *ModelService) Convert(ctx context.Context, req *connect.Request[v1.Conv
 	}
 }
 
+// Tokenize encodes text with the model's tokenizer and returns the ids with
+// each one's piece.
 func (s *ModelService) Tokenize(ctx context.Context, req *connect.Request[v1.TokenizeRequest]) (*connect.Response[v1.TokenizeResponse], error) {
 	lm, err := s.E.Model(req.Msg.ModelId)
 	if err != nil {
@@ -211,6 +220,7 @@ func (s *ModelService) Tokenize(ctx context.Context, req *connect.Request[v1.Tok
 	return connect.NewResponse(&v1.TokenizeResponse{TokenIds: ids, Pieces: pieces}), nil
 }
 
+// Detokenize decodes token ids to text, as a generate's stream decodes them.
 func (s *ModelService) Detokenize(ctx context.Context, req *connect.Request[v1.DetokenizeRequest]) (*connect.Response[v1.DetokenizeResponse], error) {
 	lm, err := s.E.Model(req.Msg.ModelId)
 	if err != nil {
@@ -224,6 +234,9 @@ func (s *ModelService) Detokenize(ctx context.Context, req *connect.Request[v1.D
 	}), nil
 }
 
+// ApplyChatTemplate renders messages through the model's chat template and
+// returns the prompt text and its token ids. A model with no template is
+// refused rather than run as a raw completion.
 func (s *ModelService) ApplyChatTemplate(ctx context.Context, req *connect.Request[v1.ApplyChatTemplateRequest]) (*connect.Response[v1.ApplyChatTemplateResponse], error) {
 	lm, err := s.E.Model(req.Msg.ModelId)
 	if err != nil {

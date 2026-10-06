@@ -139,6 +139,8 @@ func New(cfg Config) *Engine {
 	}
 }
 
+// Config returns the configuration the Engine was built with, its defaults
+// filled in.
 func (e *Engine) Config() Config { return e.cfg }
 
 // gate returns the gate for a device id, creating it on first use. The host's
@@ -170,6 +172,8 @@ func (e *Engine) nextID(prefix string) string {
 
 // ---------------------------------------------------------------- models
 
+// LoadedModel is one model the Engine holds open: its model.Model, the
+// device tier its sessions share, and the sessions created on it.
 type LoadedModel struct {
 	id       string
 	path     string
@@ -453,6 +457,7 @@ func normaliseDeviceIDs(ids []string) []string {
 	return out
 }
 
+// Model returns the loaded model with this id, or ErrNotFound.
 func (e *Engine) Model(id string) (*LoadedModel, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -463,6 +468,7 @@ func (e *Engine) Model(id string) (*LoadedModel, error) {
 	return lm, nil
 }
 
+// Models returns every loaded model, sorted by id.
 func (e *Engine) Models() []*LoadedModel {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -548,6 +554,9 @@ func (lm *LoadedModel) closeLoop() {
 
 // ---------------------------------------------------------------- sessions
 
+// Session is one sequence on a loaded model: a model.State, its sampler and
+// the counters the stats calls report. Work on it is serialised by its own
+// lock; a generate with only a model_id runs on an ephemeral one.
 type Session struct {
 	id      string
 	modelID string
@@ -723,6 +732,7 @@ func (s *Session) placement() *placementSnapshot {
 	return &placementSnapshot{}
 }
 
+// Session returns the open session with this id, or ErrNotFound.
 func (e *Engine) Session(id string) (*Session, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -733,6 +743,7 @@ func (e *Engine) Session(id string) (*Session, error) {
 	return s, nil
 }
 
+// Sessions returns every open session, sorted by id.
 func (e *Engine) Sessions() []*Session {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -744,6 +755,9 @@ func (e *Engine) Sessions() []*Session {
 	return out
 }
 
+// CloseSession removes the session from the Engine and its model, cancels a
+// generate in flight on it and closes its State once that generate has let
+// go. An unknown id is ErrNotFound.
 func (e *Engine) CloseSession(id string) error {
 	e.mu.Lock()
 	s, ok := e.sessions[id]
@@ -785,6 +799,9 @@ func (s *Session) cancelGeneration() bool {
 // generate from an EMPTY continuation of an existing session.
 type PromptKind int
 
+// The prompt kinds: none (a continuation of the session's own sequence),
+// text to encode, token ids as given, and chat messages to render through the
+// model's template.
 const (
 	PromptNone PromptKind = iota
 	PromptText
@@ -792,6 +809,9 @@ const (
 	PromptChat
 )
 
+// ChatInput is a chat prompt: the messages, an optional system prompt given
+// apart from them (HasSystem says it was), and what the template is asked to
+// render.
 type ChatInput struct {
 	Messages            []model.ChatMessage
 	System              string
@@ -803,6 +823,7 @@ type ChatInput struct {
 	Tools []byte
 }
 
+// Prompt is what a generate runs: the member Kind names is the one read.
 type Prompt struct {
 	Kind PromptKind
 	Text string
@@ -832,12 +853,17 @@ type GenerateOptions struct {
 // EventKind discriminates Event.
 type EventKind int
 
+// The event kinds, in the order a generate emits them: one Started, a Token
+// per sampled token, one Finished.
 const (
 	EventStarted EventKind = iota
 	EventToken
 	EventFinished
 )
 
+// Started is a generate's first event, sent once the prompt is prefilled:
+// how long the request queued and behind how many, where the model's blocks
+// ran, and how long the prefill took.
 type Started struct {
 	SessionID    string
 	ModelID      string
@@ -855,6 +881,9 @@ type Started struct {
 	Batched bool
 }
 
+// Token is one step of the output. Every sampled token is sent, its Text
+// empty while held back for a stop string or a partial rune; ID -1 carries
+// text alone (the echoed prompt at Index -1, or the held-back tail).
 type Token struct {
 	ID    int32
 	Text  string
@@ -864,6 +893,8 @@ type Token struct {
 // FinishReason mirrors the proto enum.
 type FinishReason int
 
+// The reasons a generate ends: a stop string matched, MaxTokens reached, an
+// end-of-generation token sampled, the context cancelled, or an error.
 const (
 	FinishUnspecified FinishReason = iota
 	FinishStop
@@ -873,6 +904,9 @@ const (
 	FinishError
 )
 
+// Finished is a generate's last event: why it ended, the token counts, the
+// prefill and decode times, the decode rate with the bytes a token reads (so
+// the rate can be checked against the read wall), and the session's position.
 type Finished struct {
 	Reason           FinishReason
 	StopMatched      string
@@ -885,6 +919,8 @@ type Finished struct {
 	Position         int
 }
 
+// Event is one message of a generate's stream: Kind says which of Started,
+// Token and Finished is set.
 type Event struct {
 	Kind     EventKind
 	Started  *Started

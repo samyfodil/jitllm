@@ -2190,6 +2190,8 @@ func (s *State) AttnChunk() int {
 	return s.attnChunk
 }
 
+// SetAttnChunk sets how many query heads one pool task claims in decode
+// attention (see AttnChunk); below one means the default.
 func (s *State) SetAttnChunk(n int) { s.attnChunk = n }
 
 // The KV layout and width are per model (modelOpts), set before the States
@@ -2234,6 +2236,10 @@ func (s *State) AttnPair() int {
 // odd gqa, and a defect for an even one. A test that does not check it passes
 // vacuously on any model whose heads cannot pair.
 func (s *State) AttnPaired() int64 { return s.attnPaired.Load() }
+
+// SetAttnPair selects this State's paired attention kernels, as AttnPair
+// reads them: 1 the scores, 2 the accumulation, 3 both, 0 the model's
+// default, negative none.
 func (s *State) SetAttnPair(v int) { s.attnPair = v }
 
 // rmsnorm runs the generated norm.

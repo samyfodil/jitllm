@@ -444,6 +444,7 @@ func (c *Config) HeadDimAt(li int) int {
 	return c.HeadDim
 }
 
+// NKVHeadAt is layer li's kv head count (see HeadDimAt).
 func (c *Config) NKVHeadAt(li int) int {
 	if c.SWA(li) {
 		return c.NKVHeadSWA
@@ -451,6 +452,7 @@ func (c *Config) NKVHeadAt(li int) int {
 	return c.NKVHead
 }
 
+// NRotAt is layer li's rotary width (see HeadDimAt).
 func (c *Config) NRotAt(li int) int {
 	if c.SWA(li) {
 		return c.NRotSWA
@@ -508,6 +510,8 @@ func (c *Config) NFFNAt(li int) int {
 	return c.NFFN
 }
 
+// MaxNFFN is the widest feed-forward width of any block: twice NFFN when the
+// model has KV-sharing blocks under DoubleFFN, NFFN otherwise.
 func (c *Config) MaxNFFN() int {
 	if c.DoubleFFN && c.NKVShared != 0 {
 		return 2 * c.NFFN
@@ -515,6 +519,9 @@ func (c *Config) MaxNFFN() int {
 	return c.NFFN
 }
 
+// MaxKVDim is the widest row any layer caches: MLA's latent row, an MSA
+// block's k with the indexer's key after it, DeepSeek V4's widest KVRowAt, or
+// else the wider of the two geometries' KV widths.
 func (c *Config) MaxKVDim() int {
 	if c.KVLoraRank != 0 {
 		return c.KVDim()
@@ -533,8 +540,10 @@ func (c *Config) MaxKVDim() int {
 	return max(c.KVDim(), c.NKVHeadSWA*c.HeadDimSWA)
 }
 
+// MaxQDim is the query width at the wider of the two head widths.
 func (c *Config) MaxQDim() int { return c.NHead * c.MaxHeadDim() }
 
+// MaxNRot is the wider of the two geometries' rotary widths.
 func (c *Config) MaxNRot() int { return max(c.NRot, c.NRotSWA) }
 
 // RopeW is how many floats one row's rotary table holds: NRot, or two tables
@@ -1423,6 +1432,8 @@ const Ext = jlm.Ext
 // convert command, since that is the next line a caller wants to type.
 type NotConvertedError struct{ Path string }
 
+// Error names the file and the convert command that turns it into a
+// container.
 func (e *NotConvertedError) Error() string {
 	out := strings.TrimSuffix(e.Path, filepath.Ext(e.Path)) + Ext
 	return fmt.Sprintf("jitllm: %s is not a %s container, and inference reads nothing else.\n"+
@@ -1691,6 +1702,8 @@ func (m *Model) HostBytes() uint64 {
 	return m.container.ResidentBytes()
 }
 
+// PageBudget is the byte cap the container holds its block pages against, 0
+// when unlimited (see HostBytes).
 func (m *Model) PageBudget() uint64 {
 	if m.container == nil {
 		return 0
@@ -1790,6 +1803,9 @@ func (m *Model) pageInSelected(li int, sel []uint32) error {
 	return bindPacked(m.container, m.Cfg, &m.layers[li])
 }
 
+// Close gives the model's blocks back to every device holding them, then
+// closes the container and drops every copy keyed on it. Every State of the
+// model must be closed first.
 func (m *Model) Close() error {
 	if m.container == nil {
 		return nil

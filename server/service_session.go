@@ -11,6 +11,8 @@ import (
 // SessionService implements jitllm.v1.SessionService.
 type SessionService struct{ E *Engine }
 
+// CreateSession opens a session on a loaded model and returns it with the
+// budget it was placed under.
 func (s *SessionService) CreateSession(ctx context.Context, req *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.CreateSessionResponse], error) {
 	m := req.Msg
 	o := SessionOptions{
@@ -36,6 +38,7 @@ func (s *SessionService) CreateSession(ctx context.Context, req *connect.Request
 	}), nil
 }
 
+// GetSession describes one open session and its budget.
 func (s *SessionService) GetSession(ctx context.Context, req *connect.Request[v1.GetSessionRequest]) (*connect.Response[v1.GetSessionResponse], error) {
 	sess, err := s.E.Session(req.Msg.SessionId)
 	if err != nil {
@@ -47,6 +50,8 @@ func (s *SessionService) GetSession(ctx context.Context, req *connect.Request[v1
 	}), nil
 }
 
+// ListSessions lists the open sessions, filtered by model and by device when
+// the request names them.
 func (s *SessionService) ListSessions(ctx context.Context, req *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
 	out := &v1.ListSessionsResponse{}
 	// A session is on a device when its model's spec names it as written, or
@@ -68,6 +73,7 @@ func (s *SessionService) ListSessions(ctx context.Context, req *connect.Request[
 	return connect.NewResponse(out), nil
 }
 
+// CloseSession closes a session (Engine.CloseSession).
 func (s *SessionService) CloseSession(ctx context.Context, req *connect.Request[v1.CloseSessionRequest]) (*connect.Response[v1.CloseSessionResponse], error) {
 	if err := s.E.CloseSession(req.Msg.SessionId); err != nil {
 		return nil, connectErr(err)
@@ -75,6 +81,8 @@ func (s *SessionService) CloseSession(ctx context.Context, req *connect.Request[
 	return connect.NewResponse(&v1.CloseSessionResponse{}), nil
 }
 
+// ResetSession empties a session's sequence, waiting for a generate in flight
+// on it to finish first.
 func (s *SessionService) ResetSession(ctx context.Context, req *connect.Request[v1.ResetSessionRequest]) (*connect.Response[v1.ResetSessionResponse], error) {
 	sess, err := s.E.Session(req.Msg.SessionId)
 	if err != nil {

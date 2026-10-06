@@ -65,6 +65,7 @@ const (
 	SpecRollbackReplay
 )
 
+// String is the rollback's name: "auto", "rows" or "replay".
 func (r SpecRollback) String() string {
 	switch r {
 	case SpecRollbackRows:

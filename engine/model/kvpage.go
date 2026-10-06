@@ -71,9 +71,14 @@ type KVStore interface {
 // nothing for the store.
 type NoStore struct{}
 
+// Get misses every page: it returns ErrNoPage.
 func (NoStore) Get(string, int, int, io.Writer) error { return ErrNoPage }
+
+// Set discards the page.
 func (NoStore) Set(string, int, int, io.Reader) error { return nil }
-func (NoStore) Drop(string) error                     { return nil }
+
+// Drop has nothing to forget.
+func (NoStore) Drop(string) error { return nil }
 
 // MemStore keeps pages in host memory, keyed by (cache, layer, index).
 //
@@ -89,8 +94,10 @@ type kvStoreKey struct {
 	layer, index int
 }
 
+// NewMemStore returns an empty MemStore.
 func NewMemStore() *MemStore { return &MemStore{pages: map[kvStoreKey][]byte{}} }
 
+// Get writes the held page into page, or returns ErrNoPage.
 func (m *MemStore) Get(cacheId string, layer, index int, page io.Writer) error {
 	m.mu.RLock()
 	b, ok := m.pages[kvStoreKey{cacheId, layer, index}]
@@ -102,6 +109,7 @@ func (m *MemStore) Get(cacheId string, layer, index int, page io.Writer) error {
 	return err
 }
 
+// Set reads the page and holds a copy, replacing one held under the same key.
 func (m *MemStore) Set(cacheId string, layer, index int, page io.Reader) error {
 	b, err := io.ReadAll(page)
 	if err != nil {
@@ -113,6 +121,7 @@ func (m *MemStore) Set(cacheId string, layer, index int, page io.Reader) error {
 	return nil
 }
 
+// Drop forgets every page held for cacheId.
 func (m *MemStore) Drop(cacheId string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
