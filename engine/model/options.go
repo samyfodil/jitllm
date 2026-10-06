@@ -25,6 +25,9 @@ type modelOpts struct {
 	// noShOverlap runs a mixture's shared expert after its routed read
 	// rather than behind it; see WithSharedOverlap.
 	noShOverlap bool
+	// noStreamTrial keeps an auto-streamed placement without measuring it
+	// against the host; see WithStreamTrial.
+	noStreamTrial bool
 
 	// chatClock is the clock a chat template's strftime_now reads; nil is the
 	// wall clock.
@@ -97,6 +100,11 @@ func defaultOpts() modelOpts {
 // added where it always was, so the answer is the same float sum
 // (TestSharedOverlapIsTheSameSum); off is the other arm.
 func WithSharedOverlap(on bool) Option { return func(l *loadOpts) { l.opt.noShOverlap = !on } }
+
+// WithStreamTrial sets whether a placement that streamed mixture blocks no
+// card could hold resident is measured against running them on the host
+// (State.initStreamTrial) and the faster kept. On by default.
+func WithStreamTrial(on bool) Option { return func(l *loadOpts) { l.opt.noStreamTrial = !on } }
 
 // WithProfile arms the per-op nanosecond counters OpProfile reports.
 func WithProfile(on bool) Option { return func(l *loadOpts) { l.opt.profile = on } }

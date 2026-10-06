@@ -244,6 +244,7 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 	if biggest == 0 {
 		t.Fatal("the fixture has no mixture block")
 	}
+	trials := 0
 	run := func(opts ...tier.Option) ([][]float32, tier.Stats, int) {
 		t.Helper()
 		opts = append([]tier.Option{tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff)}, opts...)
@@ -255,6 +256,12 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 		s := m.NewState(16)
 		defer s.Close()
 		s.SetDeviceLayers(g, m.Cfg.NLayer)
+		// An auto-streamed placement arms the trial against the host; a
+		// forced or resident one does not.
+		if trial := s.seam != nil; trial != (s.autoStreamed > 0) {
+			t.Fatalf("%d blocks auto-streamed and the stream trial armed is %v", s.autoStreamed, trial)
+		}
+		trials += s.autoStreamed
 		out := make([][]float32, len(ids))
 		for i, id := range ids {
 			l, err := s.Forward(id)
@@ -295,6 +302,40 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 				t.Fatalf("pos %d logit %d: auto-streamed %v, forced %v", p, i, got[p][i], want[p][i])
 			}
 		}
+	}
+	if trials == 0 {
+		t.Fatal("no placement auto-streamed, so the stream trial was never armed")
+	}
+	// The trial runs through to a decision: the blocks go home and come back
+	// streamed between its runs, and every token stays finite.
+	{
+		g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff), budget)
+		if err != nil || g == nil {
+			noDevice(t, "device", err)
+		}
+		s := m.NewState(64)
+		s.SetDeviceLayers(g, m.Cfg.NLayer)
+		if s.seam == nil {
+			t.Fatal("the stream trial was not armed")
+		}
+		s.seam.warmup, s.seam.perRun, s.seam.rounds = 1, 1, 1
+		for i := 0; i < 40 && !s.seam.settled; i++ {
+			l, err := s.Forward(int32(1 + i%8))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, v := range l {
+				if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+					t.Fatalf("token %d of the trial is not finite", i)
+				}
+			}
+		}
+		if !s.seam.settled {
+			t.Fatal("the stream trial did not settle in 40 tokens")
+		}
+		t.Logf("stream trial settled on %d blocks: %s", s.seam.best, s.seam.why)
+		s.Close()
+		g.Close()
 	}
 	_, ns, _ := run(budget, tier.WithConfig(func(c *tier.Config) { c.NoAutoStream = true }))
 	if ns.StreamBlocks != 0 {

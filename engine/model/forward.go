@@ -179,7 +179,10 @@ type State struct {
 	expReq     chan expRead
 	expErr     error
 	shW        float32
-	shReady    bool
+	// autoStreamed counts the blocks the last placement streamed because no
+	// card could hold them resident (nn.AutoStreamer).
+	autoStreamed int
+	shReady      bool
 	// ShOverlaps counts mixture layers whose shared expert ran behind the
 	// routed read: the selection check for WithSharedOverlap.
 	ShOverlaps int
@@ -1024,9 +1027,15 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 			pb.PlanBlocks(hi, s.planExtra(hi))
 		}
 		s.placing, s.placeErr = true, nil
+		s.autoStreamed = 0
 		s.offerRange(s.lo, hi)
 		s.placing = false
 		pl.EndPlacement()
+		// Blocks no card could hold went on streamed by default; whether that
+		// beats the host is measured, not assumed (initStreamTrial).
+		if s.autoStreamed > 0 && s.seam == nil && !s.m.opt.noStreamTrial {
+			s.initStreamTrial()
+		}
 	} else {
 		s.placing, s.placeErr = true, nil
 		s.offerRange(s.lo, hi)
@@ -1522,6 +1531,7 @@ func (s *State) offerRange(lo, hi int) {
 					s.noteDecline(why)
 					continue
 				}
+				s.autoStreamed++
 			}
 		}
 		// A block whose experts are separate tensors has no bank to offer; say

@@ -34,6 +34,7 @@ type seamTuner struct {
 	runN    int
 	runFrom time.Time
 	verbose bool
+	why     string // what settled it
 }
 
 // SeamTuneMargin is how much faster a challenger must be to be adopted. It is
@@ -58,6 +59,30 @@ func (s *State) initSeamTuner() {
 		cands:   cands,
 		best:    full,
 		chal:    cands[1],
+		warmup:  s.m.opt.seamWarmup,
+		perRun:  s.m.opt.seamRun,
+		rounds:  s.m.opt.seamRounds,
+		verbose: s.m.opt.seamVerbose,
+	}
+}
+
+// initStreamTrial measures a placement that streamed blocks no card could
+// hold (the incumbent) against the host (the one challenger): the seam
+// tuner's ABBA runs with the migration outside the clock, and the host is
+// adopted only past SeamTuneMargin, so two near-equal answers cannot flap.
+// On Kimi-K3 over eight V100s the two decoded within a few percent of each
+// other while the streamed one prefilled 1.5x faster (placement.md 16c), so
+// which wins is a property of the box, the disk and the link, not a rule.
+func (s *State) initStreamTrial() {
+	if s.ld == nil || s.gpuLayers <= s.lo {
+		return
+	}
+	full := s.gpuLayers
+	s.seam = &seamTuner{
+		on:      true,
+		cands:   []int{full, 0},
+		best:    full,
+		chal:    0,
 		warmup:  s.m.opt.seamWarmup,
 		perRun:  s.m.opt.seamRun,
 		rounds:  s.m.opt.seamRounds,
@@ -167,10 +192,14 @@ func (t *seamTuner) observe(s *State, rate float64) {
 
 func (t *seamTuner) finish(s *State, why string) {
 	t.settled = true
+	t.why = why
 	if t.verbose {
 		fmt.Fprintf(os.Stderr, "seam: settled on %d blocks (%s)\n", t.best, why)
 	}
-	s.SetGPULayers(t.best)
+	// nil only in the tuner's own gate, which drives observe without a model.
+	if s != nil {
+		s.SetGPULayers(t.best)
+	}
 }
 
 func medianIQR(v []float64) (med, iqr float64) {
