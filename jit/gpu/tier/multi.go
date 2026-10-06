@@ -522,10 +522,12 @@ func (g *GPU) DeclineSize(li int, total, bank uint64) string {
 	if len(g.devs) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("block %d keeps %d bytes resident (%d of them its routed experts), above every "+
-		"device's whole budget (the largest %d), so it runs on the host unread by the device "+
+	// No block index or byte count in the text: placement groups identical
+	// reasons, and ninety-two lines that differ by a number say one thing.
+	return fmt.Sprintf("the block with its routed experts is above every device's whole budget "+
+		"(the largest %.2f GiB), so it runs on the host unread by the device "+
 		"(a placement that streams it -- JITLLM_GPU_STREAM, -placement N=DEV~ -- puts it on a card)",
-		li, total, bank, widest)
+		float64(widest)/(1<<30))
 }
 
 // SetBudget retargets every device's weight budget while the model is running,
