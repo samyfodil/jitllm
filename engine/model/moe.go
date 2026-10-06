@@ -83,8 +83,14 @@ func (s *State) moe(li int, l *layer, rin, h, out []float32) error {
 		// they are read; its contribution is added where it always was, by
 		// the caller, so the sum is the same float sum (placement.md 16c-2).
 		s.shOverlap = nil
+		if s.expReq == nil {
+			// One reader for the State's life, not a goroutine a layer: a go
+			// statement with arguments allocates (TestDecodeDoesNotAllocate).
+			s.expReq = make(chan expRead)
+			go s.expertReader(s.expReq)
+		}
 		s.expWG.Add(1)
-		go s.readExperts(li, sel)
+		s.expReq <- expRead{li: li, sel: sel}
 		w, serr := s.sharedExpertOut(sh, s.shOverlapH)
 		s.expWG.Wait()
 		err = s.expErr
@@ -433,12 +439,20 @@ func (s *State) sharedExpert(l *layer, h, out []float32) error {
 	return nil
 }
 
-// readExperts is ensureExperts on its own goroutine, its error left in
-// s.expErr: the routed read moe runs behind the shared expert. A method, so
-// issuing it allocates nothing.
-func (s *State) readExperts(li int, sel []int32) {
-	defer s.expWG.Done()
-	s.expErr = s.m.ensureExperts(li, sel, &s.expHold)
+// expRead is one layer's routed read handed to the State's reader.
+type expRead struct {
+	li  int
+	sel []int32
+}
+
+// expertReader runs ensureExperts for each request until the channel closes
+// (State.Close), its error left in s.expErr: the routed read moe runs
+// behind the shared expert.
+func (s *State) expertReader(req chan expRead) {
+	for r := range req {
+		s.expErr = s.m.ensureExperts(r.li, r.sel, &s.expHold)
+		s.expWG.Done()
+	}
 }
 
 // sharedExpertOut computes the shared expert's output into s.shOut and

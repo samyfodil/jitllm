@@ -176,6 +176,7 @@ type State struct {
 	shOverlap  *layer
 	shOverlapH []float32
 	expWG      sync.WaitGroup
+	expReq     chan expRead
 	expErr     error
 	shW        float32
 	shReady    bool
@@ -797,6 +798,10 @@ func (s *State) dev() nn.LayerDevice {
 // State must be closed before its Model (`defer m.Close()` then
 // `defer st.Close()` gives that order).
 func (s *State) Close() error {
+	if s.expReq != nil {
+		close(s.expReq)
+		s.expReq = nil
+	}
 	// The vision State runs on this State's JIT, so it goes first.
 	if s.visState != nil {
 		s.visState.Close()
