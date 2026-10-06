@@ -21,8 +21,8 @@ package cpu
 //	AScale  the block's four numbers: alpha_p, alpha_n, beta, eps   (f32, 4)
 //	Scr     XIELUConsts()
 //	K/Rows  n/ElemLanes whole units and n%ElemLanes tail elements
-//
-// The block is exp's (expConstsShared, offsets 0..40) and then
+
+// XIELUConsts is the block: exp's (expConstsShared, offsets 0..40) and then
 //
 //	44  -0.5, the polynomial's lower bound
 //	48  1/8!, 52 1/7!, 56 1/6!, 60 1/5!, 64 1/4!, 68 1/3!, 72 1/2: g's Horner

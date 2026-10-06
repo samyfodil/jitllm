@@ -12,9 +12,9 @@ func moeShapeErr(n, k int) error {
 	return fmt.Errorf("jit: moe top-k: %d experts, k = %d (want 1 <= k <= n)", n, k)
 }
 
-// The constant block and the scratch layout every MoE-router top-k kernel
-// reads. One copy for all three tiers, in an untagged file, because the layout
-// is the ABI between the emitters and nn.
+// MoETopKConsts is the constant block and the scratch layout every MoE-router
+// top-k kernel reads. One copy for all three tiers, in an untagged file,
+// because the layout is the ABI between the emitters and nn.
 //
 //	bytes  0..31  int32 0..7   the initial index vector. The AVX2 kernel loads
 //	                           all eight; the SSE and NEON kernels load the

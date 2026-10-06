@@ -33,8 +33,9 @@ import (
 //	AHalfSum ord, the same ids ascending           (int32, 2)
 //	Out      wt: the selected logits in, sel's weights out   (f32, 2)
 //	Out2     ow, ord's weights                     (f32, 2, written)
-//
-// The block is exp's (expConstsShared, offsets 0..40) and then
+
+// SparseMixerConsts is the block for eps: exp's (expConstsShared, offsets
+// 0..40) and then
 //
 //	44  2*eps, the relative threshold, as the reference's f32 scalar
 //	48  0x7FFFFFFF, the |x| mask

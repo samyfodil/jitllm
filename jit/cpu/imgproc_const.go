@@ -104,6 +104,8 @@ import (
 //
 //	Q32  hw (float32 [Rows])   Q2  ht (int32 [Rows])
 //	AScale  ww (float32 [K])   AScale2  wt (int32 [K])   Cols  the table's side
+
+// pixLUTSize is the entries in one channel's PixLUT table: one per byte value.
 const pixLUTSize = 256
 
 // The AxisTaps constant block: float32 slots, int32 where named.
@@ -161,6 +163,8 @@ func AxisConsts(chain [9]float32, hi int32) (c AxisBlock) {
 //
 //	Out, Out2  float32 [Rows][K]      K  frequencies    Rows  positions
 //	Scr        SinCosConsts(base)
+
+// The SinCosTab constant block: float64 slots, float32 where named.
 const (
 	scLnHiOff    = 0   // ln(base), its high 28 bits
 	scLnLoOff    = 8   // the rest of ln(base)
