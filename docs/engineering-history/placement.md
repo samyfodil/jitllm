@@ -2675,6 +2675,91 @@ took different gates for the same card 1, and `cuda:0` beside `vulkan:0`
       cuda's three keys distinct, cuda:1's among them, vulkan:1 (card 1 again)
       the same key, the iGPU its own, the UUID-less llvmpipe "vulkan:3"
 
+## ★ 16c. KIMI-K3 STREAMED ON EIGHT V100s: THE "UPLOAD" WAS A SERIAL DISK READ, A FAULTING MEMCPY AND A PAGEABLE TRANSFER, AND THE NEXT BLOCK'S ROUTER NAMES 60% OF ITS EXPERTS.
+
+`docs/perf/current.md` ("Kimi-K3 2.78T from disk on the V100 box") left the
+streamed run at 17.27 s a token with 641.5 of 649.6 s of block compute filed
+under `stream cost: upload`, and ~1.4 GiB/s of apparent PCIe. That line was one
+timer around three different things. The measurement that splits it, before
+anything was built:
+
+- **Instrument.** `tier.Stats.TStreamSheet`, `TStreamCopy`, `TStreamH2D` and
+  `StreamBytes` split `streamBank.put` into finding each routed sheet in the
+  host pager, gathering it into the staging buffer and the host-to-device
+  copy. `Config.StreamProbe` (`JITLLM_GPU_PROBE`) runs, at every streamed
+  block's suspension, the NEXT block's router over THIS block's normed row
+  through that block's own route launches and scores the top-k against the
+  selection the next block then makes. `Config.StreamSelLog`
+  (`JITLLM_GPU_SELLOG`) writes every streamed block's selection to a file.
+- **Run.** The V100 box, `Kimi-K3-q8.jlm`, `-devices cuda`,
+  `JITLLM_GPU_STREAM=1`, greedy, `-n 32`, "The capital of France is", default
+  host budget (393 GiB), 93/93 blocks on six cards. Prompt 1m29.9s, decode 32
+  tokens in 9m4.8s (17.0 s/token), block compute 629.9 s, of which the fill is
+  621.0 s over 3404 fills (92 mixture blocks x 37 steps; the prompt also fills
+  per token).
+
+| part of one fill (268 MiB: 16 experts x 16.73 MiB) | total | per fill |
+|---|---|---|
+| sheet lookup (`Sheet` -> `jlm.File.Hold` of the expert page: the disk read, one page at a time) | 173.35 s | 51 ms |
+| gather into the per-block staging buffer (a memcpy) | 326.67 s | 96 ms |
+| `cuMemcpyHtoD` from that pageable buffer, 890.06 GiB | 120.55 s | 35 ms (7.38 GiB/s) |
+| drain before the selection is read home | 6.16 s | 1.8 ms |
+| everything else in block compute (the kernels, readbacks) | ~9 s | ~2.6 ms |
+
+★ **The reads were serial, and the read timer said 0.06 s because the reads
+were not where it looked.** For a bank in expert pages
+`Model.pageInSelected` returns at once (the sheets are reached through
+`Sheet`), so `streamBank.fill`'s `sel2` read nothing and every expert page was
+faulted in by `Sheet`'s `Hold`, one at a time, inside the upload loop. The
+container carries `StreamGroups` 1, so `PrefetchExperts`' parallel read never
+ran either. Decode read 212.19 GiB (7.12 GB a token) this way.
+
+★ **The gather is the biggest term and it is not memory bandwidth.** 268 MiB
+in 96 ms is 2.7 GiB/s for a memcpy. Each of the 92 streamed blocks owns nine
+staging buffers grown to 268 MiB together: 24 GiB of Go heap touched once a
+token each. The run took 153.9 M minor faults (~587 GiB of 4 KiB pages) and
+1206 s of system time against 386 s of user time: the staging is being given
+back and faulted in again. One staging set per device (fills on a device are
+sequential), or no staging at all for sheets of megabytes, removes it.
+
+★ **The transfer is a pageable copy at 7.38 GiB/s**, under the ~11-12 GiB/s a
+pinned buffer reaches on PCIe 3.0 x16, and synchronous: nothing overlaps it.
+
+**Expert reuse** (`JITLLM_GPU_SELLOG`, the 32 decode tokens scored, each
+block's selection against what came before it):
+
+| predictor / cache | hit |
+|---|---|
+| previous token's selection (16 of 896) | 33.4% |
+| a per-block device LRU of 24 experts | 40.8% |
+| 32 | 49.0% |
+| 48 | 57.9% |
+| 64 | 63.0% |
+| 128 | 70.3% |
+| seen anywhere earlier in the run (an unbounded host cache) | 72.4% |
+
+The previous-token figure is the same 34% olmoe and Qwen3-30B-A3B gave (15t):
+a property of routing, now on a 896-expert bank. The spare VRAM is small
+against the bank: the two empty cards and the headroom on the rest hold about
+36 GiB, ~2200 expert pages, ~24 a block -- a 41% hit on the transfer, and
+nothing on the disk read, which the host frames already cache at the 72%.
+
+**★ Cross-layer prediction** (`JITLLM_GPU_PROBE`, every prompt and decode
+step, pairs on the same card): block N+1's router over block N's normed FFN
+row names **25,244 of 41,712 routed experts, 60.5%** (chance 1.8%). This is
+the predictor available AT block N's suspension, a whole block ahead of when
+N+1 needs the sheets; it is not 15t's cross-token reuse, and unlike that one
+it costs no extra bytes per hit beyond the misses it fetches (16 predicted, 16
+used).
+
+**What the attribution says to build, in order.** The disk read and the
+transfer are the token; the kernels are ~2.6 ms of a 182 ms fill. (1) Read the
+selection's pages in parallel and overlap them with the transfer; (2) drop the
+faulting gather; (3) pinned, asynchronous transfers; then the cross-layer
+prefetch, which can start block N+1's reads and transfers a block early with
+60% of them right. A device expert cache is the smallest lever: 41% of the
+transfer at the VRAM there is.
+
 ## GPU.Layers' head-on-another-device arm is dead code
 
 ★★★ **AND `GPU.Layers`' HEAD-ON-ANOTHER-DEVICE ARM IS DEAD CODE, ESTABLISHED

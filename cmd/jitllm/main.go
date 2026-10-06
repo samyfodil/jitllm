@@ -943,6 +943,14 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 						"over %d fill(s), %d overlapped read(s)\n",
 					sec(ds.TStreamWait), sec(ds.TStreamRead), sec(ds.TStreamPut),
 					ds.StreamFills, ds.StreamOverlaps)
+				fmt.Fprintf(os.Stderr,
+					"stream upload: sheet lookup %.2f s, gather %.2f s, host-to-device %.2f s for %.2f GiB (%.2f GiB/s)\n",
+					sec(ds.TStreamSheet), sec(ds.TStreamCopy), sec(ds.TStreamH2D),
+					float64(ds.StreamBytes)/(1<<30), float64(ds.StreamBytes)/(1<<30)/max(sec(ds.TStreamH2D), 1e-9))
+			}
+			if ds.ProbeExperts > 0 || ds.ProbeFused > 0 {
+				fmt.Fprintf(os.Stderr, "cross-layer probe: %d of %d routed experts predicted (%.1f%%), %d probe(s) skipped on a fused route\n",
+					ds.ProbeHits, ds.ProbeExperts, 100*float64(ds.ProbeHits)/max(float64(ds.ProbeExperts), 1), ds.ProbeFused)
 			}
 		}
 	}

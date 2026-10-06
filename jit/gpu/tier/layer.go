@@ -255,6 +255,41 @@ type streamBank struct {
 	pre func([]uint32) error
 	// st is the per-(matrix, plane) staging buffer; see fill.
 	st [9][]byte
+	// pred is this block's selection as the previous block's probe predicted
+	// it (Config.StreamProbe), valid while havePred; score compares it with
+	// the real one and clears it.
+	pred     []uint32
+	havePred bool
+}
+
+// score charges this token's selection to the probe's counters and hands it
+// to Config.StreamSelLog. Both are measurement: a run without either pays a
+// branch.
+func (st *streamBank) score(g *devTier, li int) {
+	if g.StreamSelLog != nil {
+		g.StreamSelLog(li, st.sel)
+	}
+	if !st.havePred {
+		return
+	}
+	st.havePred = false
+	for _, e := range st.sel {
+		for _, q := range st.pred {
+			if q == e {
+				g.ProbeHits++
+				break
+			}
+		}
+	}
+	g.ProbeExperts += len(st.sel)
+}
+
+// growU32 returns s resized to n, reusing its array when it is big enough.
+func growU32(s []uint32, n int) []uint32 {
+	if cap(s) < n {
+		return make([]uint32, n)
+	}
+	return s[:n]
 }
 
 // fill uploads the k sheets this token routed to, in selection order, so that
@@ -302,7 +337,7 @@ func (st *streamBank) fill(g *devTier, s backend.Session, l *layer, nExpert int)
 			go func(sel []uint32) { errc <- st.pre(sel) }(st.sel[nx[0]:nx[1]])
 		}
 		t1 := time.Now()
-		err := st.put(s, l, nExpert, grp[gi])
+		err := st.put(g, s, l, nExpert, grp[gi])
 		g.TStreamPut += time.Since(t1)
 		if errc != nil {
 			// Joined even on failure: a goroutine still reading into a frame
@@ -351,7 +386,7 @@ func (st *streamBank) groups(g *devTier, k int) [][2]int {
 // put stages and uploads one group of sheets into the compact bank. The
 // compact bank is k sheets back to back, so slots [lo, hi) are the byte range
 // [lo*n, hi*n) of every plane.
-func (st *streamBank) put(s backend.Session, l *layer, nExpert int, gr [2]int) error {
+func (st *streamBank) put(g *devTier, s backend.Session, l *layer, nExpert int, gr [2]int) error {
 	lo, hi := gr[0], gr[1]
 	for m, pair := range [3]struct {
 		r *resident
@@ -382,6 +417,7 @@ func (st *streamBank) put(s backend.Session, l *layer, nExpert int, gr [2]int) e
 				// contiguous one is sliced at e*n.
 				var src []byte
 				release := func() {}
+				ts := time.Now()
 				if pk.Sheet != nil {
 					sp, rel, err := pk.Sheet(int(e))
 					release = rel
@@ -403,13 +439,19 @@ func (st *streamBank) put(s backend.Session, l *layer, nExpert int, gr [2]int) e
 					release()
 					return fmt.Errorf("tier: expert %d plane %d is %d bytes, want %d", e, pl, len(src), n)
 				}
+				tc := time.Now()
+				g.TStreamSheet += tc.Sub(ts)
 				copy(buf[(i-lo)*n:(i-lo+1)*n], src)
 				release()
+				g.TStreamCopy += time.Since(tc)
 			}
 			dst := [3]backend.Buf{pair.r.qs, pair.r.d, pair.r.sc}[pl]
+			th := time.Now()
 			if err := s.WriteAt(dst, lo*n, buf); err != nil {
 				return err
 			}
+			g.TStreamH2D += time.Since(th)
+			g.StreamBytes += int64(len(buf))
 		}
 	}
 	return nil
@@ -6878,63 +6920,71 @@ func (g *devTier) layersSession(s backend.Session) {
 						g.k3LatentOut(lc, bs, l, R, mvrun)
 					}
 				} else {
-					lc.la(l.mvRouter, kernels.RouterThreads(bs.nExpert), l.router, rin, bs.rlogits)
-					logits := bs.rlogits
-					if l.routerB != nil {
-						// gpt-oss biases the logits before the rank, so the
-						// bias decides which experts are chosen.
-						lc.la(bs.rbias, bs.nExpert, bs.rlogits, l.routerB, bs.rlogitsB)
-						logits = bs.rlogitsB
-					}
-					// The V3 family's two extra passes exist because the IR has no nested
-					// loops: ranking needs each group's mask, which needs the group's rank
-					// among all groups, which needs a sum over members. Materialising the
-					// group scores and then the masked plane keeps each pass flat.
-					plane := logits
-					if bs.gscore != nil {
-						if l.expSelB != nil {
-							lc.la(bs.gscore, p.ExpertGroups, logits, bs.rgs, l.expSelB)
-							lc.la(bs.gmask, bs.nExpert, logits, bs.rgs, bs.rbm, l.expSelB)
-						} else {
-							lc.la(bs.gscore, p.ExpertGroups, logits, bs.rgs)
-							lc.la(bs.gmask, bs.nExpert, logits, bs.rgs, bs.rbm)
+					// route ranks one block's router over rin into bs.rsel, bs.rtop and,
+					// with weights, bs.rw. It is a closure so the streamed path's
+					// cross-layer probe can run the NEXT block's router over this block's
+					// row through exactly the launches that block will run itself.
+					route := func(l *layer, weights bool) bool {
+						lc.la(l.mvRouter, kernels.RouterThreads(bs.nExpert), l.router, rin, bs.rlogits)
+						logits := bs.rlogits
+						if l.routerB != nil {
+							// gpt-oss biases the logits before the rank, so the
+							// bias decides which experts are chosen.
+							lc.la(bs.rbias, bs.nExpert, bs.rlogits, l.routerB, bs.rlogitsB)
+							logits = bs.rlogitsB
 						}
-						plane = bs.rbm
-					}
-					// The arity follows the route. Vulkan refuses an undeclared buffer count;
-					// CUDA ignores a surplus pointer and silently never reads the plane.
-					// DeepSeek V4 selects through a plane per row (ds4.go).
-					selB := l.expSelB
-					if l.ds4 != nil {
-						selB = g.ds4RouteBias(lc, bs, l, 1)
-					}
-					fusedRoute := bs.route != nil && bs.gscore == nil && selB == nil
-					switch {
-					case fusedRoute:
-						// Rank and weights in one workgroup (kernels.ExpertRoute).
-						if err == nil {
-							err = lc.launch(bs.route, 1, bs.routeWidth,
-								logits, bs.rsel, bs.rtop, bs.rw)
+						// The V3 family's two extra passes exist because the IR has no nested
+						// loops: ranking needs each group's mask, which needs the group's rank
+						// among all groups, which needs a sum over members. Materialising the
+						// group scores and then the masked plane keeps each pass flat.
+						plane := logits
+						if bs.gscore != nil {
+							if l.expSelB != nil {
+								lc.la(bs.gscore, p.ExpertGroups, logits, bs.rgs, l.expSelB)
+								lc.la(bs.gmask, bs.nExpert, logits, bs.rgs, bs.rbm, l.expSelB)
+							} else {
+								lc.la(bs.gscore, p.ExpertGroups, logits, bs.rgs)
+								lc.la(bs.gmask, bs.nExpert, logits, bs.rgs, bs.rbm)
+							}
+							plane = bs.rbm
 						}
-					case bs.gscore != nil:
-						lc.la(bs.rank, bs.nExpert, logits, bs.rsel, bs.rtop, plane)
-					case selB != nil:
-						lc.la(bs.rank, bs.nExpert, logits, bs.rsel, bs.rtop, selB)
-					default:
-						lc.la(bs.rank, bs.nExpert, logits, bs.rsel, bs.rtop)
-					}
-					if err == nil && !fusedRoute {
-						// One thread: k is 2 to 8 and this is three short loops.
-						// The un-renormalised softmax kernel reads the full
-						// logit array; the renormalised one does not declare
-						// it, and the sigmoid one reads neither -- sigma()
-						// already ran inside the rank.
-						if p.NoExpertNorm && !p.ExpertSigmoid {
-							err = lc.launch(bs.weights, 1, 1, bs.rtop, bs.rw, logits)
-						} else {
-							err = lc.launch(bs.weights, 1, 1, bs.rtop, bs.rw)
+						// The arity follows the route. Vulkan refuses an undeclared buffer count;
+						// CUDA ignores a surplus pointer and silently never reads the plane.
+						// DeepSeek V4 selects through a plane per row (ds4.go).
+						selB := l.expSelB
+						if l.ds4 != nil {
+							selB = g.ds4RouteBias(lc, bs, l, 1)
 						}
+						fusedRoute := bs.route != nil && bs.gscore == nil && selB == nil
+						switch {
+						case fusedRoute:
+							// Rank and weights in one workgroup (kernels.ExpertRoute).
+							if err == nil && weights {
+								err = lc.launch(bs.route, 1, bs.routeWidth,
+									logits, bs.rsel, bs.rtop, bs.rw)
+							}
+						case bs.gscore != nil:
+							lc.la(bs.rank, bs.nExpert, logits, bs.rsel, bs.rtop, plane)
+						case selB != nil:
+							lc.la(bs.rank, bs.nExpert, logits, bs.rsel, bs.rtop, selB)
+						default:
+							lc.la(bs.rank, bs.nExpert, logits, bs.rsel, bs.rtop)
+						}
+						if err == nil && !fusedRoute && weights {
+							// One thread: k is 2 to 8 and this is three short loops.
+							// The un-renormalised softmax kernel reads the full
+							// logit array; the renormalised one does not declare
+							// it, and the sigmoid one reads neither -- sigma()
+							// already ran inside the rank.
+							if p.NoExpertNorm && !p.ExpertSigmoid {
+								err = lc.launch(bs.weights, 1, 1, bs.rtop, bs.rw, logits)
+							} else {
+								err = lc.launch(bs.weights, 1, 1, bs.rtop, bs.rw)
+							}
+						}
+						return fusedRoute
 					}
+					route(l, true)
 					// The suspension, for a streamed bank: the selection comes home, k
 					// sheets of gate/up/down are uploaded at their compact offsets, and the
 					// submission resumes indexing 0..k-1, because the bank it reads is the
@@ -6957,6 +7007,25 @@ func (g *devTier) layersSession(s backend.Session) {
 						}
 						if err == nil && !g.StreamFixedSel {
 							err = s.Read(bs.rsel, u32b(l.stream.sel))
+						}
+						if err == nil && !g.StreamFixedSel {
+							l.stream.score(g, li)
+						}
+						if err == nil && g.StreamProbe && li+1 < hi {
+							// The cross-layer probe: the next block's router over this
+							// block's normed row, ranked by that block's own launches.
+							// It clobbers rsel and rtop, which nothing below reads on a
+							// streamed block (it indexes bs.ident and the weights are
+							// already in bs.rw).
+							if nx := g.layers[li+1]; nx != nil && nx.stream != nil && nx.router != nil {
+								if route(nx, false) {
+									g.ProbeFused++
+								} else if err = s.Sync(); err == nil {
+									nx.stream.pred = growU32(nx.stream.pred, len(nx.stream.sel))
+									err = s.Read(bs.rsel, u32b(nx.stream.pred))
+									nx.stream.havePred = err == nil
+								}
+							}
 						}
 						if err == nil {
 							err = l.stream.fill(g, s, l, p.NExpert)

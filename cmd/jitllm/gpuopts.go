@@ -192,6 +192,7 @@ func gpuOptions() []tier.Option {
 		{"JITLLM_GPU_FORCE_GROUP", set("JITLLM_GPU_FORCE_GROUP"), func(c *tier.Config) { c.ForceGroupSplit = true }},
 		{"JITLLM_GPU_STREAM", set("JITLLM_GPU_STREAM"), func(c *tier.Config) { c.StreamExperts = true }},
 		{"JITLLM_GPU_STREAM_FIXED", set("JITLLM_GPU_STREAM_FIXED"), func(c *tier.Config) { c.StreamFixedSel = true }},
+		{"JITLLM_GPU_PROBE", set("JITLLM_GPU_PROBE"), func(c *tier.Config) { c.StreamProbe = true }},
 		{"JITLLM_GPU_STREAM_GROUPS", num("JITLLM_GPU_STREAM_GROUPS") > 0,
 			func(c *tier.Config) { c.StreamGroups = num("JITLLM_GPU_STREAM_GROUPS") }},
 		// =0 uploads the host's rotary table instead of building it on the
@@ -202,6 +203,19 @@ func gpuOptions() []tier.Option {
 	for _, f := range flags {
 		if f.on {
 			o = append(o, tier.WithConfig(f.set))
+		}
+	}
+	// JITLLM_GPU_SELLOG names a file that gets one line per streamed block per
+	// token: the block index and its routed expert ids in rank order.
+	if path := os.Getenv("JITLLM_GPU_SELLOG"); path != "" {
+		if f, err := os.Create(path); err == nil {
+			o = append(o, tier.WithConfig(func(c *tier.Config) {
+				c.StreamSelLog = func(block int, sel []uint32) {
+					fmt.Fprintln(f, block, sel)
+				}
+			}))
+		} else {
+			fmt.Fprintln(os.Stderr, "JITLLM_GPU_SELLOG:", err)
 		}
 	}
 	return o

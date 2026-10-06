@@ -364,6 +364,16 @@ type Config struct {
 	// serial read-then-upload, and is what a host with no PrefetchExperts gets;
 	// see streamBank.fill.
 	StreamGroups int
+	// StreamProbe runs, at each streamed block's suspension, the next block's
+	// router over this block's normed row and scores its top-k against the
+	// selection that block then makes (Stats.ProbeHits): the measurement of a
+	// cross-layer expert prefetch. It costs a router launch and a round trip a
+	// block, so it is an instrument, never a mode to run in.
+	StreamProbe bool
+	// StreamSelLog, when set, is handed every streamed block's selection as it
+	// comes home (block index, the k expert ids in rank order). The slice is
+	// reused; copy it to keep it.
+	StreamSelLog func(block int, sel []uint32)
 	// NoGraph issues the token's launches one driver call at a time instead of
 	// replaying a captured graph: the other arm of that comparison, a field so
 	// both arms can be live in one process.
@@ -641,6 +651,16 @@ type Stats struct {
 	// read at all. A CPU profile cannot split this, since the reads overlap
 	// across goroutines.
 	TStreamWait, TStreamRead, TStreamPut time.Duration
+	// TStreamSheet, TStreamCopy and TStreamH2D split TStreamPut: finding each
+	// routed sheet in the host pager (a read when the page is not resident),
+	// gathering it into the staging buffer, and the host-to-device transfer of
+	// StreamBytes.
+	TStreamSheet, TStreamCopy, TStreamH2D time.Duration
+	StreamBytes                           int64
+	// ProbeHits of ProbeExperts routed experts were in the previous block's
+	// cross-layer prediction (Config.StreamProbe); ProbeFused counts probes
+	// skipped because the route fuses the rank with the weights.
+	ProbeHits, ProbeExperts, ProbeFused int
 	// TPrewarm is packing done off the main loop, kept apart from TPack
 	// because only TPack is on the critical path.
 	TPrewarm time.Duration
@@ -914,6 +934,13 @@ func (s *Stats) add(o Stats) {
 	s.TStreamWait += o.TStreamWait
 	s.TStreamRead += o.TStreamRead
 	s.TStreamPut += o.TStreamPut
+	s.TStreamSheet += o.TStreamSheet
+	s.TStreamCopy += o.TStreamCopy
+	s.TStreamH2D += o.TStreamH2D
+	s.StreamBytes += o.StreamBytes
+	s.ProbeHits += o.ProbeHits
+	s.ProbeExperts += o.ProbeExperts
+	s.ProbeFused += o.ProbeFused
 	s.TPrewarm += o.TPrewarm
 	s.Captures += o.Captures
 	s.AttnMMA = s.AttnMMA || o.AttnMMA
