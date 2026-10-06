@@ -1,0 +1,25 @@
+# The image builds two binaries, cmd/jitllm and server/cmd/jitllmd, from
+# their Go sources and module files. Everything else stays out of the build
+# context: history, models, the other front ends, docs and test data.
+.git
+.github
+.claude
+.dockerignore
+Dockerfile
+dist
+models
+*.gguf
+*.jlm
+*.test
+*.out
+*.prof
+**/testdata
+**/*_test.go
+docs
+website
+ui
+tui
+common
+proto
+scripts
+*.md

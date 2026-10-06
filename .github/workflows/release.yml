@@ -2,7 +2,8 @@ name: release
 
 # A v* tag builds every archive into a DRAFT release, runs the shipped
 # archives on three hosts, and publishes the draft only if all three decoded
-# a real model correctly.
+# a real model correctly. The container image is pushed to ghcr.io under the
+# version with the draft, and tagged latest only when the draft is published.
 on:
   push:
     tags: ["v*"]
@@ -21,6 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write # create the draft release and upload to it
+      packages: write # push the version's image to ghcr.io (dockers_v2)
     steps:
       - uses: actions/checkout@v7
         with:
@@ -31,6 +33,15 @@ jobs:
           cache-dependency-path: |
             go.sum
             server/go.sum
+      # The image's arm64 half runs its apt step under QEMU; the binaries in
+      # it are the ones goreleaser cross-built above it.
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
@@ -120,8 +131,23 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      packages: write # move the image's latest tag
     steps:
       - name: publish the draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
+      # goreleaser pushed the image under its version only; `latest` moves to
+      # it once the archives passed, and never to a prerelease (a tag with a
+      # semver suffix, which is what goreleaser's prerelease: auto reads).
+      - uses: docker/login-action@v4
+        if: ${{ !contains(github.ref_name, '-') }}
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: tag the image latest
+        if: ${{ !contains(github.ref_name, '-') }}
+        run: |
+          image=ghcr.io/samyfodil/jitllm
+          docker buildx imagetools create -t "$image:latest" "$image:${GITHUB_REF_NAME#v}"

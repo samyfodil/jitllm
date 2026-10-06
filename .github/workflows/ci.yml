@@ -56,6 +56,36 @@ jobs:
             done
           done
 
+  # The container image (Dockerfile), for both platforms it ships on, built
+  # and thrown away: nothing is pushed and no registry is logged in to. The Go
+  # compile is a cross-build on the runner's platform; only the arm64 image's
+  # apt step runs under QEMU. The amd64 image is then run as docs/docker.md
+  # runs it, and has to complete a real prompt.
+  docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - name: build linux/amd64 and linux/arm64
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: load linux/amd64
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: jitllm:ci
+          cache-from: type=gha
+      - name: convert, serve and complete
+        run: .github/scripts/docker-smoke.sh jitllm:ci "$RUNNER_TEMP/models"
+
   # Formatting, module hygiene, and the checked-in protobuf code.
   check:
     runs-on: ubuntu-24.04

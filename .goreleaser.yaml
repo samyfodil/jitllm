@@ -64,6 +64,32 @@ archives:
     files:
       - README.md
 
+# The container image: jitllmd serving, with the jitllm CLI beside it, for
+# linux/amd64 and linux/arm64 under one multi-platform tag (dockers_v2 builds
+# the manifest list itself; there is no separate docker_manifests step). The
+# root Dockerfile with BIN=dist copies the binaries built above from the
+# context, so the image carries what the archives carry. A release pushes the
+# version tag here; the workflow's publish job moves `latest` to it only after
+# the shipped archives pass their smoke runs. A snapshot builds and loads one
+# image per platform and pushes nothing (`--skip=docker` leaves them out).
+dockers_v2:
+  - id: jitllm
+    ids: [jitllm, jitllmd]
+    dockerfile: Dockerfile
+    images: ["ghcr.io/samyfodil/jitllm"]
+    tags: ["{{ .Version }}"]
+    platforms: [linux/amd64, linux/arm64]
+    build_args:
+      BIN: dist
+    labels:
+      org.opencontainers.image.title: jitllm
+      org.opencontainers.image.description: "jitllmd, the jitllm inference daemon, with the jitllm CLI"
+      org.opencontainers.image.source: https://github.com/samyfodil/jitllm
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .CommitDate }}"
+      org.opencontainers.image.licenses: Apache-2.0
+
 checksum:
   name_template: checksums.txt
   algorithm: sha256
