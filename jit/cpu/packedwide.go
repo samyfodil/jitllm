@@ -44,7 +44,7 @@ func EmitPackedMatVecWide(t quant.Type, dk DotKind) ([]byte, error) {
 		return nil, fmt.Errorf("jit: EmitPackedMatVecWide: %s has no device layout", t)
 	}
 	// The pre-VNNI path refuses it: this kernel has no call site, so a
-	// VPMADDUBSW port would be code no gate runs. TestWideIsRefusedPreVNNI.
+	// VPMADDUBSW port would be code no gate runs. TestWideAndTiledAreRefusedPreVNNI.
 	if dk == DotVEX {
 		return nil, fmt.Errorf("jit: EmitPackedMatVecWide: %s has no pre-VNNI form "+
 			"(the fused kernel serves every format, so this one has no call site)", t)

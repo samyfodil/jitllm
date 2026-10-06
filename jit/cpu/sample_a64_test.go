@@ -11,7 +11,8 @@ import (
 // (samplemodel_test.go). The NEON masked select, folds (FMAXV, SMINV, ADDV)
 // and compares are different instructions, so the x86 gates say nothing about
 // them. Run on arm64 hardware: cross-compile with GOOS=darwin GOARCH=arm64
-// go test -c ./jit/cpu and run the binary there with -test.run TestSample -test.v.
+// go test -c ./jit/cpu and run the binary there with -test.run '^TestSample'
+// -test.v (every TestSample* gate).
 
 func sampleA64Kernels(t *testing.T) (firstC, elig, sweep, draw, pen *Code) {
 	t.Helper()

@@ -19,8 +19,8 @@ import (
 // memory as raw floats and runs clip's graph with an eval callback on every
 // node, printing the first and last three values along each axis and the sum
 // of the whole tensor. Raw floats means no decode, resize or normalisation is
-// in the comparison: only the tower's arithmetic. scripts/towergold.sh writes
-// the dumps these tests read.
+// in the comparison: only the tower's arithmetic. scripts/vlmgold.py writes
+// the dumps these tests read ($JITLLM_MODELS/vlm/oracle/<family>-rainbow.txt).
 
 // mtmdNode is one 2-D node of the dump: rows are ggml's ne1 (positions), cols
 // its ne0 (channels).

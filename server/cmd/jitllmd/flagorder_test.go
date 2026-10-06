@@ -61,7 +61,7 @@ func TestEveryVerbRefusesAFlagAfterItsFirstPositional(t *testing.T) {
 	}
 }
 
-// TestAPromptThatMERELY_LOOKS_LIKE_A_FLAG_IsNotRefused: the guard matches the
+// TestAPromptThatMerelyLooksLikeAFlagIsNotRefused: the guard matches the
 // flags the set defines, not a leading dash, so "-42 degrees is" still runs.
 func TestAPromptThatMerelyLooksLikeAFlagIsNotRefused(t *testing.T) {
 	allowed := [][]string{

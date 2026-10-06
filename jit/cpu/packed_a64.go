@@ -49,7 +49,7 @@ func EmitA64PackedMatVecPF(t quant.Type, rows, pf int) ([]byte, error) {
 // for the whole walk. Out is read once at a group's head and written once at
 // its tail, where the tiled kernel loads and stores it every sub-block (two of
 // every ten vector memory operations on Q8_0). The sums are the same in the
-// same order, so the two are bit-identical (TestA64FusedMatchesTiled).
+// same order, so the two are bit-identical (nn.TestFusedMatchesTheTiledKernel).
 //
 // ahead is the software prefetch, amd64's two forms (EmitPackedMatVecFusedAhead):
 // FusedAheadWords hints the payload a8Words planes ahead in the same rows (X23

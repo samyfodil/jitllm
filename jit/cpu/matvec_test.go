@@ -12,7 +12,7 @@ import (
 	"github.com/samyfodil/jitllm/format/quant"
 )
 
-// TestQ40KernelMatchesReference is T1: a float64 evaluation of the same int8
+// TestKernelMatchesReference is T1: a float64 evaluation of the same int8
 // activations and per-block scales the kernel uses, so the only permitted
 // difference is summation order (unquantized activations would need a ~1e-2
 // tolerance).

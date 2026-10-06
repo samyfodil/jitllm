@@ -16,7 +16,7 @@ import (
 // knows what a GGUF is.
 //
 // It is the gate on total decoupling, which the import graph alone cannot
-// prove: meta.TestOnlyTheConverterImportsGGUF says jlm does not import gguf,
+// prove: meta.TestOnlyTheConverterReachesGGUF says jlm does not import gguf,
 // not whether a second converter can get in. This walks the safetensors
 // reader's path with a synthetic model.
 func TestContainerFromNoGGUFAtAll(t *testing.T) {

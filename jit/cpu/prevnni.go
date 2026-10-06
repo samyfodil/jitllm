@@ -149,9 +149,11 @@ func ones16(a *Buf, dst Reg) {
 //
 // The bound is re-derived from the layout: VPMADDUBSW sums adjacent byte
 // products into one int16, so a format is served only while 127*(u0+u1) fits
-// in 32767 for every plane. 127 because QuantizeQ8Window gives |a| <= 127 by
-// construction (TestActivationsNeverReachMinus128). A saturating kernel does
-// not crash, it gives slightly wrong dots, so a wider payload is refused here.
+// in 32767 for every plane. 127 because QuantizeQ8Window scales by
+// inv = 127/amax, so |a| <= 127 by construction (internal/oracle/quantize.go),
+// and the activation-quantizer kernels are held to it bit for bit
+// (TestQuantActMatchesTheGoLoopExactly). A saturating kernel does not crash,
+// it gives slightly wrong dots, so a wider payload is refused here.
 func PreVNNIPacked(t quant.Type) error {
 	q, ok := kernels.QuantOf(t)
 	if !ok {

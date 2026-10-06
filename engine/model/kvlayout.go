@@ -76,8 +76,9 @@ func (l kvLayout) Write(dst []float32, slot, pos int, src []float32) {
 // store copies one run of elements at the cache's own width.
 //
 // At elem == 2 this is the only place f32 becomes f16 in the engine, so an f16
-// cache must match an f32 cache rounded through binary16 bit for bit
-// (TestKVF16StorageMatchesRounding).
+// cache must match an f32 cache rounded through binary16 bit for bit.
+// TestKVF16IsSelectedAndRuns holds the f16 cache end to end: that it is
+// selected, and that its logits stay in the band rounding alone costs.
 func (l kvLayout) store(dst []float32, src []float32) {
 	if l.elem == 4 {
 		narrow(dst, src)

@@ -82,7 +82,7 @@ func TestTheVerbsDriveARealServerOverRealHTTP(t *testing.T) {
 
 // ---------------------------------------------------------------- errors
 
-// TestAServerErrorArrivesAsTheSERVERS_OWN_SENTENCE: a .gguf load must print
+// TestAServerErrorArrivesAsTheServersOwnSentence: a .gguf load must print
 // the server's sentence, which carries the convert command. It needs no file
 // (Open checks the extension first). With clientError reduced to "request
 // failed" it fails with "the server's sentence did not reach the user".

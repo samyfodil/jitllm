@@ -105,7 +105,7 @@ func TestMemWall(t *testing.T) {
 	t.Logf("memory wall: 1 thread %.1f GB/s, 4 threads %.1f GB/s", one/1e9, four/1e9)
 }
 
-// TestReportIsFalsifiable: a throughput line must carry the wall it is a
+// TestReport: a throughput line must carry the wall it is a
 // fraction of, so a reader can check it. A bare "85 tok/s" cannot be argued with.
 func TestReport(t *testing.T) {
 	s := Report("decode", 520_950_640, 25*time.Millisecond, 6)
