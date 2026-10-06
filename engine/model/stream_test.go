@@ -321,8 +321,8 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 		if s.seam == nil {
 			t.Fatal("the stream trial was not armed, or seam tuning off disarmed it")
 		}
-		s.seam.warmup, s.seam.perRun, s.seam.rounds = 1, 1, 1
-		for i := 0; i < 40 && !s.seam.settled; i++ {
+		s.seam.warmup, s.seam.perRun, s.seam.rounds = 1, 2, 1
+		for i := 0; i < 60 && !s.seam.settled; i++ {
 			l, err := s.Forward(int32(1 + i%8))
 			if err != nil {
 				t.Fatal(err)
@@ -334,7 +334,7 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 			}
 		}
 		if !s.seam.settled {
-			t.Fatal("the stream trial did not settle in 40 tokens")
+			t.Fatal("the stream trial did not settle in 60 tokens")
 		}
 		t.Logf("stream trial settled on %d blocks: %s", s.seam.best, s.seam.why)
 		s.Close()

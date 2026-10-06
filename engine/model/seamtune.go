@@ -36,6 +36,10 @@ type seamTuner struct {
 	verbose bool
 	why     string // what settled it
 	trial   bool   // the stream trial (initStreamTrial), not the seam tuner
+	// warming and warmLeft skip the tokens just after a migration.
+	warming  bool
+	warmLeft int
+	counting bool // a timed run is under way
 }
 
 // SeamTuneMargin is how much faster a challenger must be to be adopted. It is
@@ -131,20 +135,32 @@ func (s *State) seamStep() {
 	}
 	// The clock starts after the migration: counting it would bias every arm
 	// switched to, on the same side of every switch, which ABBA cannot cancel.
-	if t.runN == 0 {
+	if !t.counting && !t.warming {
 		if got := s.SetGPULayers(t.armWant()); got != t.armWant() {
 			// The card would not give us this arm; drop it and settle.
 			t.finish(s, "the device refused the candidate placement")
 			return
 		}
-		t.runFrom = time.Now()
+		// A migrated placement starts cold -- pages to re-read, an expert
+		// cache to refill -- so its first tokens are not its rate: on
+		// Kimi-K3 one arm read 0.38 tok/s warm and 0.11 just after moving.
+		t.warming, t.warmLeft = true, max(1, t.perRun/3)
+	}
+	if t.warming {
+		if t.warmLeft--; t.warmLeft > 0 {
+			return
+		}
+		// This token is the warm-up's last, so the clock starts after it.
+		t.warming, t.counting = false, true
+		t.runFrom, t.runN = time.Now(), 0
+		return
 	}
 	t.runN++
 	if t.runN < t.perRun {
 		return
 	}
 	rate := float64(t.runN) / time.Since(t.runFrom).Seconds()
-	t.runN = 0
+	t.runN, t.counting = 0, false
 	t.observe(s, rate)
 }
 
@@ -160,10 +176,10 @@ func (t *seamTuner) armWant() int {
 func (t *seamTuner) observe(s *State, rate float64) {
 	q := t.turn % 4
 	t.quad[q] = rate
-	t.turn++
 	if t.verbose {
 		fmt.Fprintf(os.Stderr, "seam: %d blocks -> %.2f tok/s\n", t.armWant(), rate)
 	}
+	t.turn++
 	if q != 3 {
 		return
 	}
