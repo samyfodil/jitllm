@@ -20,8 +20,8 @@ import (
 // its attention is batched too (tier's mlabatch.go), and a chunk that refused
 // it went one row at a time through every block, mixture included.
 //
-// JITLLM_MOE_MODEL names another container (a V100 holds olmoe, the 30B and
-// DeepSeek-V2-Lite).
+// JITLLM_MOE_MODEL names another container (the GPU test host carries olmoe,
+// the 30B and DeepSeek-V2-Lite).
 func TestBatchedMixturePrefillMatchesRowByRow(t *testing.T) {
 	name := os.Getenv("JITLLM_MOE_MODEL")
 	if name == "" {
@@ -195,9 +195,9 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 
 	if !(nmse < 1e-2) {
 		t.Fatalf("last-row logits NMSE %.3e between batched and row-by-row", nmse)
 	}
-	// A flip past the tie band is not by itself a mixture bug: on a V100 batched
-	// prefill differs from per-token by a few logits on dense models too, so a
-	// flip is judged by its gap on the host.
+	// A flip past the tie band is not by itself a mixture bug: on a Volta-class
+	// card batched prefill differs from per-token by a few logits on dense
+	// models too, so a flip is judged by its gap on the host.
 	for j := range rowIDs {
 		if batIDs[j] != rowIDs[j] {
 			if gap := hostGap(t, m, prompt, rowIDs[:j], rowIDs[j], batIDs[j]); gap > batchTie {

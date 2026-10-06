@@ -164,7 +164,7 @@ func (m *Remote) ReadAt(p []byte, off int64) (int, error) {
 
 // rangeChunk and rangeFanout size the pieces a read is split into; the chunk
 // is a variable so a gate can split a small file. One connection to the Hub's
-// CDN carried about 60 MB/s on the V100 box, so a stream needs many.
+// CDN carried about 60 MB/s, so a stream needs many.
 var rangeChunk = 16 << 20
 
 const rangeFanout = 16

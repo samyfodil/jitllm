@@ -8,9 +8,9 @@ import (
 // TestASubmissionIsCutAtItsRunTimeBudget: a range whose measured per-block
 // cost overruns the budget goes as several submissions, each within it, and
 // gives the same residual as the range in one. The cut is what keeps a slow
-// device under its driver's fence timeout (subbudget.go): an Iris Xe ran
-// MiniCPM-V's tower as one 19 s submission, i915 signalled the fence at 10 s,
-// and the read-back was a residual 21 blocks in.
+// device under its driver's fence timeout (subbudget.go): an integrated Intel
+// GPU ran MiniCPM-V's tower as one 19 s submission, i915 signalled the fence at
+// 10 s, and the read-back was a residual 21 blocks in.
 func TestASubmissionIsCutAtItsRunTimeBudget(t *testing.T) {
 	const n = 6
 	run := func(budget time.Duration, per time.Duration) ([]float32, int) {

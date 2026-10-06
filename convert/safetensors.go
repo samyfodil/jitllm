@@ -627,7 +627,7 @@ func joined(ts []*jlm.Tensor) func() ([]byte, error) {
 
 // joinFanout is hf.DefaultConns: a streamed expert is a few MB, one range, so a
 // bank keeps as many connections busy as loads run at once, and one carried
-// about 60 MB/s from the Hub's CDN on the V100 box. The hf client bounds the
+// about 60 MB/s from the Hub's CDN. The hf client bounds the
 // connections; a local file is unaffected.
 const joinFanout = 16
 

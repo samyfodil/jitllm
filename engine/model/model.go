@@ -1379,9 +1379,9 @@ func (m *Model) AddJITOptions(o ...nn.Option) {
 // WithPageBudget caps the bytes of block pages the container may hold resident.
 //
 // It has to be known at Open, not after it: when Open read every page before
-// SetPageBudget narrowed the pool, a 53 GiB container on a 31 GiB box allocated
-// 53 GiB first and was killed, having produced nothing in 27 minutes, while
-// llama.cpp served the same model at 4.77 tok/s.
+// SetPageBudget narrowed the pool, a container larger than the machine's
+// memory allocated its whole size first and was killed before producing a
+// token (placement.md, "Measurements once cited in engine/model's comments").
 //
 // Zero means "ask the process": sched.MemBudget, which is MemAvailable or the
 // cgroup limit, whichever binds, times eight tenths. A budget that holds every

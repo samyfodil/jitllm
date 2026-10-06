@@ -123,7 +123,7 @@ func chooseSplit(rows, nb, pin int) int {
 		}
 		return n
 	}
-	const slots = 30720 // RTX 3050 Ti: 20 SMs x 1536
+	const slots = 30720 // a small Ampere card's resident threads: 20 SMs x 1536
 	split := 1
 	for split < 32 && rows*split < 2*slots && nb%(split*2) == 0 {
 		split *= 2
@@ -706,7 +706,7 @@ type Stats struct {
 	PagedStagedLaunches int
 	// PagedPrefill70 counts those prefill launches on sm_70's m8n8k4 pair
 	// (PagedAttnScoresMMA70/PagedAttnAccMMA70): the selection check that a
-	// V100 prompt took the tensor cores, latent blocks included.
+	// prompt on an sm_70 card took the tensor cores, latent blocks included.
 	PagedPrefill70 int
 	// PagedPrefillPasses counts the passes those launches ran over a history
 	// longer than one launch attends -- the selection check for the fold.

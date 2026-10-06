@@ -41,7 +41,7 @@ const (
 	tuneMargin = 0.98 // a challenger must win by >2% to justify another step
 
 	// tuneMaxIQR is the same dispersion gate the bench harness applies. Above
-	// it the box is too noisy to separate the candidates, so the tuner falls
+	// it the host is too noisy to separate the candidates, so the tuner falls
 	// back to the default and caches nothing.
 	tuneMaxIQR = 0.10
 )

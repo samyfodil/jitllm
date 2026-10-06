@@ -1501,8 +1501,9 @@ func (s *State) offerRange(lo, hi int) {
 		// A block another session placed is shared: the device keeps the
 		// weights and reads none of these, and the host page may have been
 		// given back after the first upload (nn.HostPageReleaser). Reading it
-		// again cost every new session the whole model from disk -- 122 ms of
-		// a 166 ms time to first token for Llama-3.2-1B on an RTX 3050 Ti.
+		// again cost every new session the whole model from disk -- most of a
+		// 1B model's time to first token on a 4 GB card (placement.md,
+		// "Measurements once cited in engine/model's comments").
 		if bh, ok := ld.(nn.BlockHolder); ok && !named && bh.HoldsBlock(li) {
 			w := nn.LayerWeights{Ensure: s.ensureLayer(li), EnsureExperts: s.ensureSelected(li),
 				PrefetchExperts: s.prefetchSelected(li)}
@@ -2937,8 +2938,9 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 	// worker would burn a core through each; a token that read nothing runs its
 	// regions back to back, and parking would cost a wake-up at every one.
 	// Deciding by the model's size against the budget parked Qwen3-30B in a
-	// 16 GiB cgroup for a run that read nothing after warm-up: 7.8 tok/s
-	// against 20.4 spinning, on a Xeon.
+	// 16 GiB cgroup for a run that read nothing after warm-up, at well under
+	// half the spinning rate (scheduling-and-measurement.md, "What was left:
+	// the pool spinning through a blocking read").
 	if pc := s.m.container; pc != nil {
 		in0, _ := pc.Faults()
 		defer func() {

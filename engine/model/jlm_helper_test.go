@@ -271,7 +271,8 @@ var (
 //
 // JITLLM_BENCH_MODEL is an override, not a switch: unset, correctness gates such
 // as TestPrefillMatchesForward run against the smallest quantized language model
-// on the box rather than skipping. Measurements still need their own opt-in.
+// in the model directory rather than skipping. Measurements still need their
+// own opt-in.
 func benchModel(t testing.TB) string {
 	t.Helper()
 	if p := os.Getenv("JITLLM_BENCH_MODEL"); p != "" {

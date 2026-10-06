@@ -2811,8 +2811,8 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 	// (voltaMV) -- are sized by the block's matrices, which reserveScratch,
 	// running before the first block is installed, cannot see. Left to the
 	// first prompt or step, they were asked of a card the blocks had filled:
-	// 12 MB on a V100 for Llama-3.2-1B, a driver out-of-memory on a full card
-	// and the last swap slot on a streaming one.
+	// 12 MB for Llama-3.2-1B on a Volta-class card, a driver out-of-memory on a
+	// full card and the last swap slot on a streaming one.
 	if !p.NonCausal {
 		for _, w := range []int{g.promptW, g.stepW} {
 			if w > 0 {
@@ -7853,9 +7853,8 @@ func (g *devTier) dropSession(sid uint64) {
 	// kvCompact gives them back when something needs the room. The scratch's
 	// bound stays: paged history sizes nothing by context, so resetting it
 	// only rebuilt the scratch -- the batched ones with it -- at the next
-	// session's first call, inside its prompt (measured: pp512 on a V100
-	// 17.4k tok/s on the first prompt of a process and 13.7-14.0k on every
-	// one after).
+	// session's first call, inside its prompt: every prompt after a process's
+	// first ran about a fifth slower (gpu-kernels.md, "The prompt lost 22%").
 }
 
 // dropHistory frees session sid's history on block l -- its KV cache or its
@@ -8229,8 +8228,8 @@ func (g *devTier) prepBatch(width int) bool {
 	tok := g.bbs[width].tok
 	bb := g.bbs[width]
 	// The walk is ~25 kernel lookups a block, every prompt (0.9 ms of a
-	// 512-row Qwen3-0.6B prompt on a V100); it only has something to find
-	// after a block was placed or released.
+	// 512-row Qwen3-0.6B prompt on a Volta-class card); it only has something
+	// to find after a block was placed or released.
 	if bb.walked == g.layerGen+1 {
 		return true
 	}
@@ -8755,8 +8754,8 @@ func (g *devTier) copyKVAcrossStride(kvp *kvPair, nk, nv backend.Buf, kvDim, old
 // restride runs one kernels.Restride and waits for it. Every block of a growth
 // has the same shape, so the kernel is compiled once per shape. One contiguous
 // run is a device copy instead: no kernel compiled for every size a buffer
-// grows to, and no grid to outgrow (the Iris Xe dispatches at most 65535
-// groups, 33.5 MB of floats at 128 threads a group).
+// grows to, and no grid to outgrow (an integrated GPU may dispatch at most
+// 65535 groups, 33.5 MB of floats at 128 threads a group).
 func (g *devTier) restride(src, dst backend.Buf, rows, cols, srcStride, dstStride int) bool {
 	if rows == 1 || cols == srcStride && cols == dstStride {
 		if err := g.dev.Copy(dst, 0, src, 0, rows*cols*4); err != nil {
@@ -9538,7 +9537,7 @@ const volta70AttnMT, volta70AttnNT = 2, 4
 // volta70AccMT is AttnAccMMA70's dims per warp in 32s: one, so every 32 dims of
 // a head is its own warp. The whole head per warp starved the card (too few
 // warps, each walking its causal width serially); one per 32 dims roughly
-// halved the accumulate on a V100.
+// halved the accumulate on a Volta-class card.
 const volta70AccMT = 1
 
 // volta70LatMT is the same tile for a batched latent block (mlabatch.go): the
@@ -9654,10 +9653,11 @@ func (g *devTier) flashTileAttn(bs *blockScratch, kvDim, gqa int, scale float32)
 		p.MLA() || p.NonCausal || p.AttnSinks || p.SWAChunked || kvDim%4 != 0 {
 		return
 	}
-	// Only at the 32-row blocking, as measured on an M4: a workgroup re-stages
-	// K and V for every block of query rows, so a narrower block (wide heads)
-	// lost to the three kernels. Staging K/V once per shared kv head would fix
-	// the wide heads, but the float32 output in workgroup memory leaves no room.
+	// Only at the 32-row blocking, as measured on Apple Silicon: a workgroup
+	// re-stages K and V for every block of query rows, so a narrower block
+	// (wide heads) lost to the three kernels. Staging K/V once per shared kv
+	// head would fix the wide heads, but the float32 output in workgroup memory
+	// leaves no room.
 	t, ok := kernels.FlashTileFor(p.HeadDim)
 	if !ok || t.SG < 4 || bs.rows%t.Rows() != 0 {
 		return

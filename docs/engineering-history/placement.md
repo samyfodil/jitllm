@@ -3665,3 +3665,19 @@ O_DIRECT; the dense region and the metadata are not. Count syscalls.
   made Open O(model) in RESIDENT bytes where it need only be O(model) in bytes
   READ. `TestOpenHonoursAPageBudget` asserts 1 <= frames < blocks on the
   budgeted arm before comparing anything.
+
+## Measurements once cited in engine/model's comments
+
+The source comments state the reason; the measurements they used to carry,
+with the machine that produced them, are here verbatim.
+
+- `State.offerRange` (`engine/model/forward.go`), a block another session
+  placed: "Reading it again cost every new session the whole model from disk
+  -- 122 ms of a 166 ms time to first token for Llama-3.2-1B on an RTX 3050
+  Ti."
+- `WithPageBudget` (`engine/model/model.go`): "It has to be known at Open, not
+  after it: when Open read every page before SetPageBudget narrowed the pool,
+  a 53 GiB container on a 31 GiB box allocated 53 GiB first and was killed,
+  having produced nothing in 27 minutes, while llama.cpp served the same
+  model at 4.77 tok/s." The fix is "Closed: Open read every page before any
+  budget existed" above.

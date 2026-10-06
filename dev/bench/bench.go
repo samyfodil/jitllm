@@ -59,7 +59,7 @@ func (r Result) String() string {
 //     change.
 //   - Order alternates every round, so any residual ordering bias cancels.
 //   - Median of per-round ratios, not the ratio of medians, which rewards a
-//     change that happened to run while the box was cold.
+//     change that happened to run while the machine was cold.
 func AB(a, b Case, rounds, iters int) Result {
 	if rounds < 2 {
 		rounds = 2
@@ -119,7 +119,7 @@ func check(c Case, fastest time.Duration, iters int) {
 	if implied <= MemWall(threads)*guardFactor {
 		return
 	}
-	// The cached wall may have been measured while the box was busy, so
+	// The cached wall may have been measured while the machine was busy, so
 	// re-measure before accusing and keep the higher reading.
 	if implied <= remeasure(threads)*guardFactor {
 		return
@@ -215,9 +215,9 @@ func remeasure(threads int) float64 {
 
 var sink float64
 
-// Guard refuses to measure on a box that is busy or hot, and returns why.
+// Guard refuses to measure on a machine that is busy or hot, and returns why.
 //
-// The thermal limit is 90 C: laptop package zones read 99-101 C in
+// The thermal limit is 90 C: a mobile CPU's package zones read 99-101 C in
 // ordinary use, and a gate that never opens gets bypassed.
 //
 // The busy check is PSI (/proc/pressure/cpu some avg10), not the load average,

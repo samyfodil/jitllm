@@ -5375,3 +5375,33 @@ every set built for 1024 rows, every end-to-end bound held. Against the
 set built for the grid, HunyuanOCR places no tower block on any of the three
 (`cuMemAlloc`/`vkAllocateMemory` out of memory, and on the Iris "7150082744 of
 3124649984 used").
+
+## Measurements once cited in jit/gpu/tier's comments
+
+The tier's comments state the engineering reason and the class of card; the
+measurements they used to carry, with the machine that produced them, are
+here verbatim.
+
+- `groupTokMax` (`jit/gpu/tier/rows.go`): "Llama-3.1-8B Q4_K_M on a V100,
+  tok/s together, groupMV against the tiled twin: 2 sessions 203 / 146, 4
+  307 / 270, 8 363 / 488."
+- `dropSession` (`jit/gpu/tier/layer.go`), on why the scratch's bound is not
+  reset: "(measured: pp512 on a V100 17.4k tok/s on the first prompt of a
+  process and 13.7-14.0k on every one after)". The bisection is "The prompt
+  lost 22% on the V100, and none of it was a kernel" above.
+- `promptBuf` (`engine/model/prefill.go`): "A request is a fresh State, and
+  allocating these per request cost a V100 prompt of 512 rows 6.6 ms of its
+  33.9 (a fresh 4 MiB heap span faults in page by page): the device ran at
+  19.5k tok/s and the prompt measured 15.1k."
+- The comments that now name a class of card were measured on these: the
+  Volta-class figures (Llama-3.2-1B's 12 MB of batched-twin scratch in
+  `prepLayer`, the 0.9 ms `prepBatch` walk, the `ragMV` Tok/Rowt sweep,
+  `voltaMV`'s ~2.3x over the dp4a twin and its ~1280-warp split, the
+  `voltaTiles` 2x2 grid, `kb0Split`'s 80 SMs, `volta70AccMT`'s halved
+  accumulate, `PagedPrefill70`'s selection check, `keepsSlot`'s
+  `TestPrefillStreamsHostBlocks` case) on a V100; the integrated-GPU figures
+  (`restride`'s 65535-group dispatch limit, `visrows.go`'s 2.3 GB budget,
+  `subbudget.go`'s 0.93 s SigLIP block under i915) on an Iris Xe; the Apple
+  Silicon figures (`flashTileAttn`'s 32-row blocking, `tileGemms`' 64x64 lead)
+  on an M4; and the k-split's 30720 resident slots (`tier.go`, 20 SMs x 1536)
+  are an RTX 3050 Ti's.

@@ -144,8 +144,8 @@ const postNormText = "The history of the city begins with a small fishing villag
 //     own CUDA build against its CPU build, and jitllm's host against
 //     llama.cpp's CPU. jitllm's device against its host may not exceed the
 //     larger by half. llama.cpp's cross-backend figure alone moves with its
-//     build (OLMo 2: 1.157 from the laptop's sm_86 build, 0.693 from the V100
-//     box's sm_70 one) while jitllm's Vulkan arm reads 1.106 on both, as far
+//     build (OLMo 2: 1.157 from an sm_86 build, 0.693 from an sm_70
+//     one) while jitllm's Vulkan arm reads 1.106 on both, as far
 //     from the host as the host is from llama.cpp (0.977).
 //   - jitllm's host against itself with only the KV cache's width changed
 //     (f16 V against f32): a perturbation with no device in it at all.

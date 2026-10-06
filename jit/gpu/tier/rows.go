@@ -452,8 +452,8 @@ func (g *devTier) ragMV(m mv, ntok int) (mv, bool) {
 	if bm, ok := g.voltaMV(m, ntok); ok {
 		return bm, true
 	}
-	// Tok 8; Rowt 2 below 64 rows and 4 from there, swept on a V100 (Tok 4
-	// and 16 lost at every width).
+	// Tok 8; Rowt 2 below 64 rows and 4 from there, swept on a Volta-class card
+	// (Tok 4 and 16 lost at every width).
 	tok, rowt := min(ntok, 8), 2
 	if ntok >= 64 {
 		rowt = 4
@@ -531,8 +531,9 @@ func (g *devTier) ragStepMV(m mv, R, n int) (mv, bool) {
 
 // groupTokMax is the widest step groupMV takes: one thread carries every
 // token, so its dot products grow with the step and past four sequences the
-// tiled twins win. Llama-3.1-8B Q4_K_M on a V100, tok/s together, groupMV
-// against the tiled twin: 2 sessions 203 / 146, 4 307 / 270, 8 363 / 488.
+// tiled twins win: on an 8B Q4_K_M model groupMV leads at two and four
+// sessions and loses at eight (gpu-kernels.md, "Measurements once cited in
+// jit/gpu/tier's comments").
 const groupTokMax = 4
 
 // groupMV is m's decode matvec carrying every token of a small step in one
@@ -749,7 +750,8 @@ func (g *devTier) dot4Split(m mv, ntok, tok, rowt, split int) (mv, bool) {
 // and the ActF16 conversion it reads, or false where it does not apply: a card
 // with an integer matrix instruction takes that instead (batchMV asks first),
 // and a backend that does not lower the m8n8k4 shape refuses the compile, which
-// is remembered. On a V100 it is ~2.3x the dp4a twin (MT=2 NT=4, swept).
+// is remembered. On a Volta-class card it is ~2.3x the dp4a twin (MT=2 NT=4,
+// swept).
 func (g *devTier) voltaMV(m mv, ntok int) (mv, bool) {
 	if g.NoVolta || !(g.mmaOff || g.NoMMA) || m.slots > 0 || !kernels.Volta70OK(m.q) {
 		return mv{}, false
@@ -767,8 +769,8 @@ func (g *devTier) voltaMV(m mv, ntok int) (mv, bool) {
 	if ntok%(8*nt) != 0 || m.rows%(32*mt) != 0 {
 		return mv{}, false
 	}
-	// Split k until the grid holds ~1280 warps (sixteen an SM on a V100): the
-	// tile alone left the narrow projections 64-256 of them.
+	// Split k until the grid holds ~1280 warps (sixteen an SM on an 80-SM
+	// card): the tile alone left the narrow projections 64-256 of them.
 	warps := (m.rows / (32 * mt)) * (ntok / (8 * nt))
 	split := g.kb.batch.Split
 	if split < 1 {
@@ -837,7 +839,7 @@ func (g *devTier) voltaMV(m mv, ntok int) (mv, bool) {
 // count the wider blocks do not divide.
 //
 // 64x64 leads 64x32 (llama.cpp's kernel_mul_mm block): a few percent faster on
-// the M4 by TestGemmTileSpeed and in pp512.
+// Apple Silicon by TestGemmTileSpeed and in pp512.
 var tileGemms = []kernels.TileGemm{
 	{MT: 4, NT: 4, WM: 2, WN: 2}, {MT: 4, NT: 2, WM: 2, WN: 2}, {MT: 2, NT: 2, WM: 2, WN: 2}, {MT: 1, NT: 2, WM: 2, WN: 2},
 }
@@ -903,8 +905,8 @@ func (g *devTier) tileMV(m mv, ntok int) (mv, bool) {
 // voltaTiles are GemmVolta's blockings, widest first. All are four warps
 // (runBatched launches 128-thread workgroups), all four along the tokens: a
 // 2x2 warp grid dequantizes twice the weights per MMA and measured slower on a
-// V100. The 96-row tiles serve matrices no 128-row block divides (gpt-oss's
-// 2880 rows).
+// Volta-class card. The 96-row tiles serve matrices no 128-row block divides
+// (gpt-oss's 2880 rows).
 var voltaTiles = []kernels.VoltaTile{
 	{MT: 4, NT: 4, WM: 1, WN: 4}, {MT: 4, NT: 2, WM: 1, WN: 4}, {MT: 4, NT: 1, WM: 1, WN: 4},
 	{MT: 3, NT: 4, WM: 1, WN: 4}, {MT: 3, NT: 2, WM: 1, WN: 4},
@@ -988,8 +990,8 @@ func (g *devTier) voltaGemm(m mv, ntok int) (mv, bool) {
 }
 
 // kb0Split is GemmVolta's k-split for a grid of groups workgroups over trips
-// k-trips: doubled while under 64 workgroups (a V100 has 80 SMs and holds two
-// of these each) and while the halves still divide the trips.
+// k-trips: doubled while under 64 workgroups (an 80-SM Volta card holds two
+// of these an SM) and while the halves still divide the trips.
 func kb0Split(trips, groups int) int {
 	split := 1
 	for groups*split < 64 && trips%(2*split) == 0 && split < 8 {

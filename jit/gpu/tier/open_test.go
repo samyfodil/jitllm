@@ -348,7 +348,7 @@ func TestUnifiedBudgetIsCarvedFromTheHostBudget(t *testing.T) {
 // ceiling on the device, not a charge on the host. The host loses what the
 // device holds -- nothing while it holds no block, each block's bytes as it is
 // placed, and they come back as it is released. Charging the ceiling took a
-// quarter of the host budget (1.62 GiB on the laptop) from the pager for an
+// quarter of the host budget (1.62 GiB, measured) from the pager for an
 // iGPU a bare `-devices gpu` opened and placed nothing on; against that
 // HostReserved this fails at zero blocks, reading the pool's limit.
 func TestHostLosesOnlyWhatAUnifiedDeviceHolds(t *testing.T) {

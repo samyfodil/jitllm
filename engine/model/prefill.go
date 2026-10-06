@@ -974,9 +974,9 @@ func (s *State) growDeviceBatch(chunk int) {
 
 // promptBuf is a State's prompt buffers -- a chunk's residual rows and its
 // rotary tables -- kept by the model when the State closes. A request is a
-// fresh State, and allocating these per request cost a V100 prompt of 512
-// rows 6.6 ms of its 33.9 (a fresh 4 MiB heap span faults in page by page):
-// the device ran at 19.5k tok/s and the prompt measured 15.1k.
+// fresh State, and allocating these per request cost a 512-row prompt about
+// a fifth of its time (a fresh 4 MiB heap span faults in page by page;
+// gpu-kernels.md, "The prompt lost 22%").
 //
 // One spare serves serial requests; concurrent States on one model would
 // need a free list.

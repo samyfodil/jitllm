@@ -9,10 +9,10 @@ import (
 // too long without saying so. i915 force-signals a fence still pending after
 // CONFIG_DRM_I915_FENCE_TIMEOUT (10 s on Ubuntu's kernels): the queue reports
 // idle, the read-back returns, and whatever the cut-off blocks would have
-// written is missing. On an Iris Xe a SigLIP block over a 1035-patch picture
-// takes 0.93 s, so MiniCPM-V's 27 tower blocks as one submission read back a
-// residual with NMSE 1.4 against the host, and degraded block by block from
-// the 21st on. Windows' TDR resets a device at 2 s.
+// written is missing. On an integrated Intel GPU a SigLIP block over a
+// 1035-patch picture takes 0.93 s, so MiniCPM-V's 27 tower blocks as one
+// submission read back a residual with NMSE 1.4 against the host, and degraded
+// block by block from the 21st on. Windows' TDR resets a device at 2 s.
 //
 // So submit cuts a range by the time it measured: each submission takes as
 // many blocks as defaultSubmitBudget holds at the per-block cost last seen for

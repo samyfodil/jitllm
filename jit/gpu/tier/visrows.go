@@ -17,8 +17,8 @@ import (
 // dynamic-resolution tower puts far past any picture a session encodes --
 // 65536 patches on HunyuanOCR. The set used to be built for that at
 // placement: 5,669,846,908 bytes of scratch on HunyuanOCR, allocated before
-// the budget (2.3 GB on the Iris Xe, host RAM there) was asked, and every call
-// ran all 65536 rows for a picture of a thousand.
+// the budget (2.3 GB on an integrated GPU, host RAM there) was asked, and every
+// call ran all 65536 rows for a picture of a thousand.
 //
 // Placement builds the set for visStart rows, or the tower's MaxSeq when that
 // is smaller (a fixed-grid tower's picture). ReserveRows -- before a

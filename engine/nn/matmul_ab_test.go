@@ -16,7 +16,7 @@ import (
 //
 // Both sides do the same arithmetic for the same tokens, so this is the honest
 // prefill ratio rather than a kernel microbenchmark. Paired and interleaved,
-// because the box drifts.
+// because the machine drifts.
 func TestABMatMulVsMatVec(t *testing.T) {
 	if testing.Short() {
 		t.Skip("allocates")

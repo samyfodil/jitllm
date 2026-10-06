@@ -58,8 +58,8 @@ type Device struct {
 	// distinct rather than being guessed at.
 	PhysicalId string `protobuf:"bytes,14,opt,name=physical_id,json=physicalId,proto3" json:"physical_id,omitempty"`
 	// Set to the `ref.id` of another device in this list when the two entries
-	// are ONE piece of hardware reached through two backends -- on this box
-	// `vulkan:0` and `cuda:0` are one RTX 3050 Ti. The entry is still listed,
+	// are ONE piece of hardware reached through two backends -- an NVIDIA
+	// card's `vulkan:0` and `cuda:0`, say. The entry is still listed,
 	// because hiding hardware is its own bug, but its `total_memory` is NOT part
 	// of `spendable_total` and the default device set takes only one of the two
 	// (CUDA over Vulkan for an NVIDIA card, Metal over Vulkan for an Apple one).

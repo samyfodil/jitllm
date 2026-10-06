@@ -524,6 +524,11 @@ Every arm IQR/median <= 0.016. At 12 GiB tokens still page, so fewer of them
 spin and the decode gain is smaller. `model.TestThePoolParksOnlyWhileTokensPage`
 holds the rule: park after a faulting token, spin after a quiet one.
 
+`State.forward`'s comment carried the size rule's cost on one run: "Deciding
+by the model's size against the budget parked Qwen3-30B in a 16 GiB cgroup
+for a run that read nothing after warm-up: 7.8 tok/s against 20.4 spinning,
+on a Xeon."
+
 The size rule's own row, kept because it is what the first version rested on.
 Alternated 250us/park, three rounds, on a box at 7-16% busy:
 

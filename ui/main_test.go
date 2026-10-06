@@ -36,7 +36,7 @@ func TestEveryTabHasAScreen(t *testing.T) {
 //   - ModelDirs is a temp dir, so the Models screen's scan walks an empty
 //     directory instead of the real model volume.
 //   - Loaded is true, so Devices' probe refuses (the shipped behaviour): a
-//     unit test must not open and close every backend on the box.
+//     unit test must not open and close every backend on the machine.
 func TestEveryRegisteredScreenBuilds(t *testing.T) {
 	cfg := app.DefaultConfig()
 	cfg.ModelDirs = []string{t.TempDir()}

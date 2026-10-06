@@ -340,8 +340,9 @@ func (g *devTier) roomOrReclaim(n uint64) bool {
 // streams the minSlots its streamed blocks swap through. It is asked whether or
 // not n fits right now: room() counts the pages in as space, so state charged
 // into it while a streamed block was paged in left the next page-in nothing --
-// TestPrefillStreamsHostBlocks on a V100, where a prompt's sixteen streamed
-// histories took the one slot and nothing ever paged in. Callers hold g.mu.
+// TestPrefillStreamsHostBlocks on a discrete card, where a prompt's sixteen
+// streamed histories took the one slot and nothing ever paged in. Callers hold
+// g.mu.
 func (g *devTier) keepsSlot(n uint64) bool {
 	return len(g.stream) == 0 || g.widest == 0 || g.slotsIfPerm(n+g.reserved()) >= minSlots
 }

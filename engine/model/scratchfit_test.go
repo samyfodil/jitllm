@@ -55,10 +55,10 @@ func openBallast(t *testing.T, spec string) *ballast {
 // gives no more.
 //
 // The free figure is the driver's, and on a card the desktop shares it is
-// more than the driver will hand out: the RTX 3050 Ti here reported 130 MiB
-// free and refused 60 MiB of it. A refused piece is halved, down to a
-// MiB; a card that refuses even that is as full as a card gets, which is
-// fuller than the gate asks for.
+// more than the driver will hand out: a 4 GB card driving a display reported
+// 130 MiB free and refused 60 MiB of it. A refused piece is halved, down to a
+// MiB; a card that refuses even that is as full as a card gets, which is fuller
+// than the gate asks for.
 func (b *ballast) fill(t *testing.T, free uint64) {
 	t.Helper()
 	piece := uint64(256 << 20)
