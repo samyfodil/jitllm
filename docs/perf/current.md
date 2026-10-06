@@ -665,6 +665,109 @@ at 1.02.
   lowers the rate. The integer fold in the fused decode matvec (2da5898) did
   not move it.
 
+## Kimi-K3 2.78T from disk on the V100 box
+
+The full release, `jitllm convert -q8 hf://moonshotai/Kimi-K3` (f831ab6),
+streamed off the Hub into one container and run from the RAID. There is no
+ratio: no other engine ran the model in this pass, so there is no same-pass
+baseline (RULE 1), and every number below is jitllm's alone.
+
+- **Host:** the 8x V100 server: 2x Xeon E5-2680 v4 (2 NUMA nodes, 56
+  threads), 503 GB RAM, 8x Tesla V100-SXM2-16GB (sm_70, CUDA/PTX),
+  `/mnt/models` a RAID0 of two NVMe (md0). Nothing else on the box (idle
+  `nvidia-smi`, load under 1 before the first run).
+- **Container:** `Kimi-K3-q8.jlm`, 1,564,653,101,056 B, written by 24c4857:
+  attention, shared experts, the dense lead and the head Q8_0, routed experts
+  the release's MXFP4 moved exactly. 1404.92 GiB of weights: 93 block pages
+  of 1185.79 MiB and 82,432 expert pages of 16.73 MiB (896 experts in each of
+  92 mixture blocks, 16 routed a token).
+- **Run:** `jitllm run` at 7ec9eff, greedy, `-n 32`, a 5-token completion
+  prompt (the container carries no chat template), the default host budget
+  (392.2-393.1 GiB from MemAvailable: 1012 GiB over it), no taskset or numactl.
+  Peak RSS from `/usr/bin/time -v`; VRAM from `nvidia-smi -l 5`.
+
+| run | prompt (5 tok) | decode, 32 tok | s/token | read: prefill / decode | pages read, evictions | peak RSS | where the blocks sat |
+|---|---|---|---|---|---|---|---|
+| `-devices cpu`, first run | 5m55.29s | 8m34.25s | 16.07 | 31.88 GB/prompt tok / 6.01 GB/tok | 93 blocks + 16,653 experts (327.57 GiB), 0 | 330.7 GiB | 93 on the host |
+| `-devices cpu`, again | 59.38s | 2m47.51s | **5.23** | 31.88 / 6.01 | the same, byte for byte | 330.7 GiB | 93 on the host |
+| `-devices cpu`, "12 * 7 =" | 56.19s | 1m53.16s | 3.54 | 30.05 / 5.50 | 93 + 15,194 (303.73 GiB), 0 | 306.8 GiB | 93 on the host |
+| `-devices cpu`, "def fibonacci(n):" | 56.79s | 3m7.14s | 5.85 | 30.53 / 6.58 | 93 + 17,306 (338.24 GiB), 0 | 341.3 GiB | 93 on the host |
+| `-devices cuda` | 51.67s | 3m47.33s | 7.10 | 19.95 / 6.54 | 93 + 17,617 (343.33 GiB, 55.43 at load), 0 | 346.8 GiB | block 0 and the head on cuda:7 (6.93 GiB), 92 on the host |
+| `-devices cuda`, `JITLLM_GPU_STREAM=1` | 1m42.18s | 9m12.54s | 17.27 | 19.96 / 6.94 | 18,445 frames (355.35 GiB, 55.43 at load), 0 | 383.4 GiB | 93/93 and the head on six cards: 23, 16, 16, 16, 15, 7 |
+
+The time columns are the run's own `prompt` and `decode` line; the read
+columns are the `pages` line's per-phase bytes.
+
+**What it said.** Every answer is coherent and right:
+
+    The capital of France is Paris. The Eiffel Tower is located in Paris. The
+    Louvre Museum is also in Paris. The Seine River flows through Paris. Paris
+    is known for its
+
+    12 * 7 = 84
+    - 84 + 12 = 96
+    - 96 + 12 = 108
+    - 108 + 12 = 120
+
+    def fibonacci(n):
+        if n <= 1:
+            return n
+        else:
+            return fibonacci(n-1) + fibonacci(n-2)
+
+The two host runs of the France prompt produced the same 32 ids. The device
+runs part from the host after "Paris": `-devices cuda` at the second generated
+token (`.",` and a list of quoted sentences), the streamed run at the fourth
+("The city has a population of over 2 million people. It is known for its art,
+culture, and cuisine. The Eiffel Tower is one"). Both are coherent; RULE 11c's
+band, not a measured bug -- the split tuner was not pinned and the head ran as
+sm_70 f16 tensor-core matvecs, and no equality was asked of these runs.
+Correctness rests on the 0.40B gates (`TestKimiK3RealMatchesReference`: 5.8e-13
+against Moonshot's own code on the trained Kimi-K3-0.40B, host, CUDA and
+Vulkan, model-correctness.md "kimi-k3") plus these answers.
+
+**What the numbers are, and are not.**
+
+- **No run evicted.** 32 tokens touched at most 355 GiB of the 393 GiB budget,
+  so every row is the fill phase: each page touched was read once and kept.
+  Decode still read 5.5-6.9 GB a token (16 routed experts x 92 blocks is 24.1
+  GiB a token, so about three quarters were already resident from the prompt
+  and earlier tokens). The steady state, where the budget is full and the
+  expert LRU evicts, needs a longer generation and is not measured here.
+- **The first host run is 3.8x the second with the same ids and the same
+  bytes read.** It ran with ~418 GiB of page cache left by the conversion's
+  writes; its system time was 6969 s against 813 s, and the expert reads
+  "blocked" 11m59s against 2m0s. Fresh frames came out of reclaim. The second
+  run is the one to read.
+- **No disk ceiling was measured in the same pass**, so no fraction of a wall is
+  claimed. The host decode read 6.01 GB in 5.23 s a token, 1.15 GB/s of wall,
+  and `iostat` during the first run showed md0 at ~0.65 GB/s and 31%
+  utilised: the reads are latency-bound, not bandwidth-bound.
+- **`-devices cuda` places one block.** A K3 mixture block resident with its
+  896-expert bank needs 16.41 GB, above a V100's 14.46 GiB budget, so each of
+  the 92 is declined ("placed resident and does not fit") and only the dense
+  lead and the head reach a card. Its decode is a host decode run in a
+  different machine state (after the first host run, with the placement's
+  buffered reads refilling the page cache), not a device number. Placement
+  took about 20 minutes (25m06s wall against 4m39s of prompt and decode):
+  every block is offered to each of the eight cards twice and refused after
+  its weights are read -- the process read ~510 GB through a buffered handle
+  before printing the device line. Per-card VRAM: cuda:7 peaked at 11,286 MiB
+  (6.93 GiB resident plus scratch), the other seven at 342-346 MiB idle and
+  up to 4,174 MiB while a block was being tried.
+- **`JITLLM_GPU_STREAM=1` places every block** (placement.md "Qwen3-Next-80B
+  on the card"): a mixture block goes on the card without its routed bank and the
+  submission uploads the 16 routed experts' sheets each step. 93/93 blocks and
+  the head, 79.78 GiB resident over six cards (cuda:0 23, cuda:7 16, cuda:1 16,
+  cuda:3 16, cuda:6 15, cuda:4 7; cuda:2 and cuda:5 none), five device changes
+  a token, placed in 11.45 s of upload. Peak VRAM: cuda:0 15,936 MiB, cuda:6
+  15,300, cuda:1 15,036, cuda:3 15,036, cuda:7 15,032, cuda:4 10,292, cuda:2
+  and cuda:5 342. Its decode is slower than the host's because it is the
+  upload: 641.54 s of the 649.60 s of block compute is `stream cost: upload`,
+  3404 fills (92 mixture blocks x 37 steps) at 188 ms each, none overlapped
+  with a read. If a fill moves the 16 routed expert pages (268 MiB) that is
+  ~1.4 GiB/s over PCIe, far under the link.
+
 ## ★ THE V100 BOARD (sweep5, one pass, main at c07936d + fixes)
 
 Host: the 8x V100 server, 2x Xeon E5-2680 v4, 8x Tesla V100-SXM2-16GB (sm_70), CUDA.
