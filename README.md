@@ -60,6 +60,19 @@ Models run from `.jlm` containers, converted once from GGUF or Hugging Face
 weights. See the [CLI and conversion guide](docs/cli.md) for other inputs and flags,
 and the [server reference](docs/server.md) for endpoints and daemon commands.
 
+### Docker
+
+```sh
+docker build -t jitllm .
+docker volume create jitllm-models
+docker run --rm -v jitllm-models:/models --entrypoint jitllm jitllm convert smollm2-360m-instruct
+docker run -d -p 8080:8080 -v jitllm-models:/models jitllm -load SmolLM2-360M-Instruct-Q8_0.jlm -id smollm2
+```
+
+Add `--gpus all` (with the NVIDIA Container Toolkit) to run on an NVIDIA GPU. The image is
+built for linux/amd64 and linux/arm64; release images are published as
+`ghcr.io/samyfodil/jitllm`. See [docs/docker.md](docs/docker.md).
+
 ## Supported models
 
 `convert` reads 65 GGUF architecture names (57 graphs), 30 Hugging Face safetensors
