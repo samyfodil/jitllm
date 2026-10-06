@@ -22,6 +22,9 @@ type modelOpts struct {
 	// profile arms the per-op nanosecond counters OpProfile reports. The
 	// counters stay process-wide; only the gate is per model.
 	profile bool
+	// noShOverlap runs a mixture's shared expert after its routed read
+	// rather than behind it; see WithSharedOverlap.
+	noShOverlap bool
 
 	// chatClock is the clock a chat template's strftime_now reads; nil is the
 	// wall clock.
@@ -87,6 +90,13 @@ func defaultOpts() modelOpts {
 		attnPair:       attnPairShipped,
 	}
 }
+
+// WithSharedOverlap sets whether a latent mixture's shared experts run while
+// its routed experts are read from the container, instead of after. On by
+// default: the two read nothing in common and the shared contribution is
+// added where it always was, so the answer is the same float sum
+// (TestSharedOverlapIsTheSameSum); off is the other arm.
+func WithSharedOverlap(on bool) Option { return func(l *loadOpts) { l.opt.noShOverlap = !on } }
 
 // WithProfile arms the per-op nanosecond counters OpProfile reports.
 func WithProfile(on bool) Option { return func(l *loadOpts) { l.opt.profile = on } }

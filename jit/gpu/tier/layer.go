@@ -552,6 +552,7 @@ func (g *devTier) cacheSlotsFor(p *nn.LayerPlan, ws []nn.Weight, want, slots, ba
 		g.StreamCacheShort++
 		return slots
 	}
+	g.StreamCacheSize = max(g.StreamCacheSize, n)
 	return n
 }
 

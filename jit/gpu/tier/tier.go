@@ -691,6 +691,9 @@ type Stats struct {
 	// and missing from a block's expert cache; StreamCacheShort counts blocks
 	// given the plain bank for want of room.
 	StreamCacheHits, StreamCacheMisses, StreamCacheShort int
+	// StreamCacheSize is the largest expert cache a block was given, in
+	// sheets: the check that an auto-sized cache is the size intended.
+	StreamCacheSize int
 	// StreamPrefetched counts experts the cross-layer prefetch read, and
 	// TStreamPrefetchWait the wall a fill spent joining it.
 	StreamPrefetched    int
@@ -982,6 +985,7 @@ func (s *Stats) add(o Stats) {
 	s.StreamCacheHits += o.StreamCacheHits
 	s.StreamCacheMisses += o.StreamCacheMisses
 	s.StreamCacheShort += o.StreamCacheShort
+	s.StreamCacheSize = max(s.StreamCacheSize, o.StreamCacheSize)
 	s.StreamPrefetched += o.StreamPrefetched
 	s.TStreamPrefetchWait += o.TStreamPrefetchWait
 	s.ProbeHits += o.ProbeHits

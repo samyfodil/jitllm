@@ -77,7 +77,25 @@ func (s *State) moe(li int, l *layer, rin, h, out []float32) error {
 	sel := s.route.Sel
 	// The selected experts are read here, the first moment anyone knows which.
 	// pageIn deliberately skipped the banks, since a token touches only a few.
-	err := s.m.ensureExperts(li, sel, &s.expHold)
+	var err error
+	if sh := s.shOverlap; sh != nil {
+		// The shared expert reads none of the routed pages, so it runs while
+		// they are read; its contribution is added where it always was, by
+		// the caller, so the sum is the same float sum (placement.md 16c-2).
+		s.shOverlap = nil
+		s.expWG.Add(1)
+		go s.readExperts(li, sel)
+		w, serr := s.sharedExpertOut(sh, s.shOverlapH)
+		s.expWG.Wait()
+		err = s.expErr
+		if err == nil {
+			err = serr
+		}
+		s.shW, s.shReady = w, serr == nil
+		s.ShOverlaps++
+	} else {
+		err = s.m.ensureExperts(li, sel, &s.expHold)
+	}
 	defer s.expHold.release()
 	if err != nil {
 		return err
@@ -406,33 +424,57 @@ func (s *State) sharedExpert(l *layer, h, out []float32) error {
 	if l.shGate.rows == 0 && l.shUp.rows == 0 {
 		return nil
 	}
+	w, err := s.sharedExpertOut(l, h)
+	if err != nil {
+		return err
+	}
+	s.axpy(out, s.shOut, w)
+	s.jit.NewInput()
+	return nil
+}
+
+// readExperts is ensureExperts on its own goroutine, its error left in
+// s.expErr: the routed read moe runs behind the shared expert. A method, so
+// issuing it allocates nothing.
+func (s *State) readExperts(li int, sel []int32) {
+	defer s.expWG.Done()
+	s.expErr = s.m.ensureExperts(li, sel, &s.expHold)
+}
+
+// sharedExpertOut computes the shared expert's output into s.shOut and
+// returns the weight it is added at, adding nothing: sharedExpert adds it,
+// and moe's overlap leaves the add to its caller.
+func (s *State) sharedExpertOut(l *layer, h []float32) (float32, error) {
+	if l.shGate.rows == 0 && l.shUp.rows == 0 {
+		return 0, nil
+	}
 	// The gate logit is a 1 x NEmbd F32 matvec written straight into s.sg[0].
 	// MatVecHost, not MatVec: this only runs for a block the host is running,
 	// so offering one row to the device would be a pointless round trip.
 	if l.shRouter != nil {
 		if !s.jit.MatVecHost(s.sg[:1], quant.F32, f32Bytes(l.shRouter), h, 1, len(l.shRouter)) {
-			return fmt.Errorf("model: no kernel for the shared expert's gate (F32, 1 x %d)",
+			return 0, fmt.Errorf("model: no kernel for the shared expert's gate (F32, 1 x %d)",
 				len(l.shRouter))
 		}
 	}
 	if l.shGate.rows == 0 {
 		// Ungated (Nemotron 3): down(act(up(h))).
 		if err := s.mv(s.shGate, l.shUp, h); err != nil {
-			return err
+			return 0, err
 		}
 		s.actAll(s.shGate, s.c.Act)
 	} else {
 		if err := s.mv(s.shGate, l.shGate, h); err != nil {
-			return err
+			return 0, err
 		}
 		if err := s.mv(s.shUp, l.shUp, h); err != nil {
-			return err
+			return 0, err
 		}
 		s.actmulAll(s.shGate, s.shUp, s.c.Act)
 	}
 	s.jit.NewInput()
 	if err := s.mv(s.shOut, l.shDown, s.shGate); err != nil {
-		return err
+		return 0, err
 	}
 	// The gate is one logit, and the generated sigmoid takes it as a
 	// one-element vector: sg[0] = sigma(logit) * sg[1], with sg[1] = 1.
@@ -448,9 +490,8 @@ func (s *State) sharedExpert(l *layer, h, out []float32) error {
 	// Granite's residual scale, which the mixture cannot take at an add of
 	// its own: it adds straight into the residual. See addInto.
 	w *= float32(s.c.ResidualScale)
-	s.axpy(out, s.shOut, w)
 	s.jit.NewInput()
-	return nil
+	return w, nil
 }
 
 // moeBatch runs the mixture-of-experts FFN for a whole chunk of rows, visiting

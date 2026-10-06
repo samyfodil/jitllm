@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -170,6 +171,17 @@ type State struct {
 	// The shared expert's scratch. Its width is NFFNShExp, a different key
 	// from the routed experts'.
 	shGate, shUp, shOut []float32
+	// The shared expert run behind the routed read (moe): the block and row
+	// it is for, the read's join and error, and its weight once computed.
+	shOverlap  *layer
+	shOverlapH []float32
+	expWG      sync.WaitGroup
+	expErr     error
+	shW        float32
+	shReady    bool
+	// ShOverlaps counts mixture layers whose shared expert ran behind the
+	// routed read: the selection check for WithSharedOverlap.
+	ShOverlaps int
 	// sg is the shared expert's one-logit gate and a constant 1, the operands
 	// of a one-element generated sigmoid (see sharedExpert).
 	sg [2]float32

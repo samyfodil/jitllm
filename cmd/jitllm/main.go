@@ -951,8 +951,8 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 					ds.StreamDirect, ds.StreamPinned, ds.StreamGathered)
 			}
 			if ds.StreamCacheHits+ds.StreamCacheMisses > 0 || ds.StreamCacheShort > 0 {
-				fmt.Fprintf(os.Stderr, "expert cache: %d hit(s), %d miss(es) (%.1f%% hit), %d block(s) without room for one\n",
-					ds.StreamCacheHits, ds.StreamCacheMisses,
+				fmt.Fprintf(os.Stderr, "expert cache: %d sheet(s) a block, %d hit(s), %d miss(es) (%.1f%% hit), %d block(s) without room for one\n",
+					ds.StreamCacheSize, ds.StreamCacheHits, ds.StreamCacheMisses,
 					100*float64(ds.StreamCacheHits)/max(float64(ds.StreamCacheHits+ds.StreamCacheMisses), 1), ds.StreamCacheShort)
 			}
 			if ds.StreamPrefetched > 0 {
@@ -1547,6 +1547,11 @@ func loadOpts(t []tok.Option, budget uint64) []model.Option {
 	// JITLLM_HUGEPAGES=0 leaves the frames on the kernel's default page size.
 	if os.Getenv("JITLLM_HUGEPAGES") == "0" {
 		o = append(o, model.WithHugePages(false))
+	}
+	// JITLLM_SH_OVERLAP=0 runs a mixture's shared experts after its routed
+	// read instead of behind it.
+	if os.Getenv("JITLLM_SH_OVERLAP") == "0" {
+		o = append(o, model.WithSharedOverlap(false))
 	}
 	if n := numaNodes(); n != nil {
 		o = append(o, model.WithInterleave(n))
