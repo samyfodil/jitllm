@@ -1501,7 +1501,7 @@ func (s *State) offerRange(lo, hi int) {
 				// keeps the block home is honoured above, and the device can
 				// be told not to (tier.Config.NoAutoStream).
 				as, ok := ld.(nn.AutoStreamer)
-				if !ok || bank == 0 || !as.AutoStream(li, total, bank, c.NExpert, c.NExpertUsed, hi-lo) {
+				if !ok || bank == 0 || !as.AutoStream(li, total, bank, c.NExpert, c.NExpertUsed, c.NLayer) {
 					s.noteDecline(why)
 					continue
 				}
