@@ -721,7 +721,10 @@ func (g *devTier) sizeAutoCaches() {
 	var sheet uint64
 	k := 0
 	for _, l := range g.layers {
-		if l == nil || l.stream == nil || l.stream.cached() || l.stream.hybrid || l.down == nil {
+		// A block whose experts carry biases keeps its plain bank: see
+		// cacheSlotsFor.
+		if l == nil || l.stream == nil || l.stream.cached() || l.stream.hybrid || l.down == nil ||
+			l.expGateB != nil || l.expUpB != nil || l.expDownB != nil {
 			continue
 		}
 		var s uint64

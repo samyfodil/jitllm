@@ -347,6 +347,15 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 		s.Close()
 		g.Close()
 	}
+	// A budget that holds one mixture block resident but not every one: the
+	// rest are refused for room, and stream instead of going home.
+	{
+		_, rs2, rp2 := run(tier.WithBudget(biggest * 3 / 2))
+		if rs2.StreamBlocks == 0 || rp2 < 2 {
+			t.Fatalf("a card with room for one resident block: %d placed, %d streamed -- the "+
+				"blocks refused for room went to the host", rp2, rs2.StreamBlocks)
+		}
+	}
 	_, ns, _ := run(budget, tier.WithConfig(func(c *tier.Config) { c.NoAutoStream = true }))
 	if ns.StreamBlocks != 0 {
 		t.Fatalf("NoAutoStream streamed %d blocks", ns.StreamBlocks)

@@ -1632,6 +1632,22 @@ func (s *State) offerRange(lo, hi int) {
 		} else {
 			took = adm.PrepLayer(li, &plan, &w)
 		}
+		// A mixture block refused for room on every card goes on streamed,
+		// its base on a card and its experts off it, rather than to the host:
+		// gpt-oss-20b on a 4 GB card held 2 of 24 blocks resident and decoded
+		// at 4.84 tok/s, and with all 24 streamed and their experts on the
+		// host at 9.56 (placement.md 16c-3). The stream trial measures it
+		// against the host like any auto-streamed placement.
+		if !took && c.MoEAt(li) && !(named && place.On == "host") {
+			if as, ok := ld.(nn.AutoStreamer); ok {
+				total, bank := s.m.blockBytes(li)
+				if bank > 0 && as.AutoStream(li, total, bank, c.NExpert, c.NExpertUsed, c.NLayer, s.m.meanBase()) {
+					if took = adm.PrepLayer(li, &plan, &w); took {
+						s.autoStreamed++
+					}
+				}
+			}
+		}
 		if !took {
 			// Refused after seeing the weights. The device's own reason when it
 			// gives one -- a kernel gap reported as the budget sends a caller

@@ -810,7 +810,7 @@ func (s *State) growMoEBatch(n int) {
 // ungated experts): those stay whole on one tier.
 func (s *State) hostExpertsFor(li int) func(sel []uint32, w, in, out []float32) error {
 	c := s.c
-	if !c.MoEAt(li) || c.DenseMoE {
+	if !c.MoEAt(li) || c.DenseMoE || s.m.layers[li].ungatedExp {
 		return nil
 	}
 	return func(sel []uint32, w, in, out []float32) error { return s.hostExperts(li, sel, w, in, out) }
