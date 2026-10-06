@@ -11,22 +11,29 @@
 
 # jitllm
 
-**A Go LLM inference engine that generates kernels for your hardware and pages models through CPU and GPU memory.**
+**An operating system for LLM inference: generate the compute for your hardware,
+page models larger than memory, and move execution without losing the conversation.**
 
-- **Kernels written for your machine, at run time:** every kernel is generated
-  when the model loads, for the exact CPU (AVX2, SSE, NEON) or GPU (CUDA,
-  Vulkan, Metal) in front of it, specialised to the model's shapes and weight
-  formats. Nothing is precompiled, and no operation falls back to interpreted code.
-- **Models larger than memory:** weights page from disk through RAM and VRAM;
-  mixtures of experts read only the experts each token routes to.
-- **Move blocks while serving:** blocks, attention state and recurrent state
-  move between the CPU and GPUs without losing the conversation.
-- **Compatible server:** OpenAI and Anthropic APIs, with streaming and tool calling.
+- **Every kernel JIT-generated at load time** for your CPU (AVX2, SSE, NEON)
+  or GPU (CUDA, Vulkan, Metal), specialised to the model's shapes and weight
+  formats. No precompiled kernels or interpreted compute fallback.
+- **Disk, RAM and VRAM form the memory system.** Weights, routed MoE experts
+  and KV state page as needed. Blocks move between CPU and GPUs at run time,
+  carrying their attention and recurrent state with them.
+- **Runs everywhere, depends on nothing.** One binary per platform (Linux, macOS,
+  Windows; x86 and Arm) that finds CUDA, Vulkan or Metal at run time and
+  otherwise runs on the CPU.
+
+The **full Kimi-K3, 2.78 trillion parameters**, runs on one server: 1.4 TiB of
+weights paged from disk through 503 GB of RAM on a dual Xeon E5-2680 v4, at
+5.2 s a token on the CPU ([numbers](docs/perf/current.md#kimi-k3-278t-from-disk-on-the-v100-box)).
+
+Use the engine through an **OpenAI- or Anthropic-compatible server** with streaming
+and tool calling, an embeddable Go library, desktop and terminal apps, or Docker.
 
 ## Quick start
 
-Build with **Go 1.26 or newer**. GPU backends use the drivers already installed;
-nothing GPU-specific is needed at build time.
+Build with **Go 1.26 or newer**.
 
 ```sh
 git clone https://github.com/samyfodil/jitllm.git
@@ -111,13 +118,9 @@ and their limitations; [scripts/vs-llamacpp.sh](scripts/vs-llamacpp.sh) measures
 <a id="the-five-principles"></a>
 <a id="how-it-works"></a>
 <a id="memory-and-placement"></a>
-Kernels, paging, relocation, generated compute and low allocation are the
-[five principles](docs/runtime.md#the-five-principles). Read
-[how it works](docs/runtime.md#how-it-works) for the runtime and source layout,
-or [memory and placement](docs/placement.md) for budgets and moving blocks.
-
-Try a model and [share your results](https://github.com/samyfodil/jitllm/issues)
-with `jitllm hardware`, the model and quantization, the command and what you saw.
+The [five principles](docs/runtime.md#the-five-principles) govern every execution
+path. See [how it works](docs/runtime.md#how-it-works) for the runtime and source
+layout, or [memory and placement](docs/placement.md) for budgets and relocation.
 
 ## Embed it in Go
 
@@ -167,7 +170,7 @@ func main() {
 ```
 
 See the [Go library guide](docs/embedding-go.md) for budgets, devices, KV caching,
-embeddings and batching. The core module's one dependency is `goffi`.
+embeddings and batching.
 
 ## License
 
