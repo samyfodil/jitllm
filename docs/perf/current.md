@@ -783,6 +783,23 @@ placement.md 16c has the attribution.
 
 Link ceiling measured in the same session: 8.27 GiB/s pinned to one V100.
 
+### Kimi-K3: hybrid experts against the host (k3-streaming, later)
+
+Same box and container, "The capital of France is", runs back to back.
+placement.md 16c-2 has the attribution.
+
+| run, 64 tokens | prompt | decode s/token | tok/s | decode B/token | peak RSS |
+|---|---|---|---|---|---|
+| `-devices cuda`, default (auto-stream, hybrid experts), trial off | 27.1 s | 3.11 | 0.32 | 5.58 GB | 418 GB |
+| `-devices cpu` (shared-expert overlap on) | 60.1 s | 4.44 | 0.23 | 4.98 GB | 416 GB |
+| `-devices cuda`, `JITLLM_GPU_HYBRID=0` (sheets sent, cache, groups tuned) | 36.2 s | 5.66 | 0.18 | 4.92 GB | 418 GB |
+
+Paired, in one process (the stream trial, ABBA runs of 8 tokens, 10 quads, 430
+tokens): hybrid / host **1.873**, IQR/median 0.057, n = 20; A/A from the same
+runs 0.987 with IQR/median 0.134, over the 0.10 gate; one pass. Not a clean
+RULE 2 ratio: the self-control is dispersed and the comparison was not run
+twice.
+
 ## ★ THE V100 BOARD (sweep5, one pass, main at c07936d + fixes)
 
 Host: the 8x V100 server, 2x Xeon E5-2680 v4, 8x Tesla V100-SXM2-16GB (sm_70), CUDA.

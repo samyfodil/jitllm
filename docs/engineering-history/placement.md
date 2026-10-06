@@ -2811,6 +2811,109 @@ so no row is a ratio). "Decode" is the run's own decode line over 32 tokens.
   (auto, cpu, auto, cpu, auto). Faster to first token, level in decode; no
   ratio is claimed (RULE 2 not met).
 
+### 16c-2. Stacking: the host's read, the auto placement, the trial, and hybrid experts.
+
+Same box, container and prompt; one run a row unless said; runs of one table
+taken back to back.
+
+**The host's expert read was not at 2.0 GiB/s.** That figure is the pager's
+per-phase rate, bytes over the SUM of every reader's I/O time, and the reads
+of one layer run concurrently, so it divides by several times the wall. The
+host run's own `experts` line has the wall: 70.6 s blocked over 37 steps
+(prompt included) for 272 GiB, and a layer's few cold pages read at near the
+disk's rate. What was left to take was the overlap: a latent mixture's shared
+experts read nothing the routed read brings in, so they now run while it is in
+flight (`WithSharedOverlap`, one reader goroutine per State so a warm token
+still allocates nothing), with the same float sum (`TestSharedOverlapIsTheSameSum`,
+bit for bit, fails when the shared weight is perturbed by 1e-4). `-devices cpu`,
+32 tokens, alternating off/on: 3.57, 3.32, 3.64, 3.34 s/token.
+
+**Auto-stream's 78/93 had three causes, found one after the other.** (1) The
+cache was sized from the first mixture block offered, a KDA block with two
+thirds of an MLA block's base: 35 sheets. (2) Sizing from tensor bytes at all
+was wrong: a card's real cost per base, its scratch and the head are what they
+come to. (3) Fill-first packed six cards and left two empty. Now a streamed
+block is placed on the plain shared bank, the plan spreads streamed blocks over
+every card (priced on a streamed block, not the dense lead), and after
+placement each card gives its streamed blocks a cache from the room it really
+has left (`GPU.sizeAutoCaches`, at `EndPlacement`), stepping a sheet down where
+an allocation rounds over. The kernels need nothing: an indexed matvec
+addresses a sheet as slot times stride whatever the bank's size, so the cache's
+slot ids index a bigger bank as the compact one's did (the gate's
+"sized after placement" arm runs a 512-sheet cache on kernels built for 10, bit
+for bit). Result: 93/93 on eight cards, 11-12 each, caches up to 42 sheets on
+the 44 blocks whose cards had room past the selection.
+
+**The trial.** `initStreamTrial` arms the seam tuner with {streamed, host}
+whenever a placement auto-streamed a block (`WithStreamTrial`, on): ABBA runs
+with the migration outside the clock, the first tokens after each migration
+skipped (one arm read 0.38 tok/s warm and 0.11 just after moving), and the
+host adopted only past `SeamTuneMargin`. `TestStreamTrialAdoptsOnlyPastTheMargin`
+drives the decision with rates (an 18% faster host adopted, 3.5% not, slower
+not, dispersed not; fails with the margin at 1.00); `TestAutoStreamPlacesWhatCannotFit`
+runs a trial to a decision through real migrations. `SetSeamTuning(false)`,
+which the CLI always calls, used to disarm it.
+
+**The fill's group count is measured** (`streamtune.go`): the pack tuner's
+ABBA duels per device, climbing from the container's figure while a doubling
+wins by 2%. On the box it settled on 2-8 depending on the run.
+
+**★ Hybrid experts pay once stacked.** The host profile (`JITLLM_PROFILE`,
+16 tokens) is 93% matvec, and of what a host token reads from RAM the block
+bases (Q8_0 attention, latent and shared projections, 0.63 GB a block, 58 GB
+a token) are more than twice the routed experts (16 x 17.5 MB a block, 26 GB).
+Hybrid execution keeps the bases, router and shared experts on the cards and
+runs only the routed experts on the host's generated kernels over the host's
+pages (`nn.LayerWeights.HostExperts`, `streamBank.runHost`): the latent input
+(the routed-down projection) and the routing weights come home, the sum goes
+back into the latent accumulator, 7 KB each way a block. It is the streamed
+block's suspension with the transfer replaced, so a block is still one unit
+the device places (RULE 8a); `TestHybridExpertsMatchTheHost` holds it to the
+host at every position of Kimi-K3-0.40B (NMSE 2.3e-7, same argmax), failing at
+1.6e-5 when the routing weights are swapped for one expert's.
+
+| 64 tokens, back to back | prompt | decode s/token |
+|---|---|---|
+| `-devices cuda`, hybrid (auto-stream, trial off) | 27.1 s | **3.11** |
+| `-devices cpu` | 60.1 s | 4.44 |
+| `-devices cuda`, sheets sent, cache, groups tuned | 36.2 s | 5.66 |
+
+**The paired comparison, in one process.** The stream trial is RULE 2's harness
+for this question: the same process alternates the hybrid placement (93 blocks)
+and the host (0) in ABBA runs of 8 tokens, migrating between them outside the
+clock and skipping 2 warm-up tokens after each move. `JITLLM_SEAM_RUNS=8
+ROUNDS=10`, 430 tokens, default auto-stream with hybrid experts: 10 quads, 20
+ratios. Hybrid over host **median 1.873, IQR/median 0.057** (warm quads only:
+1.875, 0.043); the tuner kept hybrid ("0 blocks is not 5% better (0.530)").
+The A/A pairs from the same runs (incumbent against incumbent, challenger
+against challenger, three runs apart) centre at **0.987** (warm 1.000) -- no
+slot bias -- but their IQR/median is **0.134** (warm 0.109), over the 0.10
+gate, and the comparison was taken once. Warm rates: hybrid 0.66-0.93 tok/s,
+host 0.37-0.41 (the host budget evicting at this length). The ratio is a
+one-pass, A/B-gated result whose self-control is dispersed, and is quoted as
+such.
+
+At 64 tokens the host budget starts to evict (peak RSS 418 GB against the
+393 GiB budget), which is why every row is slower than the 32-token ones. The
+prefetch (`STREAM_PREFETCH`) stacked on the streamed path read 5.9 GB/token
+against 4.9 and decoded at the same 5.79 s: neutral now, not the 2x loss it was
+before the reads went parallel; it stays an option. Hybrid is the default for an
+auto-streamed block (`Config.NoHybrid` sends the sheets).
+
+**Finer pages and sub-block placement, priced.** The streamed path already is
+sub-block placement: the base (attention, router, shared) is the card's unit
+and the bank pages through, and the expert cache is a resident subset chosen by
+use; seeding it from the hotness accounting instead of LRU is the open
+variant. Finer expert pages would not cut bytes: a selected expert reads all
+three of gate, up and down, so a 16.73 MiB page split per matrix is three
+requests for the same bytes. Splitting an expert's rows across cards to use
+more links is priced by the link measurement: two cards at once aggregate
+~11 GB/s against 8.9 for one, so at best 1.25x on transfers that hybrid no
+longer makes, for a reduction across cards per block. The dense base pages
+(1185 MiB) are read whole by every token on the host and are resident on the
+cards, so a smaller base page would not cut what a token reads either. No
+converter change is warranted by these numbers.
+
 ## GPU.Layers' head-on-another-device arm is dead code
 
 ★★★ **AND `GPU.Layers`' HEAD-ON-ANOTHER-DEVICE ARM IS DEAD CODE, ESTABLISHED
