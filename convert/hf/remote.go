@@ -186,6 +186,14 @@ func rangeTransport() *http.Transport {
 	t := sharedTransport().(*http.Transport)
 	t.ForceAttemptHTTP2 = false
 	t.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	// Turning HTTP/2 off is not enough: the clone of a transport that has
+	// spoken it carries a TLS config offering "h2", a server that takes it
+	// answers in HTTP/2 frames, and the HTTP/1.1 reader calls them a
+	// malformed response (the second run's config.json, ten times over).
+	if t.TLSClientConfig == nil {
+		t.TLSClientConfig = &tls.Config{}
+	}
+	t.TLSClientConfig.NextProtos = []string{"http/1.1"}
 	t.MaxIdleConnsPerHost = 4 * DefaultConns
 	t.MaxIdleConns = 4 * DefaultConns
 	return t

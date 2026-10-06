@@ -358,8 +358,11 @@ func TestRangesSpreadOverConnections(t *testing.T) {
 	defer srv.Close()
 
 	tr := rangeTransport()
-	tr.TLSClientConfig = srv.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
-	tr.TLSClientConfig.NextProtos = nil
+	// Only the test certificate is added: the transport's own TLS config is
+	// what decides the protocols the server is offered, and a gate that set
+	// them itself passed while the real config offered h2 and every range
+	// came back as HTTP/2 frames read as a malformed response.
+	tr.TLSClientConfig.RootCAs = srv.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
 	old := ranges
 	ranges = &http.Client{Transport: tr}
 	defer func() { ranges = old; tr.CloseIdleConnections() }()
