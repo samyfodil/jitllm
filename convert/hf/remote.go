@@ -3,6 +3,7 @@ package hf
 import (
 	"cmp"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -172,6 +173,35 @@ const rangeFanout = 16
 // when Client.Conns is 0.
 const DefaultConns = 16
 
+// ranges is the client range reads use when Client.HTTP is nil. It speaks
+// HTTP/1.1 only: the Hub's CDN offers HTTP/2, on which net/http multiplexes
+// every request to a host onto ONE TCP connection, so sixteen ranges in
+// flight shared one connection's 60 MB/s -- the first full Kimi-K3 run read
+// 30 MB/s through a single socket. One connection per range is what spreads
+// the stream, and the idle pool keeps them, so a range does not pay a TLS
+// handshake.
+var ranges = &http.Client{Transport: rangeTransport()}
+
+func rangeTransport() *http.Transport {
+	t := sharedTransport().(*http.Transport)
+	t.ForceAttemptHTTP2 = false
+	t.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	t.MaxIdleConnsPerHost = 4 * DefaultConns
+	t.MaxIdleConns = 4 * DefaultConns
+	return t
+}
+
+// rangeClient is a copy of the client ranges are read with, which follows no
+// redirect (see once).
+func (c *Client) rangeClient() http.Client {
+	cl := *ranges
+	if c.HTTP != nil {
+		cl = *c.HTTP
+	}
+	cl.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return cl
+}
+
 // acquire takes one of the client's connection slots; the func it returns
 // gives it back.
 func (c *Client) acquire() func() {
@@ -315,8 +345,7 @@ func (m *Remote) once(p []byte, off int64) (int, error) {
 
 	// Redirects are followed here rather than by net/http, so where the chain
 	// ends can be kept (see Remote.direct).
-	cl := *m.c.client()
-	cl.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	cl := m.c.rangeClient()
 	u, cached := m.target()
 	var resp *http.Response
 	for hop := 0; ; hop++ {

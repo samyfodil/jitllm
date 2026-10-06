@@ -331,6 +331,61 @@ func TestRemoteKeepsTheCDNAddress(t *testing.T) {
 	}
 }
 
+// TestRangesSpreadOverConnections reads a file from a TLS server that offers
+// HTTP/2, as the Hub's CDN does, with ranges in flight at once: they must
+// travel as HTTP/1.1 on several connections. Over HTTP/2 net/http puts every
+// request to one host on one TCP connection, and a stream of sixteen ranges
+// reads at one connection's rate.
+func TestRangesSpreadOverConnections(t *testing.T) {
+	data := randomBytes(1<<20, 9)
+	var (
+		mu    sync.Mutex
+		addrs = map[string]bool{}
+		h2    atomic.Int64
+	)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		addrs[r.RemoteAddr] = true
+		mu.Unlock()
+		if r.ProtoMajor == 2 {
+			h2.Add(1)
+		}
+		time.Sleep(20 * time.Millisecond) // so the ranges overlap
+		http.ServeContent(w, r, "m.safetensors", time.Time{}, bytes.NewReader(data))
+	}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	defer srv.Close()
+
+	tr := rangeTransport()
+	tr.TLSClientConfig = srv.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	tr.TLSClientConfig.NextProtos = nil
+	old := ranges
+	ranges = &http.Client{Transport: tr}
+	defer func() { ranges = old; tr.CloseIdleConnections() }()
+	fastFailures(t, 16<<10)
+
+	c := &Client{Endpoint: srv.URL, Conns: 8}
+	rm := &Remote{c: c, r: Ref{Repo: "o/r", Rev: "abc", File: "m.safetensors"},
+		url: srv.URL + "/m.safetensors", size: int64(len(data))}
+	p := make([]byte, len(data))
+	if err := readWithin(t, rm, p, 0); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(p, data) {
+		t.Fatal("wrong bytes")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if h2.Load() > 0 {
+		t.Errorf("%d ranges went over HTTP/2, which multiplexes them onto one connection", h2.Load())
+	}
+	if len(addrs) < 4 {
+		t.Errorf("64 ranges, 8 at a time, came over %d connection(s)", len(addrs))
+	}
+	t.Logf("64 ranges over %d connections", len(addrs))
+}
+
 func TestRetryAfterIsRead(t *testing.T) {
 	h := func(kv ...string) http.Header {
 		x := http.Header{}

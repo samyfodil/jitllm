@@ -125,6 +125,10 @@ func (s *streamed) size() (n int64) {
 func (s *streamed) report(every time.Duration, stop <-chan struct{}) {
 	total := s.size()
 	t0 := time.Now()
+	// The rate since the last line beside the average: the average starts
+	// with the layout pass, which reads headers for minutes and few bytes.
+	var last int64
+	tLast := t0
 	for {
 		select {
 		case <-stop:
@@ -141,8 +145,10 @@ func (s *streamed) report(every time.Duration, stop <-chan struct{}) {
 		if rate > 0 {
 			eta = (time.Duration(float64(total-got)/rate) * time.Second).Round(time.Minute).String()
 		}
-		fmt.Fprintf(os.Stderr, "stream   %.2f of %.2f GiB (%.1f%%), %.1f MB/s, ~%s left\n",
+		now := time.Now()
+		fmt.Fprintf(os.Stderr, "stream   %.2f of %.2f GiB (%.1f%%), %.1f MB/s now, %.1f MB/s on average, ~%s left\n",
 			float64(got)/(1<<30), float64(total)/(1<<30), 100*float64(got)/float64(total),
-			rate/1e6, eta)
+			float64(got-last)/now.Sub(tLast).Seconds()/1e6, rate/1e6, eta)
+		last, tLast = got, now
 	}
 }
