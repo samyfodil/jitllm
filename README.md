@@ -62,10 +62,21 @@ and the [server reference](docs/server.md) for endpoints and daemon commands.
 
 ## Supported models
 
-Llama, Qwen, Gemma, Phi, DeepSeek, Kimi, GPT-OSS and other dense, mixture-of-experts
-and state-space families; vision and embedding models are also supported.
-See the [full model list](docs/models.md), [model and weight format reference](docs/supported-model-reference.md)
-and [vision guide](docs/vision.md). Architectures outside the converter's list are refused.
+`convert` reads 65 GGUF architecture names (57 graphs), 30 Hugging Face safetensors
+classes and 17 vision projectors; anything else is refused at conversion, by name.
+
+- **Text:** Llama 2/3, Mistral, Mixtral, SmolLM2/3, Qwen2 to Qwen3.6 (dense, MoE, Next and VL text),
+  Gemma 1 to 4 and 3n, Phi-2/3/4 and Phi-3.5-MoE, DeepSeek V2/V3/R1/V3.2/V4, Kimi-K2, Kimi Linear,
+  Kimi-K3, GLM-4/4.5/4.6/4.7-Flash, gpt-oss, Llama 4, Granite, OLMo 2/3, OLMoE, ERNIE 4.5, Hunyuan,
+  MiniMax-M2/M3, Ling 2.0, dots.llm1, Apertus, EXAONE 4, Seed-OSS, Command-R/A, DBRX, Falcon,
+  StarCoder 1/2, StableLM, Nemotron
+- **State-space hybrids:** Mamba, Mamba-2, Jamba, Falcon-H1, Granite 4 hybrid, Nemotron-H, LFM2
+- **Vision:** SmolVLM, LLaVA, Qwen2/2.5/3-VL, Qwen3.5, GLM-4.xV, Kimi-VL, HunyuanOCR, Gemma 3/3n/4,
+  InternVL, MiniCPM-V, Janus-Pro, Pixtral/Mistral 3, Phi-4 vision, Llama 4
+- **Embeddings:** BERT family, nomic-embed-text, Qwen3-Embedding, EmbeddingGemma
+
+Weights: F32, F16, BF16, Q4_0, Q5_0, Q5_1, Q8_0, Q3_K-Q6_K and MXFP4. The full list, generated
+from the code, is [docs/models.md](docs/models.md); the [vision guide](docs/vision.md) covers pictures.
 
 ## Performance
 
