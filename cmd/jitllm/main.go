@@ -955,6 +955,9 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 					ds.StreamCacheSize, ds.StreamCacheHits, ds.StreamCacheMisses,
 					100*float64(ds.StreamCacheHits)/max(float64(ds.StreamCacheHits+ds.StreamCacheMisses), 1), ds.StreamCacheShort, ds.AutoMeanBase)
 			}
+			if ds.HybridRuns > 0 {
+				fmt.Fprintf(os.Stderr, "hybrid experts: %d block-step(s) on the host, %.2f s\n", ds.HybridRuns, sec(ds.THybrid))
+			}
 			if ds.StreamPrefetched > 0 {
 				fmt.Fprintf(os.Stderr, "cross-layer prefetch: %d expert(s) read ahead, %.2f s joining them\n",
 					ds.StreamPrefetched, sec(ds.TStreamPrefetchWait))

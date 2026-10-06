@@ -391,6 +391,11 @@ type Config struct {
 	// predicted experts into host frames behind this block's transfers. Host
 	// reads only; see streamBank.prefetch.
 	StreamPrefetch bool
+	// HybridExperts runs a streamed block's routed experts on the host
+	// (nn.LayerWeights.HostExperts) instead of sending their sheets: the
+	// block's base, router and shared experts stay on the card, and the
+	// experts' input and output vectors are all that cross the bus.
+	HybridExperts bool
 	// NoAutoStream leaves a mixture block that no device can hold resident
 	// on the host, as before GPU.AutoStream, instead of streaming it.
 	NoAutoStream bool
@@ -696,6 +701,10 @@ type Stats struct {
 	// and missing from a block's expert cache; StreamCacheShort counts blocks
 	// given the plain bank for want of room.
 	StreamCacheHits, StreamCacheMisses, StreamCacheShort int
+	// HybridRuns counts streamed blocks whose experts ran on the host
+	// (Config.HybridExperts), and THybrid the wall of those host calls.
+	HybridRuns int
+	THybrid    time.Duration
 	// StreamCacheSize is the largest expert cache a block was given, in
 	// sheets: the check that an auto-sized cache is the size intended.
 	StreamCacheSize int
@@ -995,6 +1004,8 @@ func (s *Stats) add(o Stats) {
 	s.StreamCacheHits += o.StreamCacheHits
 	s.StreamCacheMisses += o.StreamCacheMisses
 	s.StreamCacheShort += o.StreamCacheShort
+	s.HybridRuns += o.HybridRuns
+	s.THybrid += o.THybrid
 	s.StreamCacheSize = max(s.StreamCacheSize, o.StreamCacheSize)
 	s.StreamGroupsTuned = max(s.StreamGroupsTuned, o.StreamGroupsTuned)
 	s.AutoMeanBase = max(s.AutoMeanBase, o.AutoMeanBase)

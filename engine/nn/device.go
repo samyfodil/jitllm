@@ -245,6 +245,13 @@ type LayerWeights struct {
 	// goroutine while the caller uploads sheets it already has (EnsureExperts
 	// writes through w and is not). nil means the caller must not overlap.
 	PrefetchExperts func(sel []uint32) error
+	// HostExperts runs this block's routed experts on the host, for a device
+	// that keeps the rest of the block (hybrid execution): out = sum over i
+	// of w[i] * expert sel[i] applied to in, sel and w in selection order, in
+	// the expert width the block's mixture reads (the latent on Kimi-K3). It
+	// runs the host's generated kernels over the host's pages; only in and
+	// out cross the bus. nil where the host cannot.
+	HostExperts func(sel []uint32, w, in, out []float32) error
 }
 
 // SSMWeights are the gated delta rule's tensors.

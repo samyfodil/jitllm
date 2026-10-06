@@ -179,6 +179,10 @@ type State struct {
 	expReq     chan expRead
 	expErr     error
 	shW        float32
+	// hyOrd and hyW are hostExperts' selection in ascending id and its
+	// weights in that order, kept so a token allocates neither.
+	hyOrd []int32
+	hyW   []float32
 	// autoStreamed counts the blocks the last placement streamed because no
 	// card could hold them resident (nn.AutoStreamer).
 	autoStreamed int
@@ -1416,7 +1420,7 @@ func (s *State) ensureLayer(li int) func(*nn.LayerWeights) error {
 		// by the first Ensure (a missed PrefetchExperts disables the streamed
 		// read/upload pipeline).
 		w.Ensure, w.EnsureExperts = dst.Ensure, dst.EnsureExperts
-		w.PrefetchExperts = dst.PrefetchExperts
+		w.PrefetchExperts, w.HostExperts = dst.PrefetchExperts, dst.HostExperts
 		*dst = w
 		return nil
 	}
@@ -1439,7 +1443,7 @@ func (s *State) ensureSelected(li int) func(*nn.LayerWeights, []uint32) error {
 		w := s.layerWeightsAt(li)
 		// Carry every callback over; see ensureLayer.
 		w.Ensure, w.EnsureExperts = dst.Ensure, dst.EnsureExperts
-		w.PrefetchExperts = dst.PrefetchExperts
+		w.PrefetchExperts, w.HostExperts = dst.PrefetchExperts, dst.HostExperts
 		*dst = w
 		return nil
 	}
@@ -1551,7 +1555,7 @@ func (s *State) offerRange(lo, hi int) {
 		// "Measurements once cited in engine/model's comments").
 		if bh, ok := ld.(nn.BlockHolder); ok && !named && bh.HoldsBlock(li) {
 			w := nn.LayerWeights{Ensure: s.ensureLayer(li), EnsureExperts: s.ensureSelected(li),
-				PrefetchExperts: s.prefetchSelected(li)}
+				PrefetchExperts: s.prefetchSelected(li), HostExperts: s.hostExpertsFor(li)}
 			plan := *s.planFor(li)
 			if adm.PrepLayer(li, &plan, &w) {
 				s.markOnDev(li)
@@ -1567,6 +1571,7 @@ func (s *State) offerRange(lo, hi int) {
 		// page re-read on every swap.
 		w.Ensure, w.EnsureExperts = s.ensureLayer(li), s.ensureSelected(li)
 		w.PrefetchExperts = s.prefetchSelected(li)
+		w.HostExperts = s.hostExpertsFor(li)
 		if c.MoE() {
 			// The expert banks are fetched by the tier through Ensure once it
 			// admits the block: pageIn does not read them (the host fetches
@@ -2595,7 +2600,7 @@ func (s *State) PrewarmGPU(n int) <-chan struct{} {
 				// live submission, so the tier skips packing such a block and
 				// the upload path ensures it.
 				w.Ensure, w.EnsureExperts = s.ensureLayer(li), s.ensureSelected(li)
-				w.PrefetchExperts = s.prefetchSelected(li)
+				w.PrefetchExperts, w.HostExperts = s.prefetchSelected(li), s.hostExpertsFor(li)
 			}
 			s.ldCand.PrewarmLayer(li, &s.plan, &w)
 		}

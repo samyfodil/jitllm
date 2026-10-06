@@ -280,6 +280,10 @@ type streamBank struct {
 	pfOn   bool
 	pfWG   sync.WaitGroup
 	pfErr  error
+	// host is the block's routed experts on the host (hybrid execution), and
+	// hin, hw and hout its input, weights and output, reused every token.
+	host          func(sel []uint32, w, in, out []float32) error
+	hin, hw, hout []float32
 	// pred is this block's selection as the previous block's probe predicted
 	// it (Config.StreamProbe), valid while havePred; score compares it with
 	// the real one and clears it.
@@ -449,6 +453,39 @@ func (st *streamBank) prefetch(g *devTier) {
 func (st *streamBank) prefetchRun() {
 	defer st.pfWG.Done()
 	st.pfErr = st.pre(st.pfWant)
+}
+
+// runHost is the hybrid suspension: in (the experts' input, n wide -- the
+// expert width, which is the latent on Kimi-K3) and the k routing weights
+// come home, the host's experts sum into hout, and the sum is
+// written to out, where the combine kernel would have put it. The Sync makes
+// the launches that write in land first.
+func (st *streamBank) runHost(g *devTier, s backend.Session, in, w, out backend.Buf, n, k int) error {
+	if cap(st.hin) < n {
+		st.hin = make([]float32, n)
+		st.hout = make([]float32, n)
+	}
+	st.hin, st.hout = st.hin[:n], st.hout[:n]
+	if cap(st.hw) < k+1 {
+		st.hw = make([]float32, k+1)
+	}
+	st.hw = st.hw[:k+1]
+	t0 := time.Now()
+	if err := s.Sync(); err != nil {
+		return err
+	}
+	if err := s.Read(in, f32b(st.hin)); err != nil {
+		return err
+	}
+	if err := s.Read(w, f32b(st.hw)); err != nil {
+		return err
+	}
+	if err := st.host(st.sel, st.hw[:k], st.hin, st.hout); err != nil {
+		return err
+	}
+	err := s.WriteAt(out, 0, f32b(st.hout))
+	g.THybrid += time.Since(t0)
+	return err
 }
 
 // streamItem is one sheet set a fill sends: expert e into compact slot slot.
@@ -2737,7 +2774,7 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 				// contributes zeros.
 				l.stream = &streamBank{sel: make([]uint32, slots),
 					ensure: w.Ensure, sel2: w.EnsureExperts,
-					pre: w.PrefetchExperts, w: *w}
+					pre: w.PrefetchExperts, host: w.HostExperts, w: *w}
 				l.stream.nExpert = bank
 				l.stream.initCache(cslots, bank)
 				g.StreamBlocks++
@@ -7356,6 +7393,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				if latent {
 					ein, eout = bs.k3.lat, bs.k3.latAcc
 				}
+				hybrid := false
 				if R > 1 {
 					if latent {
 						g.k3LatentIn(lc, bs, l, R, mvrun)
@@ -7468,7 +7506,17 @@ func (g *devTier) layersSession(s backend.Session) {
 						if err == nil && !g.StreamFixedSel {
 							l.stream.score(g, li)
 						}
-						if err == nil && (g.StreamProbe || g.StreamPrefetch) && li+1 < hi {
+						hybrid = g.HybridExperts && l.stream.host != nil && !g.StreamFixedSel
+						if err == nil && hybrid {
+							// Hybrid: the experts' input and the routing weights come
+							// home, the host runs the selected experts, and their sum
+							// goes back where the combine would have written it.
+							if latent {
+								g.k3LatentIn(lc, bs, l, 1, mvrun)
+							}
+							err = l.stream.runHost(g, s, ein, bs.rw, eout, p.ExpWidth(), bs.nUsed)
+						}
+						if err == nil && !hybrid && (g.StreamProbe || g.StreamPrefetch) && li+1 < hi {
 							// The cross-layer probe: the next block's router over this
 							// block's normed row, ranked by that block's own launches.
 							// It clobbers rsel and rtop, which nothing below reads on a
@@ -7487,7 +7535,7 @@ func (g *devTier) layersSession(s backend.Session) {
 								}
 							}
 						}
-						if err == nil {
+						if err == nil && !hybrid {
 							tf := time.Now()
 							if err = l.stream.fill(g, s, l, p.NExpert); err != nil && l.stream.cached() {
 								l.stream.forget()
@@ -7500,91 +7548,101 @@ func (g *devTier) layersSession(s backend.Session) {
 						if err != nil {
 							return
 						}
-						g.StreamFills++
+						if hybrid {
+							g.HybridRuns++
+						} else {
+							g.StreamFills++
+						}
 					}
-					// gate and up read the one normed vector, so they are
-					// indexed on the weight side only. bs.a/bs.ax still hold
-					// its quantization from the launch above -- or, at
-					// Kimi-K3's latent, its projection's.
-					if latent {
-						g.k3LatentIn(lc, bs, l, 1, mvrun)
+					if hybrid && latent {
+						// The routed sum is already in eout.
+						g.k3LatentOut(lc, bs, l, 1, mvrun)
 					}
-					ffnW := bs.nUsed * bs.nFFNExp
-					// mvidE launches an expert matvec with fused epilogue
-					// operands between its output and the selection -- the
-					// kernel's parameter order (pOut, [pBias], [pGate], pSel).
-					mvidE := func(k backend.Kernel, m mv, r *resident, dst backend.Buf, extra ...backend.Buf) {
-						// Joined in a stack array: appending to a literal of
-						// its own length grew it on the heap every launch.
-						var all [12]backend.Buf
-						args := append(all[:0], r.qs, dOf(r), r.sc, bs.a, bs.ax, dst)
-						args = append(append(args, extra...), sel)
-						lamv(m, k, m.rows*m.slots*m.split, args...)
-						g.MoEFused++
-					}
-					rw := bs.rw
-					if p.DenseMoE {
-						// Each routed weight times its expert's own factor.
-						lc.la(bs.ewScale, bs.nUsed, bs.rw, bs.rsel, l.expScale, bs.rwS)
-						rw = bs.rwS
-					}
-					if ungatedFFN(p) {
-						// Ungated experts (Nemotron 3): up, then the activation
-						// alone. No bias exists on any such architecture.
-						mvid(l.mvu, l.up, bs.eu, sel)
-						lc.la(bs.actMulE, ffnW, bs.eu, bs.eact)
-					} else if l.moeUp != nil {
-						// act(gate)*up in the up projection's own epilogue, the
-						// biases in each matvec's (fuseMoE).
-						if l.moeGate != nil {
-							mvidE(l.moeGate, l.mvg, l.gate, bs.eg, l.expGateB)
+					if !hybrid {
+						// gate and up read the one normed vector, so they are
+						// indexed on the weight side only. bs.a/bs.ax still hold
+						// its quantization from the launch above -- or, at
+						// Kimi-K3's latent, its projection's.
+						if latent {
+							g.k3LatentIn(lc, bs, l, 1, mvrun)
+						}
+						ffnW := bs.nUsed * bs.nFFNExp
+						// mvidE launches an expert matvec with fused epilogue
+						// operands between its output and the selection -- the
+						// kernel's parameter order (pOut, [pBias], [pGate], pSel).
+						mvidE := func(k backend.Kernel, m mv, r *resident, dst backend.Buf, extra ...backend.Buf) {
+							// Joined in a stack array: appending to a literal of
+							// its own length grew it on the heap every launch.
+							var all [12]backend.Buf
+							args := append(all[:0], r.qs, dOf(r), r.sc, bs.a, bs.ax, dst)
+							args = append(append(args, extra...), sel)
+							lamv(m, k, m.rows*m.slots*m.split, args...)
+							g.MoEFused++
+						}
+						rw := bs.rw
+						if p.DenseMoE {
+							// Each routed weight times its expert's own factor.
+							lc.la(bs.ewScale, bs.nUsed, bs.rw, bs.rsel, l.expScale, bs.rwS)
+							rw = bs.rwS
+						}
+						if ungatedFFN(p) {
+							// Ungated experts (Nemotron 3): up, then the activation
+							// alone. No bias exists on any such architecture.
+							mvid(l.mvu, l.up, bs.eu, sel)
+							lc.la(bs.actMulE, ffnW, bs.eu, bs.eact)
+						} else if l.moeUp != nil {
+							// act(gate)*up in the up projection's own epilogue, the
+							// biases in each matvec's (fuseMoE).
+							if l.moeGate != nil {
+								mvidE(l.moeGate, l.mvg, l.gate, bs.eg, l.expGateB)
+							} else {
+								mvid(l.mvg, l.gate, bs.eg, sel)
+							}
+							if l.expUpB != nil {
+								mvidE(l.moeUp, l.mvu, l.up, bs.eact, l.expUpB, bs.eg)
+							} else {
+								mvidE(l.moeUp, l.mvu, l.up, bs.eact, bs.eg)
+							}
 						} else {
 							mvid(l.mvg, l.gate, bs.eg, sel)
+							mvid(l.mvu, l.up, bs.eu, sel)
+							eg, eu := bs.eg, bs.eu
+							// The experts' biases are indexed by the true ids in rsel,
+							// even where the weights are a compacted bank read 0..k-1.
+							if l.expGateB != nil {
+								lc.la(bs.ebiasFF, ffnW, bs.eg, bs.rsel, l.expGateB, bs.egB)
+								eg = bs.egB
+							}
+							if l.expUpB != nil {
+								lc.la(bs.ebiasFF, ffnW, bs.eu, bs.rsel, l.expUpB, bs.euB)
+								eu = bs.euB
+							}
+							if bs.actMulW != nil {
+								// Llama 4: the weight scales gate and up, and the
+								// downs are summed at one.
+								lc.la(bs.actMulW, ffnW, eg, eu, bs.rw, bs.eact)
+								rw = bs.wOnes
+							} else {
+								lc.la(bs.actMulE, ffnW, eg, eu, bs.eact)
+							}
 						}
-						if l.expUpB != nil {
-							mvidE(l.moeUp, l.mvu, l.up, bs.eact, l.expUpB, bs.eg)
+						// One Quantize over all the slots, writing a flat [scales][sums] pAX,
+						// which is the layout down's SlotAct per-slot bases expect.
+						lc.la(bs.quantX, kernels.QuantizeThreads(ffnW/32), bs.eact, bs.a, bs.ax)
+						edown := bs.edown
+						if l.moeDown != nil {
+							mvidE(l.moeDown, l.mvd, l.down, bs.edown, l.expDownB)
 						} else {
-							mvidE(l.moeUp, l.mvu, l.up, bs.eact, bs.eg)
+							mvid(l.mvd, l.down, bs.edown, sel)
+							if l.expDownB != nil {
+								lc.la(bs.ebiasD, bs.nUsed*p.NEmbd, bs.edown, bs.rsel, l.expDownB, bs.edownB)
+								edown = bs.edownB
+							}
 						}
-					} else {
-						mvid(l.mvg, l.gate, bs.eg, sel)
-						mvid(l.mvu, l.up, bs.eu, sel)
-						eg, eu := bs.eg, bs.eu
-						// The experts' biases are indexed by the true ids in rsel,
-						// even where the weights are a compacted bank read 0..k-1.
-						if l.expGateB != nil {
-							lc.la(bs.ebiasFF, ffnW, bs.eg, bs.rsel, l.expGateB, bs.egB)
-							eg = bs.egB
+						lc.la(bs.combine, p.ExpWidth(), edown, rw, eout)
+						if latent {
+							g.k3LatentOut(lc, bs, l, 1, mvrun)
 						}
-						if l.expUpB != nil {
-							lc.la(bs.ebiasFF, ffnW, bs.eu, bs.rsel, l.expUpB, bs.euB)
-							eu = bs.euB
-						}
-						if bs.actMulW != nil {
-							// Llama 4: the weight scales gate and up, and the
-							// downs are summed at one.
-							lc.la(bs.actMulW, ffnW, eg, eu, bs.rw, bs.eact)
-							rw = bs.wOnes
-						} else {
-							lc.la(bs.actMulE, ffnW, eg, eu, bs.eact)
-						}
-					}
-					// One Quantize over all the slots, writing a flat [scales][sums] pAX,
-					// which is the layout down's SlotAct per-slot bases expect.
-					lc.la(bs.quantX, kernels.QuantizeThreads(ffnW/32), bs.eact, bs.a, bs.ax)
-					edown := bs.edown
-					if l.moeDown != nil {
-						mvidE(l.moeDown, l.mvd, l.down, bs.edown, l.expDownB)
-					} else {
-						mvid(l.mvd, l.down, bs.edown, sel)
-						if l.expDownB != nil {
-							lc.la(bs.ebiasD, bs.nUsed*p.NEmbd, bs.edown, bs.rsel, l.expDownB, bs.edownB)
-							edown = bs.edownB
-						}
-					}
-					lc.la(bs.combine, p.ExpWidth(), edown, rw, eout)
-					if latent {
-						g.k3LatentOut(lc, bs, l, 1, mvrun)
 					}
 				}
 				if p.DenseMoE {

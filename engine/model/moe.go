@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"slices"
 	"time"
 	"unsafe"
 
@@ -800,4 +801,57 @@ func (s *State) growMoEBatch(n int) {
 	s.bmY = scratch(h.bmY, n*c.NEmbd, 0)
 	s.bmG = scratch(h.bmG, n*c.NFFNExp, ffnPad(n*c.NFFNExp))
 	s.bmU = scratch(h.bmU, n*c.NFFNExp, ffnPad(n*c.NFFNExp))
+}
+
+// hostExpertsFor is block li's nn.LayerWeights.HostExperts: the routed
+// experts on the host for a device running the rest of the block. nil for a
+// block with no mixture, and for a mixture whose experts read anything but
+// the one vector they are given (a dense MLP beside them, per-expert scales,
+// ungated experts): those stay whole on one tier.
+func (s *State) hostExpertsFor(li int) func(sel []uint32, w, in, out []float32) error {
+	c := s.c
+	if !c.MoEAt(li) || c.DenseMoE {
+		return nil
+	}
+	return func(sel []uint32, w, in, out []float32) error { return s.hostExperts(li, sel, w, in, out) }
+}
+
+// hostExperts is hostExpertsFor's body: the selection put in ascending id
+// with its weights, as moe sums them (the batched path visits the bank in
+// that order), the pages read, and moeFFN over in into out. It is moe() from
+// its selection on, with the device's selection and weights in place of the
+// host router's.
+func (s *State) hostExperts(li int, sel []uint32, w, in, out []float32) error {
+	l := &s.m.layers[li]
+	if l.ungatedExp {
+		return fmt.Errorf("model: block %d: ungated experts do not run split across tiers", li)
+	}
+	k := len(sel)
+	s.hyOrd = slices.Grow(s.hyOrd[:0], k)[:k]
+	s.hyW = slices.Grow(s.hyW[:0], k)[:k]
+	for i, e := range sel {
+		// Insertion by id: k is a handful.
+		j := i
+		for j > 0 && s.hyOrd[j-1] > int32(e) {
+			s.hyOrd[j], s.hyW[j] = s.hyOrd[j-1], s.hyW[j-1]
+			j--
+		}
+		s.hyOrd[j], s.hyW[j] = int32(e), w[i]
+	}
+	if err := s.m.ensureExperts(li, s.hyOrd, &s.expHold); err != nil {
+		s.expHold.release()
+		return err
+	}
+	defer s.expHold.release()
+	clear(out)
+	s.jit.NewInput()
+	done, err := s.moeFFN(l, s.hyOrd, in, out, s.hyW)
+	if err != nil {
+		return err
+	}
+	if !done {
+		return fmt.Errorf("model: block %d: the host has no fused expert path for this mixture", li)
+	}
+	s.jit.NewInput()
+	return nil
 }
