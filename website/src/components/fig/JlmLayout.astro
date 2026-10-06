@@ -1,0 +1,87 @@
+---
+// The .jlm container, region by region. Widths are not to scale: on a real
+// model the page arrays are almost the whole file.
+const parts = [
+  { id: 'header', name: 'header', w: 1, text: '192 bytes: the magic JITLLM\\0\\0, the version, and the 64-bit offset and length of every other part.' },
+  { id: 'config', name: 'config', w: 1, text: 'The architecture and its constants as typed fields: block count, widths, rotary, mixture shape, the per-layer kinds of a hybrid.' },
+  { id: 'vocab', name: 'vocab', w: 1, text: 'The tokenizer (vocabulary, merges, pre-tokenizer stages) and the chat templates.' },
+  { id: 'table', name: 'tensors', w: 1, text: 'Every tensor\'s role, block, format, shape and span. Each span is 4096-byte aligned.' },
+  { id: 'dense', name: 'dense', w: 1.4, text: 'Tensors that belong to no block: the embedding table, the output projection, the final norm. Read every token, so always resident.' },
+  { id: 'text', name: 'text pages', w: 3.4, pages: 8, cls: 'gpu', text: 'One page per block, each exactly PageSize bytes, padded at conversion. Block i is at DataOff + i × PageSize: an index, not a lookup.' },
+  { id: 'vis', name: 'vision', w: 2, pages: 3, cls: 'gpu2', text: 'The vision tower\'s blocks, in a page array of their own size: VisDataOff + i × VisPageSize.' },
+  { id: 'exp', name: 'expert pages', w: 3, pages: 10, cls: 'disk', text: 'One page per (mixture block, expert), holding that expert\'s sheet of every bank: ExpDataOff + p × ExpPageSize. Evicted least recently used.' },
+  { id: 'fp', name: 'fingerprint', w: 1, text: 'The host, device and build that wrote the file. Compared on load, never enforced.' },
+]
+---
+<figure class="fig not-content" data-fig="jlm">
+  <div class="fig-body">
+    <div class="jlm">
+      <div class="jlm-map" role="group" aria-label="Regions of a .jlm file, in file order">
+        <span class="jlm-off" aria-hidden="true">offset 0</span>
+        {parts.map((p) => (
+          <button type="button" class={`jlm-part ${p.cls ?? ''}`} style={`flex-grow:${p.w}`} data-text={p.text} data-name={p.name}>
+            <span class="jlm-name">{p.name}</span>
+            {p.pages && (
+              <span class="jlm-pages">
+                {Array.from({ length: p.pages }, (_, i) => <i data-page={i} data-kind={p.id} />)}
+              </span>
+            )}
+          </button>
+        ))}
+        <span class="jlm-off" aria-hidden="true">end of file</span>
+      </div>
+      <p class="jlm-desc" aria-live="polite" data-desc>Select a region, or point at a page.</p>
+    </div>
+  </div>
+  <figcaption><b>A page-in is a read and nothing else.</b> Every layout decision was made at conversion, so finding block <i>i</i> is one multiplication and loading it is one read of a known span. Not to scale: on a real model the page arrays are nearly the whole file.</figcaption>
+</figure>
+
+<style>
+  .jlm { display: grid; grid-template-columns: minmax(12rem, 17rem) 1fr; gap: 1.25rem; align-items: start; }
+  .jlm-map { display: flex; flex-direction: column; gap: 3px; min-height: 22rem; }
+  .jlm-off { font-size: 10px; color: var(--muted); }
+  .jlm-part {
+    flex-basis: 1.7rem; display: flex; align-items: center; gap: 0.6rem; padding: 0.2rem 0.55rem;
+    text-align: left; color: var(--text-2); background: var(--surface); border: 1px solid var(--line-strong); cursor: pointer;
+  }
+  .jlm-part.gpu { border-color: var(--gpu); background: color-mix(in srgb, var(--gpu) 14%, var(--surface)); }
+  .jlm-part.gpu2 { border-color: var(--gpu2); background: color-mix(in srgb, var(--gpu2) 14%, var(--surface)); }
+  .jlm-part.disk { border-color: var(--disk); background: color-mix(in srgb, var(--disk) 14%, var(--surface)); }
+  .jlm-part[aria-current='true'] { outline: 2px solid var(--text); outline-offset: -2px; color: var(--text); }
+  .jlm-name { flex: 0 0 auto; font-size: 12px; }
+  .jlm-pages { flex: 1; align-self: stretch; display: flex; gap: 2px; padding: 0.2rem 0; }
+  .jlm-pages i { flex: 1; background: color-mix(in srgb, currentColor 18%, transparent); border: 1px solid color-mix(in srgb, currentColor 45%, transparent); }
+  .jlm-part.gpu .jlm-pages i { color: var(--gpu); }
+  .jlm-part.gpu2 .jlm-pages i { color: var(--gpu2); }
+  .jlm-part.disk .jlm-pages i { color: var(--disk); }
+  .jlm-pages i:hover, .jlm-pages i.on { background: currentColor; }
+  .jlm-desc { position: sticky; top: 5rem; margin: 1.2rem 0 0; font: 0.95rem/1.55 var(--sl-font); color: var(--text-2); }
+  .jlm-desc b { display: block; margin-bottom: 0.25rem; color: var(--text); font-family: var(--sl-font-mono); font-weight: 500; }
+  @media (max-width: 640px) { .jlm { grid-template-columns: 1fr; } .jlm-map { min-height: 18rem; } .jlm-desc { position: static; margin: 0; } }
+</style>
+
+<script>
+  const formula: Record<string, (i: number) => string> = {
+    text: (i) => `block ${i} lives at DataOff + ${i} × PageSize`,
+    vis: (i) => `vision block ${i} lives at VisDataOff + ${i} × VisPageSize`,
+    exp: (i) => `expert page ${i} lives at ExpDataOff + ${i} × ExpPageSize`,
+  }
+  for (const fig of document.querySelectorAll<HTMLElement>('[data-fig="jlm"]')) {
+    const desc = fig.querySelector<HTMLElement>('[data-desc]')!
+    const parts = [...fig.querySelectorAll<HTMLButtonElement>('.jlm-part')]
+    const pick = (b: HTMLButtonElement) => {
+      for (const p of parts) p.setAttribute('aria-current', String(p === b))
+      desc.innerHTML = `<b>${b.dataset.name}</b>: ${b.dataset.text}`
+    }
+    for (const b of parts) {
+      b.addEventListener('click', () => pick(b))
+      b.addEventListener('mouseenter', () => pick(b))
+    }
+    for (const i of fig.querySelectorAll<HTMLElement>('[data-page]'))
+      i.addEventListener('mouseenter', () => {
+        desc.innerHTML = `<b>${formula[i.dataset.kind!](+i.dataset.page!)}</b>: no index to walk, no estimate.`
+        for (const o of fig.querySelectorAll('[data-page]')) o.classList.toggle('on', o === i)
+      })
+    pick(parts[5])
+  }
+</script>

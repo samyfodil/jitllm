@@ -1,0 +1,19 @@
+{"pre_tokenizer": {
+    "type": "Sequence",
+    "pretokenizers": [
+      {
+        "type": "Punctuation",
+        "behavior": "Contiguous"
+      },
+      {
+        "type": "ByteLevel",
+        "add_prefix_space": false,
+        "trim_offsets": true,
+        "use_regex": true
+      },
+      {
+        "type": "Digits",
+        "individual_digits": true
+      }
+    ]
+  }}

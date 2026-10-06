@@ -1,0 +1,224 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**", "website/**", "**.md"]
+  pull_request:
+    branches: [main]
+    paths-ignore: ["docs/**", "website/**", "**.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # scripts/vet's allowlist is written against go1.27's vet (go1.26's does not
+  # report the finding it allows, and the script fails when it is absent).
+  GO_VERSION: "1.27.x"
+  # Five modules: the engine, server/, common/, ui/ and tui/.
+  GO_SUMS: |
+    go.sum
+    server/go.sum
+    common/go.sum
+    ui/go.sum
+    tui/go.sum
+  # What the release builds with (.goreleaser.yaml), and what goffi needs
+  # (ui/README.md). Set for every job, so a runner that has a C compiler on its
+  # PATH -- Linux's gcc, the Windows image's MinGW -- tests what ships.
+  CGO_ENABLED: "0"
+
+jobs:
+  # Every release target, every package, every module. The engine has no cgo,
+  # so cross-compiling from one Linux runner covers them all.
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: ${{ env.GO_SUMS }}
+      - name: cross-build
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64 windows/amd64; do
+            for mod in . server common ui tui; do
+              echo "::group::$target $mod"
+              (cd "$mod" && GOOS=${target%/*} GOARCH=${target#*/} go build ./...)
+              echo "::endgroup::"
+            done
+          done
+
+  # Formatting, module hygiene, and the checked-in protobuf code.
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: ${{ env.GO_SUMS }}
+      - name: gofmt
+        run: |
+          bad=$(git ls-files -z '*.go' | xargs -0 gofmt -l)
+          if [ -n "$bad" ]; then
+            echo "::error::not gofmt'd:"; echo "$bad"; exit 1
+          fi
+      - name: go mod tidy
+        run: |
+          for mod in . server common ui tui; do
+            (cd "$mod" && go mod tidy -diff) || { echo "::error::$mod/go.mod is not tidy"; exit 1; }
+          done
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: 1.62.1
+          setup_only: true
+      - name: buf lint and format
+        run: |
+          buf lint
+          buf format --diff --exit-code
+      - name: generated code is current
+        # Pinned to the plugin versions that wrote server/gen, so a diff here
+        # means the .proto files moved and not the generator.
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.18.1
+          buf generate
+          if ! git diff --exit-code -- server/gen || [ -n "$(git status --porcelain -- server/gen)" ]; then
+            echo "::error::server/gen is stale: run 'buf generate' and commit the result"
+            exit 1
+          fi
+
+  # vet and every test, with no GPU and no model but the committed stories260K
+  # (a test that needs another skips, and the summary lists it), on the hosts
+  # whose kernels or OS differ: x86-64 (AVX2 and, via -tags jitllmtest, the SSE tier),
+  # arm64 Linux and arm64 macOS (the NEON emitters, run natively); and Windows
+  # x64, where the release ships too: the same x86 kernels, but its own
+  # executable memory (jit/cpu/exec_windows.go), files, paths and locks.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, windows-2025]
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        # Git for Windows' bash on the Windows runner, so every step is one
+        # script on every host.
+        shell: bash
+    steps:
+      # Before the checkout: the Windows image converts to CRLF on checkout,
+      # and the fixtures, goldens and templates under testdata are compared
+      # byte for byte.
+      - name: line endings (windows)
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: ${{ env.GO_SUMS }}
+      # The encoding gates in jit/cpu skip without a disassembler/assembler,
+      # and a skip proves nothing: objdump for x86, clang + llvm-mc +
+      # llvm-objdump for arm64.
+      - name: disassemblers (linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          # binutils-x86-64-linux-gnu: the x86 encoder's objdump gate runs on
+          # the arm64 runner too.
+          sudo apt-get install -y -qq --no-install-recommends binutils binutils-x86-64-linux-gnu clang-18 llvm-18
+      - name: disassemblers (macos)
+        if: runner.os == 'macOS'
+        run: |
+          command -v llvm-mc || brew install llvm
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+      # The x86 encoding gate wants GNU objdump, which the image carries in
+      # MinGW and in Strawberry Perl but not always on the PATH. The arm64
+      # gates use the image's LLVM where it has the tools, and skip by name
+      # where it does not.
+      - name: disassemblers (windows)
+        if: runner.os == 'Windows'
+        run: |
+          if ! objdump --version 2>/dev/null | grep -q 'GNU objdump'; then
+            for d in /c/mingw64/bin /c/Strawberry/c/bin; do
+              if [ -x "$d/objdump.exe" ]; then cygpath -w "$d" >> "$GITHUB_PATH"; break; fi
+            done
+          fi
+      # The cross-build job proves every target compiles; this links the
+      # shipped binaries on the host they ship for and runs one.
+      - name: native build (windows)
+        if: runner.os == 'Windows'
+        run: |
+          set -euo pipefail
+          for mod in . server common ui tui; do (cd "$mod" && go build ./...); done
+          go build -o jitllm.exe ./cmd/jitllm
+          (cd server && go build -o jitllmd.exe ./cmd/jitllmd)
+          ./jitllm.exe hardware
+      - name: vet
+        run: |
+          ./scripts/vet
+          ./scripts/vet server
+          ./scripts/vet common
+          ./scripts/vet tui
+      - name: model-free tests
+        run: ./.github/scripts/test-model-free.sh
+
+  # The desktop app: its own module, built on the three desktop hosts with the
+  # jitllm-ui binary, vetted, and its mock-engine tests run -- package stage
+  # plays every mock scenario through the mounted window and checks each
+  # frame, offscreen, so it needs no display, no GPU and no model. On Linux
+  # the binary is also started in mock mode (`jitllm-ui -mock`, fixtures only)
+  # on a virtual display with Mesa's software Vulkan. ui's other packages run
+  # in the test job's model-free run.
+  ui:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: line endings (windows)
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: ${{ env.GO_SUMS }}
+      - name: build
+        working-directory: ui
+        run: |
+          go build ./...
+          go build -o "jitllm-ui$(go env GOEXE)" .
+      - name: vet
+        run: ./scripts/vet ui
+      - name: mock-engine tests
+        working-directory: ui
+        run: go test -count=1 -timeout 30m ./mock ./stage ./cmd/shots
+      - name: jitllm-ui -mock on a virtual display (linux)
+        if: runner.os == 'Linux'
+        working-directory: ui
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends xvfb xauth mesa-vulkan-drivers imagemagick
+          export VK_DRIVER_FILES
+          VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
+          xvfb-run -a -s "-screen 0 1440x900x24" ../.github/scripts/ui-smoke.sh ./jitllm-ui smoke
+      - uses: actions/upload-artifact@v7
+        if: runner.os == 'Linux' && always()
+        with:
+          name: jitllm-ui-mock
+          path: ui/smoke
+          if-no-files-found: ignore
+          retention-days: 7

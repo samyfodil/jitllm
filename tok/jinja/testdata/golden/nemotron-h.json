@@ -1,0 +1,30 @@
+{
+ "documents": {
+  "ctx": "13f24430598ba659",
+  "out": "<SPECIAL_10>System\n\n<SPECIAL_11>User\nHow warm does Zürich get in July?\n<SPECIAL_11>Assistant\n<think>\n"
+ },
+ "multiturn-nogen": {
+  "ctx": "5510b25aeeee5887",
+  "out": "<SPECIAL_10>System\n\n<SPECIAL_11>User\nName a prime.\n<SPECIAL_11>Assistant\nSeven.\n<SPECIAL_12>\n<SPECIAL_11>User\nAnother,\nplease.\n<SPECIAL_11>Assistant\n<think>\nEleven.\n<SPECIAL_12>\n"
+ },
+ "system-multiturn": {
+  "ctx": "3861e030c9f6bafc",
+  "out": "<SPECIAL_10>System\nYou are a terse assistant.\n<SPECIAL_11>User\nWhat is the capital of France?\n<SPECIAL_11>Assistant\nParis.\n<SPECIAL_12>\n<SPECIAL_11>User\nAnd of Switzerland? Answer in one word, ça va ?\n<SPECIAL_11>Assistant\n<think>\n"
+ },
+ "tools-request": {
+  "ctx": "5837cc30c1a781e7",
+  "out": "<SPECIAL_10>System\nYou can look the weather up.\n\nYou can use the following tools to assist the user if required:\n<AVAILABLE_TOOLS>[{\"name\": \"get_weather\", \"description\": \"Get the current weather for a city\", \"parameters\": {\"type\": \"object\", \"properties\": {\"location\": {\"type\": \"string\", \"description\": \"City name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}, \"days\": {\"type\": \"integer\", \"description\": \"Forecast length\"}, \"radius_km\": {\"type\": \"number\", \"description\": \"Search radius\", \"default\": 5.0}}, \"required\": [\"location\"]}}]</AVAILABLE_TOOLS>\n\nIf you decide to call any tool(s), use the following format:\n<TOOLCALL>[{{\"name\": \"tool_name1\", \"arguments\": \"tool_args1\"}}, {{\"name\": \"tool_name2\", \"arguments\": \"tool_args2\"}}]</TOOLCALL>\n\nThe user will execute tool-calls and return responses from tool(s) in this format:\n<TOOL_RESPONSE>[{{\"tool_response1\"}}, {{\"tool_response2\"}}]</TOOL_RESPONSE>\n\nBased on the tool responses, you can call additional tools if needed, correct tool calls if any errors are found, or just respond to the user.\n<SPECIAL_11>User\nWhat is the weather in Zürich?\n<SPECIAL_11>Assistant\n<think>\n"
+ },
+ "tools-result": {
+  "ctx": "d4f824bf2160867e",
+  "out": "<SPECIAL_10>System\nYou can use the following tools to assist the user if required:\n<AVAILABLE_TOOLS>[{\"name\": \"get_weather\", \"description\": \"Get the current weather for a city\", \"parameters\": {\"type\": \"object\", \"properties\": {\"location\": {\"type\": \"string\", \"description\": \"City name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}, \"days\": {\"type\": \"integer\", \"description\": \"Forecast length\"}, \"radius_km\": {\"type\": \"number\", \"description\": \"Search radius\", \"default\": 5.0}}, \"required\": [\"location\"]}}]</AVAILABLE_TOOLS>\n\nIf you decide to call any tool(s), use the following format:\n<TOOLCALL>[{{\"name\": \"tool_name1\", \"arguments\": \"tool_args1\"}}, {{\"name\": \"tool_name2\", \"arguments\": \"tool_args2\"}}]</TOOLCALL>\n\nThe user will execute tool-calls and return responses from tool(s) in this format:\n<TOOL_RESPONSE>[{{\"tool_response1\"}}, {{\"tool_response2\"}}]</TOOL_RESPONSE>\n\nBased on the tool responses, you can call additional tools if needed, correct tool calls if any errors are found, or just respond to the user.\n<SPECIAL_11>User\nWhat is the weather in Zürich for the next 3 days?\n<SPECIAL_11>Assistant\n<TOOLCALL>[{\"name\": \"get_weather\", \"arguments\": {\"location\": \"Zürich\", \"unit\": \"celsius\", \"days\": 3, \"radius_km\": 10.0}}]</TOOLCALL>\n<SPECIAL_12>\n<SPECIAL_11>User\n<TOOL_RESPONSE>[{\"temperature\": 18.5, \"sky\": \"cloudy\"}]</TOOL_RESPONSE>\n<SPECIAL_11>Assistant\n<think>\n"
+ },
+ "user": {
+  "ctx": "0c9faa58ed4be341",
+  "out": "<SPECIAL_10>System\n\n<SPECIAL_11>User\nHello!\n<SPECIAL_11>Assistant\n<think>\n"
+ },
+ "user-nogen": {
+  "ctx": "9759482a9085a243",
+  "out": "<SPECIAL_10>System\n\n<SPECIAL_11>User\nHello!\n"
+ }
+}

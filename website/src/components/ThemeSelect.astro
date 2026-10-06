@@ -1,0 +1,46 @@
+---
+import Select from '@astrojs/starlight/components/Select.astro'
+
+// The same list as THEMES in public/app.js.
+const themes = [
+  ['tokyo-night', 'Tokyo Night'],
+  ['catppuccin', 'Catppuccin'],
+  ['gruvbox', 'Gruvbox'],
+  ['nord', 'Nord'],
+  ['everforest', 'Everforest'],
+  ['kanagawa', 'Kanagawa'],
+  ['rose-pine-dawn', 'Rosé Pine Dawn'],
+]
+---
+
+<jitllm-theme-select>
+  <Select
+    icon="moon"
+    label="Theme"
+    options={themes.map(([value, label]) => ({ value, label, selected: value === 'tokyo-night' }))}
+    width="11em"
+  />
+</jitllm-theme-select>
+
+<script is:inline>
+  document.querySelectorAll('jitllm-theme-select select').forEach((s) => (s.value = document.documentElement.dataset.palette))
+</script>
+
+<script>
+  const LIGHT = ['rose-pine-dawn']
+  class ThemeSelect extends HTMLElement {
+    connectedCallback() {
+      this.querySelector('select')?.addEventListener('change', (e) => {
+        const id = (e.currentTarget as HTMLSelectElement).value
+        const root = document.documentElement
+        root.dataset.palette = id
+        root.dataset.theme = LIGHT.includes(id) ? 'light' : 'dark'
+        try {
+          localStorage.setItem('jitllm-theme', id)
+        } catch {}
+        document.querySelectorAll<HTMLSelectElement>('jitllm-theme-select select').forEach((s) => (s.value = id))
+      })
+    }
+  }
+  customElements.define('jitllm-theme-select', ThemeSelect)
+</script>

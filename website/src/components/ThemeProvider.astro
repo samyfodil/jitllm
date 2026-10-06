@@ -1,0 +1,19 @@
+---
+// Replaces Starlight's light/dark provider: the docs use the landing page's
+// seven themes (public/themes.css). The palette is data-palette; data-theme
+// stays Starlight's light/dark, derived from it, so code blocks and Starlight's
+// own styles pick the matching variant.
+---
+
+<script is:inline>
+  ;(() => {
+    const LIGHT = ['rose-pine-dawn']
+    let id = 'tokyo-night'
+    try {
+      id = localStorage.getItem('jitllm-theme') || id
+    } catch {}
+    const root = document.documentElement
+    root.dataset.palette = id
+    root.dataset.theme = LIGHT.includes(id) ? 'light' : 'dark'
+  })()
+</script>

@@ -1,0 +1,164 @@
+syntax = "proto3";
+
+package jitllm.v1;
+
+import "jitllm/v1/device.proto";
+import "jitllm/v1/placement.proto";
+
+// TelemetryService reports what the engine is doing. Every number here is a
+// COUNTER or a byte figure that the engine already keeps, not a timing this
+// server took: a rate measured by a serving layer on a box with other work on
+// it is not a measurement, and publishing one as though it were is how a
+// scoreboard acquires a row it cannot defend.
+
+service TelemetryService {
+  rpc GetStats(GetStatsRequest) returns (GetStatsResponse) {}
+  // Poll the same snapshot on an interval. The server pushes; the client does
+  // not have to time anything.
+  rpc WatchStats(WatchStatsRequest) returns (stream GetStatsResponse) {}
+  rpc GetServerInfo(GetServerInfoRequest) returns (GetServerInfoResponse) {}
+}
+
+message ServerInfo {
+  string version = 1;
+  string model_directory = 2;
+  int64 started_unix_millis = 3;
+  int64 uptime_millis = 4;
+  // Backends that initialised, as DeviceRef ids.
+  repeated string available_backends = 5;
+  int32 loaded_models = 6;
+  int32 open_sessions = 7;
+}
+
+message PoolStats {
+  // Pool regions dispatched, split by whether the work went to the worker
+  // pool or ran inline on the caller. A serial region is a barrier five cores
+  // wait through, so the split matters more than the total.
+  int64 parallel_regions = 1;
+  int64 inline_regions = 2;
+  int32 workers = 3;
+}
+
+message MixtureStats {
+  // Expert matvecs that went out as one batched region against ones that went
+  // one at a time. On a host with no fused packed kernel the batched path
+  // declines and every expert loops, which is a capability difference and not
+  // a fault -- so both counters are reported rather than a ratio.
+  int64 batched_dispatch = 1;
+  int64 looped_dispatch = 2;
+  int64 batched_down_dispatch = 3;
+  int64 looped_down_dispatch = 4;
+}
+
+message ModelStats {
+  string model_id = 1;
+  Residency residency = 2;
+  int32 sessions = 3;
+  int64 tokens_generated = 4;
+  int64 tokens_prefilled = 5;
+  // The model's step loop, which runs its device sessions' generates as rows
+  // of shared decode steps. Absent for a model with no device, whose
+  // generates run one at a time on the host's gate.
+  BatchStats batch = 6;
+}
+
+// BatchStats counts what a model's step loop ran. Counters, not timings: each
+// is a fact about which rows shared which step.
+message BatchStats {
+  // The most rows the loop admits at once (Config.MaxBatchRows, bounded by
+  // the widest step the device runs).
+  int32 width = 1;
+  // Rows admitted now, prompting or decoding, and requests waiting for a row.
+  int32 live_rows = 2;
+  int32 waiting = 3;
+
+  // Steps the loop ran, and the device rows in them: a decoding session's
+  // token is one row, an admitted prompt's chunk one row a token.
+  int64 steps = 4;
+  int64 rows_stepped = 5;
+  // Steps whose rows ran as ONE device step across sessions, and their rows.
+  // Counted from the tier's own SessionRows, so a step the engine ran one
+  // session after another is not counted here.
+  int64 joint_steps = 6;
+  int64 joint_rows = 7;
+  // Rows stepped alone (a session's own Forward or Prefill): a lone session,
+  // one no longer wholly on the device, or the rows of a joint step the device
+  // refused.
+  int64 solo_rows = 8;
+  // The most device rows, and the most sessions, one step carried.
+  int32 max_rows_per_step = 9;
+  int32 max_sessions_per_step = 16;
+
+  // Prompt chunks fed, and steps in which a chunk rode beside sessions
+  // decoding: each such step is one admission did not stall.
+  int64 prompt_chunks = 10;
+  int64 prompt_steps = 11;
+
+  // Requests admitted into rows, and the total time they waited for one.
+  int64 admissions = 12;
+  int64 admission_wait_millis = 13;
+
+  // Joint steps the device refused, and the last reason it gave. The rows of
+  // a refused step run alone; nothing is dropped.
+  int64 joint_refusals = 14;
+  string last_refusal = 15;
+
+  // Decode steps whose rows could have run as one joint step and ran one
+  // session after another instead: because the loop measured that faster for
+  // their row count, or while a probe was timing that arm.
+  int64 separate_steps = 17;
+  // The loop's standing choice for each row count it has stepped.
+  repeated JointChoice choices = 18;
+}
+
+// JointChoice is how the step loop runs a decode step of `rows` rows: as one
+// joint step or one session after another, decided by timing both in situ.
+message JointChoice {
+  int32 rows = 1;
+  // False while the first probe for this row count is still timing.
+  bool settled = 2;
+  bool joint = 3;
+  // The last probe's median step, each arm.
+  double joint_step_millis = 4;
+  double separate_step_millis = 5;
+  int32 probes = 6;
+}
+
+message SessionStats {
+  string session_id = 1;
+  string model_id = 2;
+  int64 tokens_generated = 3;
+  int64 tokens_prefilled = 4;
+  int32 position = 5;
+  bool generating = 6;
+  int32 queue_position = 7;
+  PoolStats pool = 8;
+  MixtureStats mixture = 9;
+}
+
+message GetStatsRequest {
+  // Filters. Empty means everything.
+  string model_id = 1;
+  string session_id = 2;
+}
+
+message GetStatsResponse {
+  int64 unix_millis = 1;
+  repeated ModelStats models = 2;
+  repeated SessionStats sessions = 3;
+  repeated Device devices = 4;
+  HostMemory host = 5;
+}
+
+message WatchStatsRequest {
+  string model_id = 1;
+  string session_id = 2;
+  // Interval between snapshots. Clamped to a sane floor by the server.
+  int32 interval_millis = 3;
+}
+
+message GetServerInfoRequest {}
+
+message GetServerInfoResponse {
+  ServerInfo info = 1;
+}

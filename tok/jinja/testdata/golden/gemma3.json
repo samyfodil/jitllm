@@ -1,0 +1,35 @@
+{
+ "documents": {
+  "ctx": "c4868d270dad3401",
+  "out": "<bos><start_of_turn>user\nHow warm does Zürich get in July?<end_of_turn>\n<start_of_turn>model\n"
+ },
+ "image": {
+  "ctx": "a077adc4261993c3",
+  "out": "<bos><start_of_turn>user\n<start_of_image>What is in this picture?<end_of_turn>\n<start_of_turn>model\n"
+ },
+ "multiturn-nogen": {
+  "ctx": "31e4ac4ea8f2362f",
+  "out": "<bos><start_of_turn>user\nName a prime.<end_of_turn>\n<start_of_turn>model\nSeven.<end_of_turn>\n<start_of_turn>user\nAnother,\nplease.<end_of_turn>\n<start_of_turn>model\nEleven.<end_of_turn>\n"
+ },
+ "system-multiturn": {
+  "ctx": "b1b46c01b196b7f9",
+  "out": "<bos><start_of_turn>user\nYou are a terse assistant.\n\nWhat is the capital of France?<end_of_turn>\n<start_of_turn>model\nParis.<end_of_turn>\n<start_of_turn>user\nAnd of Switzerland? Answer in one word, ça va ?<end_of_turn>\n<start_of_turn>model\n"
+ },
+ "tools-request": {
+  "ctx": "a00f7129a72674bf",
+  "out": "<bos><start_of_turn>user\nYou can look the weather up.\n\nWhat is the weather in Zürich?<end_of_turn>\n<start_of_turn>model\n"
+ },
+ "tools-result": {
+  "by": "TemplateError",
+  "ctx": "0653e49c82ffa179",
+  "raise": "Conversation roles must alternate user/assistant/user/assistant/..."
+ },
+ "user": {
+  "ctx": "5f01e51db18e61ed",
+  "out": "<bos><start_of_turn>user\nHello!<end_of_turn>\n<start_of_turn>model\n"
+ },
+ "user-nogen": {
+  "ctx": "7cb180bce9fc3e5d",
+  "out": "<bos><start_of_turn>user\nHello!<end_of_turn>\n"
+ }
+}

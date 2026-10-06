@@ -1,0 +1,10 @@
+---
+// Starlight's header title, replaced by the landing page's pixel wordmark.
+import Wordmark from './Wordmark.astro'
+---
+<a href="/" class="site-title" aria-label="jitllm home"><Wordmark /></a>
+
+<style>
+  .site-title { display: flex; align-items: center; text-decoration: none; }
+  .site-title :global(.wordmark) { display: block; width: 85px; height: auto; }
+</style>

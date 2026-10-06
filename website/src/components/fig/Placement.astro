@@ -1,0 +1,156 @@
+---
+// A -placement playground. The parser follows model.ParsePlacement: SEL=WHERE
+// entries, ! pins, ~ streams, * is every block not named, head is the output
+// projection, and a device must be one -devices names.
+const presets = [
+  ['split two cards', '0-11=cuda:0,12-23=vulkan:1,head=cuda:0'],
+  ['stream everything', '*=cuda:0~'],
+  ['pin the first blocks', '0-5=cuda:0!'],
+  ['the reference example', '0=host,1-7=cuda:0,8=host!,9-15=vulkan:1~,head=vulkan:1'],
+]
+---
+<figure class="fig not-content" data-fig="placement">
+  <div class="ctl">
+    <label>-devices <input type="text" data-dev value="cuda:0,vulkan:1" aria-label="-devices" style="flex:0 1 11rem" spellcheck="false" /></label>
+    <label>blocks <input type="range" min="4" max="48" value="24" data-n aria-label="Blocks in the model" /> <output data-no>24</output></label>
+  </div>
+  <div class="ctl">
+    <label for="placement-spec" style="flex:0 0 auto">-placement</label>
+    <input id="placement-spec" type="text" data-spec value={presets[3][1]} spellcheck="false" autocomplete="off" />
+  </div>
+  <div class="ctl" style="gap:0.4rem">
+    {presets.map(([name, spec]) => <button type="button" data-preset={spec}>{name}</button>)}
+  </div>
+  <div class="fig-body">
+    <div class="cells" data-cells aria-live="polite"></div>
+    <div class="stats" data-sum></div>
+    <div class="legend" data-legend></div>
+  </div>
+  <figcaption><b>Edit the map.</b> <code>!</code> pins an entry (seam moves, relocation and a shrinking budget leave it alone), <code>~</code> streams it (weights swap through the card's slots each token). Blocks the map does not name are the engine's to place.</figcaption>
+</figure>
+
+<style is:global>
+  [data-fig='placement'] .cells { grid-template-columns: repeat(auto-fill, minmax(2.1rem, 1fr)); min-width: 0; }
+  [data-fig='placement'] .cell { height: 2.4rem; font-size: 10px; line-height: 1.1; }
+  [data-fig='placement'] .cell.engine { background: repeating-linear-gradient(135deg, var(--surface) 0 4px, var(--bg-deep) 4px 8px); }
+  [data-fig='placement'] .cell.stream { border-style: dashed; }
+  [data-fig='placement'] .cell .mk { position: absolute; top: 1px; right: 3px; font-size: 10px; color: var(--text); }
+  [data-fig='placement'] .cell.head { font-size: 9px; }
+  [data-fig='placement'] .err { color: var(--m3); }
+</style>
+
+<script>
+  type Place = { on: string; pin: boolean; stream: boolean }
+
+  const devName = (s: string) => {
+    s = s.trim().toLowerCase()
+    for (const [a, b] of [['ptx', 'cuda'], ['spirv', 'vulkan'], ['msl', 'metal']])
+      if (s === a || s.startsWith(a + ':')) s = b + s.slice(a.length)
+    return s === 'metal:0' ? 'metal' : s
+  }
+
+  const esc = (s: string) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`)
+
+  // model.ParsePlacement, error for error.
+  function parse(spec: string) {
+    const blocks = new Map<number, Place>()
+    let rest: Place | null = null
+    let head: Place | null = null
+    for (const raw of spec.split(',')) {
+      const e = raw.trim()
+      if (!e) continue
+      const eq = e.indexOf('=')
+      let where = eq < 0 ? '' : e.slice(eq + 1).trim()
+      if (eq < 0 || !where) throw `"${e}" is not SEL=WHERE`
+      const pl: Place = { on: '', pin: false, stream: false }
+      for (;;) {
+        if (where.endsWith('!')) { pl.pin = true; where = where.slice(0, -1); continue }
+        if (where.endsWith('~')) { pl.stream = true; where = where.slice(0, -1); continue }
+        break
+      }
+      pl.on = where === 'host' ? 'host' : devName(where)
+      if (pl.on === 'host' && pl.stream) throw `"${e}" streams a block through the host, which has no slots to stream through`
+      const sel = e.slice(0, eq).trim()
+      if (sel === 'head') {
+        if (pl.stream) throw 'the head is read every token and does not stream'
+        head = pl
+        continue
+      }
+      if (sel === '*') {
+        if (rest) throw 'the map names * twice'
+        rest = pl
+        continue
+      }
+      const [lo, hi = lo] = sel.split('-')
+      const a = /^\s*\d+\s*$/.test(lo) ? +lo : NaN
+      const b = /^\s*\d+\s*$/.test(hi) ? +hi : NaN
+      if (!(a >= 0) || !(b >= a)) throw `"${sel}" is not a block, a range N-M or head`
+      for (let i = a; i <= b; i++) {
+        if (blocks.has(i)) throw `the map names block ${i} twice`
+        blocks.set(i, pl)
+      }
+    }
+    return { blocks, rest, head }
+  }
+
+  for (const fig of document.querySelectorAll<HTMLElement>('[data-fig="placement"]')) {
+    const $ = <T extends Element>(s: string) => fig.querySelector<T>(s)!
+    const spec = $<HTMLInputElement>('[data-spec]')
+    const dev = $<HTMLInputElement>('[data-dev]')
+    const n = $<HTMLInputElement>('[data-n]')
+    const cells = $<HTMLElement>('[data-cells]')
+    const sum = $<HTMLElement>('[data-sum]')
+    const legend = $<HTMLElement>('[data-legend]')
+
+    const render = () => {
+      const N = +n.value
+      $('[data-no]').textContent = String(N)
+      const devs = dev.value.split(',').map((d) => d.split('=')[0]).map(devName).filter((d) => d && d !== 'cpu')
+      const nameless = devs.filter((d) => d === 'auto' || d === 'all')
+      const cls = (on: string) => (on === 'host' ? 'host' : devs.indexOf(on) === 0 ? 'gpu' : 'gpu2')
+      let p
+      try {
+        p = parse(spec.value)
+        for (const pl of [...p.blocks.values(), p.rest, p.head])
+          if (pl && pl.on !== 'host' && !devs.includes(pl.on))
+            throw nameless.length
+              ? `a device opened by ${nameless[0]} has no name a placement can use; name it in -devices (cuda:0, vulkan:1, ...)`
+              : `${pl.on} is not one of the devices -devices names`
+      } catch (err) {
+        cells.innerHTML = ''
+        sum.innerHTML = `<span class="err">refused: ${esc(String(err))}</span>`
+        return
+      }
+      const over = [...p.blocks.keys()].filter((i) => i >= N)
+      const tile = (label: string, pl: Place | null | undefined, extra = '') => {
+        if (!pl) return `<div class="cell engine${extra}" title="${label}: the engine places it">${label}</div>`
+        const mk = (pl.pin ? '!' : '') + (pl.stream ? '~' : '')
+        const t = `${label}: ${esc(pl.on)}${pl.pin ? ', pinned' : ''}${pl.stream ? ', streamed' : ''}`
+        return `<div class="cell ${cls(pl.on)}${pl.stream ? ' stream' : ''}${extra}" title="${t}">${label}${mk ? `<span class="mk">${mk}</span>` : ''}</div>`
+      }
+      cells.innerHTML =
+        Array.from({ length: N }, (_, i) => tile(String(i), p.blocks.get(i) ?? p.rest)).join('') + tile('head', p.head, ' head')
+      const count = new Map<string, number>()
+      for (let i = 0; i < N; i++) {
+        const pl = p.blocks.get(i) ?? p.rest
+        const k = pl ? pl.on + (pl.stream ? ' (streamed)' : '') : 'engine'
+        count.set(k, (count.get(k) ?? 0) + 1)
+      }
+      sum.innerHTML =
+        [...count].map(([k, v]) => `<span>${esc(k)} <b>${v}</b></span>`).join('') +
+        (over.length ? `<span class="err">block ${over[0]} is past the model's ${N} blocks</span>` : '')
+      legend.innerHTML =
+        `<span><i style="background:color-mix(in srgb,var(--host) 40%,var(--surface))"></i>host</span>` +
+        devs.filter((d) => !nameless.includes(d)).map((d, i) => `<span><i style="background:var(${i ? '--gpu2' : '--gpu'})"></i>${esc(d)}</span>`).join('') +
+        `<span><i style="background:repeating-linear-gradient(135deg,var(--surface) 0 3px,var(--bg-deep) 3px 6px)"></i>engine decides</span>` +
+        `<span><i style="border-style:dashed"></i>streamed</span>`
+    }
+    for (const el of [spec, dev, n]) el.addEventListener('input', render)
+    for (const b of fig.querySelectorAll<HTMLButtonElement>('[data-preset]'))
+      b.addEventListener('click', () => {
+        spec.value = b.dataset.preset!
+        render()
+      })
+    render()
+  }
+</script>

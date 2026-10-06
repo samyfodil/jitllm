@@ -1,0 +1,30 @@
+{
+ "documents": {
+  "ctx": "3934f5bdaefe2dad",
+  "out": "<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n<|im_start|>user\nHow warm does Zürich get in July?<|im_end|>\n<|im_start|>assistant\n"
+ },
+ "multiturn-nogen": {
+  "ctx": "9e65bfbe761a6fb9",
+  "out": "<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n<|im_start|>user\nName a prime.<|im_end|>\n<|im_start|>assistant\nSeven.<|im_end|>\n<|im_start|>user\nAnother,\nplease.<|im_end|>\n<|im_start|>assistant\n  Eleven.  <|im_end|>\n"
+ },
+ "system-multiturn": {
+  "ctx": "bd81de4e11232eb0",
+  "out": "<|im_start|>system\nYou are a terse assistant.<|im_end|>\n<|im_start|>user\nWhat is the capital of France?<|im_end|>\n<|im_start|>assistant\nParis.<|im_end|>\n<|im_start|>user\nAnd of Switzerland? Answer in one word, ça va ?<|im_end|>\n<|im_start|>assistant\n"
+ },
+ "tools-request": {
+  "ctx": "9cdcbe72e41b13be",
+  "out": "<|im_start|>system\nYou can look the weather up.\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get the current weather for a city\", \"parameters\": {\"type\": \"object\", \"properties\": {\"location\": {\"type\": \"string\", \"description\": \"City name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}, \"days\": {\"type\": \"integer\", \"description\": \"Forecast length\"}, \"radius_km\": {\"type\": \"number\", \"description\": \"Search radius\", \"default\": 5.0}}, \"required\": [\"location\"]}}}\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{{\"name\": <function-name>, \"arguments\": <args-json-object>}}\n</tool_call><|im_end|>\n<|im_start|>user\nWhat is the weather in Zürich?<|im_end|>\n<|im_start|>assistant\n"
+ },
+ "tools-result": {
+  "ctx": "fe2e8c41514a85d3",
+  "out": "<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get the current weather for a city\", \"parameters\": {\"type\": \"object\", \"properties\": {\"location\": {\"type\": \"string\", \"description\": \"City name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}, \"days\": {\"type\": \"integer\", \"description\": \"Forecast length\"}, \"radius_km\": {\"type\": \"number\", \"description\": \"Search radius\", \"default\": 5.0}}, \"required\": [\"location\"]}}}\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{{\"name\": <function-name>, \"arguments\": <args-json-object>}}\n</tool_call><|im_end|>\n<|im_start|>user\nWhat is the weather in Zürich for the next 3 days?<|im_end|>\n<|im_start|>assistant\n<tool_call>\n{\"name\": \"get_weather\", \"arguments\": {\"location\": \"Zürich\", \"unit\": \"celsius\", \"days\": 3, \"radius_km\": 10.0}}\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n{\"temperature\": 18.5, \"sky\": \"cloudy\"}\n</tool_response><|im_end|>\n<|im_start|>assistant\n"
+ },
+ "user": {
+  "ctx": "743387c365257a7e",
+  "out": "<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n<|im_start|>user\nHello!<|im_end|>\n<|im_start|>assistant\n"
+ },
+ "user-nogen": {
+  "ctx": "ca0e8999a27f5f1f",
+  "out": "<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n<|im_start|>user\nHello!<|im_end|>\n"
+ }
+}

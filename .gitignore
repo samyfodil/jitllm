@@ -1,0 +1,66 @@
+# Go coverage / profiling artifacts
+*.out
+*.prof
+*.test
+__pycache__/
+
+# models and generated kernels
+*.gguf
+/models/
+
+# compiled probe binaries (sources are tracked)
+dev/probe/cuda/overlap2
+dev/probe/cuda/pcie
+dev/probe/cuda/prefill
+dev/probe/gpu/probe
+/jitllm
+
+# Workflow worktrees: separate checkouts, never part of a commit here.
+
+# built binaries
+/jitllm
+/jpt
+/jpt-gpu
+/ptxdump
+/mvbench
+/jit/gpu/mvbench
+/tui/tui
+
+# Containers are derived from their GGUF by `jitllm convert` (and by the test
+# helper), so they are build products, not sources.
+*.jlm
+
+# Worktree convenience symlinks: in a worktree these point at the main
+# checkout, but committed to the repo they point at themselves (a loop).
+/models
+testdata/testdata
+/.library-gate-cli
+
+# UI build artifacts
+/ui/ui.exe
+/ui/jitllm-ui
+
+# Built tool binaries. They were COMMITTED for months -- seven of them, 21.5 MB
+# -- because the rules here were anchored to the root (/mvbench) and the
+# binaries sat beside their source. These match anywhere, and the source of
+# each lives in dev/tools/<name>/ rather than next to its own output.
+/jit/gpu/jpt-gpu
+/jit/gpu/jitllm-gpu
+/dev/probe/gpu/jitllmprobe
+/ui/shots
+
+# Local tool and editor configuration. The project's rules for people and
+# agents are AGENTS.md.
+CLAUDE.md
+.claude/
+.gstack/
+local-*
+.vscode/
+.idea/
+.DS_Store
+.env
+
+# The website's build output and dependencies
+/website/dist/
+/website/.astro/
+/website/node_modules/

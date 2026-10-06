@@ -1,0 +1,50 @@
+# jitllm
+
+> jitllm is an operating system for LLM inference. It scans your hardware, decides how to distribute a model's blocks across every CPU core and GPU, compiles optimized kernels for them at run time, and pages weights, experts and KV state through memory as demand changes.
+
+What that buys:
+
+- **Models larger than memory.** Weights are paged from disk through RAM and VRAM, so a model bigger than either still runs; a mixture of experts reads only the experts a token routes to.
+- **Relocation at run time.** Blocks move between the CPU and GPUs while a model is serving, and their attention and recurrent state move with them, so a conversation survives the move. Several GPUs, of different vendors, can share one model.
+- **Paged KV cache and long context.** The KV cache grows a page at a time instead of reserving the whole context, pages can spill to a store and come back, and a growing context can push blocks back to the host to make room.
+- **Prefix reuse.** KV pages are keyed by the tokens that produced them, so sessions and runs that share a system prompt or document reuse it without recomputing.
+- **No dependencies.** One self-contained executable per platform (Linux and macOS, x86-64 and ARM64): no Python, no vendor SDK. It finds the installed CUDA, Vulkan or Metal drivers on its own and falls back to the CPU.
+- **Drop-in APIs.** OpenAI- and Anthropic-compatible streaming endpoints, plus an embeddable Go library, a CLI and a desktop app.
+- **Breadth.** Dense, mixture-of-experts and hybrid recurrent architectures (Llama, Qwen, Gemma, Phi, GPT-OSS, DeepSeek, Kimi Linear and more), vision towers and embedding models.
+
+Things to know before using or changing it:
+
+- The engine reads only `.jlm`. `model.Open` refuses a GGUF and returns the convert command to run: `jitllm convert <gguf|hf-dir|hf://repo|catalog-name> out.jlm`.
+- Put flags before the model path. `jitllm run <file> -chat ...` treats `-chat` as prompt text, and the CLI refuses it.
+- Server endpoints: `POST /v1/chat/completions`, `POST /v1/completions`, `GET /v1/models` (OpenAI), `POST /v1/messages` (Anthropic), all streaming. A Connect API (`proto/jitllm/v1`) exposes models, sessions, devices, placement and telemetry.
+- Every engine knob is a per-model-instance Go option (`With...()`); the libraries read no environment variables. `cmd/jitllm` maps `JITLLM_*` variables onto those options.
+- Every operation a token runs is generated machine code; there is no interpreted fallback. Go reference arithmetic lives in `internal/oracle`, which only tests may import.
+- Performance claims are same-pass ratios against llama.cpp, naming host, hardware, backend and generation length.
+
+## Docs
+
+- [README](https://github.com/samyfodil/jitllm/blob/main/README.md): install, convert, serve, run, memory and device flags, vision, the desktop app, embedding in Go
+- [AGENTS.md](https://github.com/samyfodil/jitllm/blob/main/AGENTS.md): the project's binding rules, covering measurement, correctness gates, architecture scope and the no-mmap and no-Go-compute rules
+- [ROADMAP](https://github.com/samyfodil/jitllm/blob/main/ROADMAP.md): the seven planned items and where each stands
+- [Testing](https://github.com/samyfodil/jitllm/blob/main/docs/testing.md): how tests find models (`JITLLM_MODELS`), and `internal/testmodels/fetch.sh`
+- [Performance scoreboard](https://github.com/samyfodil/jitllm/blob/main/docs/perf/current.md): ratios against llama.cpp by host, backend and model
+
+## Code
+
+- [engine/model](https://github.com/samyfodil/jitllm/tree/main/engine/model): the inference engine (Open, State, Prefill/Forward, batching, Scheduler, KV stores, prefix cache, embeddings, vision)
+- [engine/nn](https://github.com/samyfodil/jitllm/tree/main/engine/nn): the kernel entry points the graph calls, and per-shape kernel selection
+- [engine/sched](https://github.com/samyfodil/jitllm/tree/main/engine/sched): the worker pool, core sets and memory budgets
+- [jit/cpu](https://github.com/samyfodil/jitllm/tree/main/jit/cpu): the x86-64 (SSE, AVX2, VNNI) and ARM64 code generators
+- [jit/gpu](https://github.com/samyfodil/jitllm/tree/main/jit/gpu): the kernel IR, the PTX/SPIR-V/MSL lowering, the CUDA/Vulkan/Metal backends and the device tier (placement, budgets, multi-GPU)
+- [format/jlm](https://github.com/samyfodil/jitllm/tree/main/format/jlm): the `.jlm` container and its pager (O_DIRECT reads, block and expert pages)
+- [convert](https://github.com/samyfodil/jitllm/tree/main/convert): GGUF and safetensors to `.jlm`, the supported architecture list (`convert.archOf`) and the model catalog
+- [tok](https://github.com/samyfodil/jitllm/tree/main/tok): tokenizers (BPE, SentencePiece, WordPiece), pre-tokenizer tables and the Jinja chat-template engine
+- [server](https://github.com/samyfodil/jitllm/tree/main/server): `jitllmd`, the OpenAI/Anthropic-compatible and Connect API server
+- [cmd/jitllm](https://github.com/samyfodil/jitllm/tree/main/cmd/jitllm): the CLI (`convert`, `run`, `embed`, `info`, `hardware`, `library`, `verify`, `asm`)
+
+## Optional
+
+- [Engineering history](https://github.com/samyfodil/jitllm/tree/main/docs/engineering-history): what was measured and tried per subsystem, including approaches that did not pay and the numbers behind them
+- [Design notes](https://github.com/samyfodil/jitllm/tree/main/docs/design): block paging, device sessions, model coverage and prior art
+- [Kernel capabilities](https://github.com/samyfodil/jitllm/blob/main/docs/kernel-capabilities.md): which kernels exist on which tier and backend
+- [Desktop app](https://github.com/samyfodil/jitllm/tree/main/ui): an in-process GUI for downloads, conversion and chat

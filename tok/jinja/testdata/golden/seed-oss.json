@@ -1,0 +1,30 @@
+{
+ "documents": {
+  "ctx": "1a4d15aec6519965",
+  "out": "<seed:bos>user\nHow warm does Zürich get in July?<seed:eos><seed:bos>assistant\n"
+ },
+ "multiturn-nogen": {
+  "ctx": "dbadb13849c50779",
+  "out": "<seed:bos>user\nName a prime.<seed:eos><seed:bos>assistant\nSeven.<seed:eos><seed:bos>user\nAnother,\nplease.<seed:eos><seed:bos>assistant\nEleven.<seed:eos>"
+ },
+ "system-multiturn": {
+  "ctx": "4c95c6466e83ec8b",
+  "out": "<seed:bos>system\nYou are a terse assistant.<seed:eos><seed:bos>user\nWhat is the capital of France?<seed:eos><seed:bos>assistant\nParis.<seed:eos><seed:bos>user\nAnd of Switzerland? Answer in one word, ça va ?<seed:eos><seed:bos>assistant\n"
+ },
+ "tools-request": {
+  "ctx": "aeba9b356d7a29ab",
+  "out": "<seed:bos>system\nYou can look the weather up.\n\nFunction:\ndef get_weather(location: str,unit: str,days: int,radius_km: int):\n    \"\"\"\n    Get the current weather for a city\n\n    Args:\n    - location (str) [必填]: City name\n    - unit (str) [选填]: \n    - days (int) [选填]: Forecast length\n    - radius_km (int) [选填]: Search radius\n\n    \"\"\"\n工具调用请遵循如下格式:\n<seed:tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>value_1</parameter>\n<parameter=example_parameter_2>This is the value for the second parameter\nthat can span\nmultiple lines</parameter>\n</function>\n</seed:tool_call>\n<seed:eos><seed:bos>user\nWhat is the weather in Zürich?<seed:eos><seed:bos>assistant\n"
+ },
+ "tools-result": {
+  "ctx": "9077581a9dd1335d",
+  "out": "<seed:bos>system\nYou are Doubao, a helpful AI assistant. You may call one or more functions to assist with the user query.\n\nFunction:\ndef get_weather(location: str,unit: str,days: int,radius_km: int):\n    \"\"\"\n    Get the current weather for a city\n\n    Args:\n    - location (str) [必填]: City name\n    - unit (str) [选填]: \n    - days (int) [选填]: Forecast length\n    - radius_km (int) [选填]: Search radius\n\n    \"\"\"\n工具调用请遵循如下格式:\n<seed:tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>value_1</parameter>\n<parameter=example_parameter_2>This is the value for the second parameter\nthat can span\nmultiple lines</parameter>\n</function>\n</seed:tool_call>\n<seed:eos><seed:bos>user\nWhat is the weather in Zürich for the next 3 days?<seed:eos><seed:bos>assistant\n<seed:tool_call>\n<function=get_weather>\n<parameter=location>Zürich</parameter>\n<parameter=unit>celsius</parameter>\n<parameter=days>3</parameter>\n<parameter=radius_km>10.0</parameter>\n</function>\n</seed:tool_call><seed:eos><seed:bos>tool\n{\"temperature\": 18.5, \"sky\": \"cloudy\"}<seed:eos><seed:bos>assistant\n"
+ },
+ "user": {
+  "ctx": "14c92bfdb8258727",
+  "out": "<seed:bos>user\nHello!<seed:eos><seed:bos>assistant\n"
+ },
+ "user-nogen": {
+  "ctx": "28e388b18ff438df",
+  "out": "<seed:bos>user\nHello!<seed:eos>"
+ }
+}

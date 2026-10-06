@@ -1,0 +1,60 @@
+---
+title: jitllm documentation
+description: What jitllm is, what it runs on, and where to start.
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components'
+import Pipeline from '../../../components/fig/Pipeline.astro'
+
+jitllm is an operating system for LLM inference. It compiles its kernels for the machine it lands on, places a model's blocks across every CPU core and GPU, and pages weights, experts and KV state through memory as demand changes.
+
+You talk to it through the APIs your applications already use: OpenAI-compatible chat and completions, and an Anthropic-compatible messages API. Underneath, one Go executable does the rest: no Python, no cgo, no vendor SDK. CUDA, Vulkan and Metal are found at runtime, and a machine with no GPU runs on the CPU.
+
+<CardGrid>
+  <Card title="Compiled for your machine" icon="rocket">
+    Every kernel is generated at load time for the CPU or GPU in front of it: SSE, AVX2, VNNI and NEON on the host; PTX, SPIR-V and MSL on the device. There is no interpreted fallback.
+  </Card>
+  <Card title="Scheduled like an OS" icon="random">
+    A model is a process and its blocks are threads. jitllm decides which block runs where, moves blocks between the CPU and GPUs while serving, and keeps the conversation intact when it does.
+  </Card>
+  <Card title="Paged like memory" icon="document">
+    Models larger than RAM or VRAM run. Weights, mixture-of-experts experts and KV pages are brought in on demand and evicted when something else needs the room.
+  </Card>
+  <Card title="Standard APIs" icon="puzzle">
+    Point an OpenAI or Anthropic client at it. Streaming, tool calls and system prompts work; a Connect API adds control over models, devices, placement and sessions.
+  </Card>
+</CardGrid>
+
+<Pipeline />
+
+## Five principles
+
+Every architecture, kernel and path keeps all five, and each has a test that enforces it.
+
+| Principle | What it means |
+|---|---|
+| **JIT** | Every kernel is emitted at run time for the device in front of it. The only assembly files in the project are the trampolines between Go and generated code. |
+| **No Go compute** | No arithmetic a token runs is a Go loop. A shape without an optimised kernel gets a basic generated one, never a fallback. |
+| **Relocation** | Any block, its KV pages and its recurrent state can move between the host and a device, or between devices, mid-conversation, with the same answer. |
+| **Paging** | Paging is the design, not a mode. A model that does not fit pages, and a budget below the model evicts and re-reads with the same answer. |
+| **Low to no Go allocation** | A warm decode token makes no engine heap allocations; weights and page frames live outside the Go heap. |
+
+## Start here
+
+<CardGrid>
+  <LinkCard title="Install" description="Install the two binaries from source on Linux, macOS or Windows." href="/docs/install/" />
+  <LinkCard title="Quickstart" description="Fetch a model, serve it and send it a request in five minutes." href="/docs/get-started/" />
+  <LinkCard title="Serve an API" description="Run jitllmd for OpenAI and Anthropic clients, with tool calls." href="/docs/guides/serve/" />
+  <LinkCard title="Supported models" description="Over sixty architectures, and the catalog convert fetches by name." href="/docs/reference/models/" />
+</CardGrid>
+
+## What is in the box
+
+| Binary | What it does |
+|---|---|
+| `jitllm` | Converts models, runs prompts, embeds text, benchmarks and inspects hardware. The engine runs in the process. |
+| `jitllmd` | The server. Serves the OpenAI, Anthropic and Connect APIs on one address, and is a client of a running server. |
+| `jitllm-desktop` | A desktop app for downloading models, chatting with text and images, and watching memory and devices. |
+| Go packages | The same engine as a library: `model.Open`, a `State`, and `Prefill`/`Forward`. See [Embed it in Go](/docs/guides/go/). |
+
+All three binaries and the library share one engine and one model format, [`.jlm`](/docs/reference/jlm/). Convert a GGUF or Hugging Face model once and use the result everywhere.

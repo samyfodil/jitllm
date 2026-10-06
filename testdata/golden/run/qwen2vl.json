@@ -1,0 +1,17 @@
+[
+ {
+  "prompt": "Once upon a time",
+  "n": 20,
+  "out": ", there was a small town called \"Little Town\". It was a small town with a population of\n\n"
+ },
+ {
+  "prompt": "The capital of France is",
+  "n": 20,
+  "out": " Paris. The distance from the airport to the city center is 12 km. The distance from\n\n"
+ },
+ {
+  "prompt": "One day, a little",
+  "n": 20,
+  "out": " boy named Timmy was playing with his toy car. He noticed that the toy car was moving in\n\n"
+ }
+]

@@ -1,0 +1,322 @@
+package tier
+
+import (
+	"fmt"
+
+	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/samyfodil/jitllm/jit/gpu/backend"
+	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+)
+
+// The device's own buffers -- the block scratches, the batched prompt's and
+// the ragged step's among them, and the staging -- are charged to the budget
+// the blocks use, and the widths the device will run are reserved when its
+// first block is placed. A prompt then finds its scratch already there,
+// rather than asking a card the blocks have filled for hundreds of
+// megabytes and going a row at a time when it is refused.
+//
+// The charge is MEASURED: a window around everything that builds or frees a
+// scratch reads the device's allocation count (backend.AllocCounter) before
+// and after, and the difference -- less whatever charge and refund moved
+// inside the window, which is a weight or a page already priced -- is the
+// scratch's. Pricing each buffer by hand is the walk that fell behind every
+// field added since (see freeScratch).
+
+// allocated is the bytes the device's buffers hold, or 0 on a device that
+// does not count them, where scratch is then not charged.
+func (g *devTier) allocated() int64 {
+	if g.cnt != nil {
+		return int64(g.cnt.Allocated())
+	}
+	return 0
+}
+
+// footprint is what one n-byte buffer costs the card: n rounded up to the
+// driver's granularity (backend.AllocCounter.FootprintOf), n where the device
+// does not say.
+func (g *devTier) footprint(n int) uint64 {
+	if g.cnt != nil {
+		return g.cnt.FootprintOf(n)
+	}
+	return uint64(n)
+}
+
+// planesFootprint is what a packed q tensor of rows x k costs the budget in
+// its three buffers, rounding included.
+func (g *devTier) planesFootprint(q kernels.Quant, rows, k int) (uint64, error) {
+	qs, d, sc, err := kernels.PackedWords(q, rows, k)
+	if err != nil {
+		return 0, err
+	}
+	return g.planeFootprint(qs) + g.planeFootprint(d) + g.planeFootprint(sc), nil
+}
+
+// planeFootprint is one plane of words. An empty plane (Q4_0's and Q8_0's
+// scales, say) is still a buffer: the upload hands the kernel a word for it
+// (resident, allocBytes) and charges nothing, so what the budget spends on it
+// is that word's rounding -- a page less four bytes on a card that rounds to
+// 64 KiB, nothing on one that does not.
+func (g *devTier) planeFootprint(words int) uint64 {
+	if words == 0 {
+		return g.footprint(4) - 4
+	}
+	return g.footprint(words * 4)
+}
+
+// settleRounding charges (or refunds) what the driver's page rounding costs
+// beyond the bytes asked for (backend.AllocCounter's Footprint less
+// Allocated): every buffer's charge, explicit or measured, is its size, and
+// the card spends more. It runs after every charge, refund and scratch
+// window, so it follows the allocations those account for. Callers hold g.mu.
+func (g *devTier) settleRounding() {
+	c := g.cnt
+	if c == nil {
+		return
+	}
+	d := int64(c.Footprint()) - int64(c.Allocated()) - int64(g.rounding)
+	switch {
+	case d > 0:
+		g.rounding += uint64(d)
+		g.used += uint64(d)
+		g.pool.take(uint64(d))
+	case d < 0:
+		n := min(uint64(-d), g.rounding, g.used)
+		g.rounding -= n
+		g.used -= n
+		g.pool.give(n)
+		g.roomGen.Add(1)
+	}
+}
+
+// scratchWin opens a window, closed by the mark it returns: what the device
+// allocated or freed in between, less the explicit charges, is charged to (or
+// refunded from) the scratch. Windows nest; only the outermost measures.
+// Callers hold g.mu.
+func (g *devTier) scratchWin() scratchMark {
+	g.winDepth++
+	if g.winDepth > 1 {
+		return scratchMark{g: g, inner: true}
+	}
+	return scratchMark{g: g, a: g.allocated(), x: g.explicit}
+}
+
+// scratchMark is an open window: a value, so a deferred close allocates
+// nothing on the paths a step runs every time (prepBatch, prepRagged).
+type scratchMark struct {
+	g     *devTier
+	a, x  int64
+	inner bool
+}
+
+// close ends the window, settling the outermost one.
+func (m scratchMark) close() {
+	g := m.g
+	g.winDepth--
+	if m.inner {
+		return
+	}
+	g.settleScratch(g.allocated() - m.a - (g.explicit - m.x))
+	g.settleRounding()
+}
+
+// settleScratch moves d bytes into (or out of) the scratch's share of both
+// accounts. It does not touch explicit: it is not an explicit charge.
+func (g *devTier) settleScratch(d int64) {
+	switch {
+	case d > 0:
+		g.scratch += uint64(d)
+		g.used += uint64(d)
+		g.pool.take(uint64(d))
+	case d < 0:
+		n := min(uint64(-d), g.scratch, g.used)
+		g.scratch -= n
+		g.used -= n
+		g.pool.give(n)
+		g.roomGen.Add(1)
+	}
+}
+
+// dropScratch frees bs and refunds what it held. Callers hold g.mu.
+func (g *devTier) dropScratch(bs *blockScratch) {
+	defer g.scratchWin().close()
+	freeScratch(bs)
+}
+
+// dropBatch frees the batched scratch of one width.
+func (g *devTier) dropBatch(w int) {
+	if bs := g.bbs[w]; bs != nil {
+		g.dropScratch(bs)
+		delete(g.bbs, w)
+	}
+	if g.promptW == w {
+		g.promptW = 0
+	}
+	if g.stepW == w {
+		g.stepW = 0
+	}
+}
+
+// dropAllScratch frees every scratch and the staging: what a device holding
+// no block and no head keeps of its own. Callers hold g.mu and drop the graph.
+func (g *devTier) dropAllScratch() {
+	defer g.scratchWin().close()
+	g.dropOtherGeom()
+	for w := range g.bbs {
+		g.dropBatch(w)
+	}
+	freeScratch(g.bs)
+	g.bs = nil
+	for _, b := range []*backend.Buf{&g.aBuf, &g.axBuf, &g.outBuf, &g.partBuf, &g.xfBuf, &g.f16Buf} {
+		if *b != nil {
+			(*b).Free()
+			*b = nil
+		}
+	}
+	g.aCap, g.axCap, g.outCap, g.partCap, g.f16Cap = 0, 0, 0, 0, 0
+	g.xfCap = 0
+}
+
+// overBudget reports whether what is charged has passed the budget, the
+// seats reserved for sessions included (room's test with nothing more).
+func (g *devTier) overBudget() bool { return !g.room(0) }
+
+// stepRows is the ragged step width reserved for, 0 for none.
+func (g *devTier) stepRows() int {
+	if g.StepRows <= 0 {
+		return 0
+	}
+	return roundUp(min(g.StepRows, batchWidth), batchGrain)
+}
+
+func roundUp(n, to int) int { return (n + to - 1) / to * to }
+
+// reserveScratch builds, at placement, the batched scratch a prompt chunk and
+// a ragged step will run in, so the blocks placed after it are budgeted
+// around it. The prompt width is halved until it fits: a narrower chunk is
+// a prompt that takes more submissions, where no scratch at all is one that
+// goes a row at a time. The step's width is the server's and is not halved
+// -- a step of more rows than were reserved is refused whatever this does --
+// so a step that does not fit is reported and reserved for nothing.
+//
+// need is what the block being placed will charge: the reservation leaves room
+// for it, so the first block is never the one the scratch pushes off the card
+// -- on a paging device, the one slot every block swaps through.
+//
+// Callers hold g.mu and have built g.bs.
+func (g *devTier) reserveScratch(p *nn.LayerPlan, need uint64) {
+	if g.NoScratchReserve || g.bs == nil || p.NonCausal {
+		return
+	}
+	g.reserving = true
+	defer func() { g.reserving = false }()
+	want := batchWidth
+	if g.PromptRows > 0 {
+		want = roundUp(min(g.PromptRows, batchWidth), batchGrain)
+	}
+	if sw := g.stepRows(); sw > 0 && g.stepW != sw {
+		if g.prepBatch(sw) && g.reserveRowsHead(g.bbs[sw], p) && g.reservePaged(g.bbs[sw]) && g.room(need) {
+			g.stepW = sw
+		} else {
+			g.LastErr = fmt.Sprintf("a %d-row ragged step's scratch does not fit the budget beside the decode scratch (%d of %d bytes charged)",
+				sw, g.used, g.limit)
+			g.dropBatch(sw)
+		}
+	}
+	if g.promptW >= want {
+		return
+	}
+	for w := want; w >= batchGrain; w = w / 2 / batchGrain * batchGrain {
+		if g.prepBatch(w) && g.reservePaged(g.bbs[w]) && g.room(need) {
+			g.promptW = w
+			return
+		}
+		if w != g.stepW {
+			g.dropBatch(w)
+		}
+	}
+}
+
+// reservePaged builds bs's paged attention plan for the deepest history it
+// can reach, so its partials and planes are at their widest before the blocks
+// are placed: they grow with the key count (pagedPlanFor), and a chunk deep in
+// a conversation would otherwise ask a full card for them. Shallower plans
+// then compile into buffers already that size. Callers hold g.mu.
+//
+// It builds one plan, at the deepest keys: a plan whose split count fell as
+// its keys grew would still grow its partials at the step; walk every key
+// count if one ever does.
+func (g *devTier) reservePaged(bs *blockScratch) bool {
+	if bs == nil {
+		return false
+	}
+	if bs.pkv == nil {
+		return true
+	}
+	defer g.scratchWin().close()
+	if _, err := g.pagedPlanFor(bs, roundUp(max(bs.p.MaxSeq, 1), scoreGrain)); err != nil {
+		g.LastErr = "paged attention: " + err.Error()
+		return false
+	}
+	return true
+}
+
+// reserveRowsHead allocates a ragged step's per-row logits and tokens at
+// placement, sized from the plan's vocabulary because the head arrives after
+// the blocks (prepRowsHead reuses them once it does). A plan that does not say
+// its vocabulary reserves nothing here and builds them at the first step.
+func (g *devTier) reserveRowsHead(bs *blockScratch, p *nn.LayerPlan) bool {
+	if bs == nil {
+		return false
+	}
+	if p.Vocab <= 0 || bs.ragLogits != nil {
+		return true
+	}
+	defer g.scratchWin().close()
+	var err error
+	if bs.ragLogits, err = g.dev.Alloc(bs.rows * p.Vocab * 4); err == nil {
+		bs.ragVocab = p.Vocab
+		bs.ragTok, err = g.dev.Alloc(bs.rows * 4)
+	}
+	// The capped twin a final softcap writes (prepRowsHead compiles the cap).
+	if err == nil && p.FinalSoftcap != 0 {
+		bs.ragCap, err = g.dev.Alloc(bs.rows * p.Vocab * 4)
+	}
+	if err != nil {
+		freeRagOut(bs)
+		g.LastErr = "rows: " + err.Error()
+		return false
+	}
+	return true
+}
+
+// freeRagOut frees a ragged step's per-row logits and tokens, and the capped
+// logits with the cap built for their width.
+func freeRagOut(bs *blockScratch) {
+	for _, b := range []*backend.Buf{&bs.ragLogits, &bs.ragTok, &bs.ragCap} {
+		if *b != nil {
+			(*b).Free()
+			*b = nil
+		}
+	}
+	if bs.ragCapK != nil {
+		bs.ragCapK.Close()
+		bs.ragCapK = nil
+	}
+	bs.ragVocab, bs.ragCapC = 0, 0
+}
+
+// batchFor is the batched scratch a chunk or step of width w runs in: its own
+// width's when it is built or fits the budget (prepBatch refuses one that does
+// not), else the reserved prompt or step scratch when that is wider, which
+// pads. It returns the width to use, 0 for none. Callers hold g.mu.
+func (g *devTier) batchFor(w int) int {
+	if g.prepBatch(w) {
+		return w
+	}
+	for _, r := range []int{g.promptW, g.stepW} {
+		if r > w && g.prepBatch(r) {
+			return r
+		}
+	}
+	return 0
+}

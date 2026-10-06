@@ -1,0 +1,473 @@
+---
+import Versus from '../components/Versus.astro'
+---
+<!doctype html>
+<html lang="en" data-theme="tokyo-night">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>jitllm — an operating system for LLM inference</title>
+    <meta name="description" content="jitllm is an operating system for LLM inference. It compiles for the machine it runs on, schedules model blocks across every CPU core and GPU, and pages weights, experts and KV state through memory, on Linux, macOS and Windows, x86-64 and ARM64." />
+    <meta name="theme-color" content="#0e0e14" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="jitllm — an operating system for LLM inference" />
+    <meta property="og:description" content="Compiled for your machine, scheduled across every core and GPU, paged through memory. OpenAI and Anthropic APIs, one Go executable." />
+    <meta name="twitter:card" content="summary" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <script is:inline>
+      // Apply the saved theme before first paint so the page never flashes.
+      try {
+        const t = localStorage.getItem('jitllm-theme')
+        if (t) document.documentElement.dataset.theme = t
+      } catch {}
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/themes.css" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <a class="skip" href="#os">Skip to content</a>
+
+    <header class="bar" data-bar>
+      <div class="bar-in col">
+        <a class="brand" href="#top" aria-label="jitllm home">
+          <span class="brand-mark" data-pixel="word" aria-hidden="true"></span>
+        </a>
+        <nav class="nav" aria-label="Primary">
+          <a href="#os">OS</a>
+          <a href="#numbers">Numbers</a>
+          <a href="#kernel">Kernel</a>
+          <a href="#jlm">.jlm</a>
+          <a href="#install">Install</a>
+          <a href="#api">API</a>
+          <a href="#models">Models</a>
+          <a href="/docs/">Docs</a>
+        </nav>
+        <div class="bar-tools">
+          <button class="icon-btn" type="button" data-theme-open aria-haspopup="dialog" aria-label="Change theme" title="Change theme">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M13 13h7v7h-7z" fill="currentColor"/></svg>
+          </button>
+          <a class="icon-btn hide-sm" href="https://github.com/samyfodil/jitllm" aria-label="jitllm on GitHub" title="GitHub">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.08.63-1.33-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02a9.5 9.5 0 0 1 5 0c1.91-1.3 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.75c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"/></svg>
+          </a>
+          <a class="btn btn-fill btn-sm hide-sm" href="#install">Get jitllm</a>
+          <button class="icon-btn show-sm" type="button" data-menu aria-expanded="false" aria-controls="menu" aria-label="Menu">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="1.8"/></svg>
+          </button>
+        </div>
+      </div>
+      <nav class="menu" id="menu" hidden aria-label="Mobile">
+        <div class="col">
+          <a href="#os">OS</a>
+          <a href="#numbers">Numbers</a>
+          <a href="#kernel">Kernel</a>
+          <a href="#jlm">.jlm</a>
+          <a href="#install">Install</a>
+          <a href="#api">API</a>
+          <a href="#models">Models</a>
+          <a href="/docs/">Docs</a>
+          <a href="https://github.com/samyfodil/jitllm">GitHub ↗</a>
+        </div>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero" data-hero>
+        <canvas class="field" data-field="hero" aria-hidden="true"></canvas>
+        <div class="hero-in">
+          <div class="grow"></div>
+          <a class="callout" href="#api" data-quiet data-stagger style="--i: 0">
+            <span>Serves OpenAI and Anthropic APIs</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+          </a>
+          <div class="wordmark-slot" data-wordmark title="Click to change theme" aria-hidden="true"></div>
+          <div class="hero-copy" data-quiet>
+            <h1 data-stagger style="--i: 1"><span class="sr-only">jitllm: </span>An operating system for LLM inference.</h1>
+            <p data-stagger style="--i: 2">
+              <span>It compiles for the machine it lands on, schedules models across every core and GPU, and pages them through memory as demand changes.</span>
+            </p>
+            <div class="hero-cta" data-stagger style="--i: 3">
+              <a class="btn btn-fill" href="#install">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+                Get jitllm
+              </a>
+              <a class="btn btn-line" href="https://github.com/samyfodil/jitllm">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7 4 12l5 5M15 7l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+                Read the source
+              </a>
+            </div>
+            <p class="detected" data-detected data-stagger style="--i: 4"></p>
+          </div>
+          <div class="grow"></div>
+        </div>
+      </section>
+
+      <section id="os" class="col sec manifesto" aria-labelledby="manifesto-title">
+        <p class="eyebrow">An operating system for LLM inference</p>
+        <h2 id="manifesto-title">Inference should meet the computer <em>where it is.</em></h2>
+        <p class="lede">Today an inference engine is a program you fit the machine to: pick a backend, size the model to the card, restart to change anything. jitllm turns that around. It starts with the model and the machine, then compiles, places and pages the work for whatever is in front of it, and keeps doing so while it serves.</p>
+      </section>
+
+      <section id="demo" class="band demo" aria-labelledby="demo-title">
+        <div class="col sec">
+          <div class="head">
+            <div>
+              <h2 class="h2" id="demo-title">Watch it schedule</h2>
+              <p class="desc">A small simulation of the runtime: models load from <code>.jlm</code>, placement picks a device for every block, blocks page from disk straight onto that device, and a token runs through them in order, growing each device's KV cache. Blocks and their KV move between devices only when placement changes. Click a model to send it a request, add CPUs and GPUs, or change where the blocks go.</p>
+            </div>
+          </div>
+          <div class="demo-grid">
+            <div class="machine-panel" data-machine-panel>
+              <div class="mp-head">
+                <h3>Loaded models</h3>
+                <button class="btn btn-line btn-sm" type="button" data-load>+ Load model</button>
+              </div>
+              <p class="mp-sum" data-summary></p>
+              <ul class="mp-list" data-models></ul>
+              <div class="mp-devices">
+                <div class="mp-sub"><span class="mp-label">Devices</span><span class="mp-add"><button type="button" class="chip-btn" data-add-cpu>+ CPU</button><button type="button" class="chip-btn" data-add-gpu>+ GPU</button></span></div>
+                <div class="dev-list" data-devices></div>
+                <div class="mp-sub"><span class="mp-label">Placement</span></div>
+                <div class="seg" role="radiogroup" aria-label="Placement">
+                  <button type="button" role="radio" data-mode="auto">auto</button>
+                  <button type="button" role="radio" data-mode="gpu">all on GPU</button>
+                  <button type="button" role="radio" data-mode="cpu">CPU only</button>
+                </div>
+              </div>
+              <p class="mp-log" data-log aria-live="polite"></p>
+            </div>
+            <div class="machine-wrap">
+              <svg class="machine" data-machine role="img" aria-label="Isometric view of a machine: a disk holding .jlm models, RAM, a GPU and a CPU, with model blocks moving between them"></svg>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="numbers" class="col sec" aria-labelledby="numbers-title">
+        <div class="head">
+          <div>
+            <h2 class="h2" id="numbers-title">Measured against the engines you know</h2>
+            <p class="desc">Same machine, same pass, same GGUF file. Ratios are jitllm ÷ the other engine; above 1.00× means jitllm is faster.</p>
+          </div>
+        </div>
+        <div class="stats">
+          <div class="stat"><p class="stat-n">4.62×</p><p class="stat-l">llama.cpp's prefill on Qwen3-Next-80B-A3B</p><p class="stat-c">4× V100, 512-token prompt</p></div>
+          <div class="stat"><p class="stat-n">5.5×</p><p class="stat-l">vLLM's throughput, 128 sequences batched</p><p class="stat-c">Llama-3.1-8B Q4_K_M, one V100</p></div>
+          <div class="stat"><p class="stat-n">34<span>/35</span></p><p class="stat-l">models prefill faster than on llama.cpp</p><p class="stat-c">V100, 360M to 120B, 1 to 5 GPUs; the 35th level at 1.00×</p></div>
+          <div class="stat"><p class="stat-n">35<span>/35</span></p><p class="stat-l">models decode faster than on llama.cpp</p><p class="stat-c">V100, 1.01× to 1.35×</p></div>
+        </div>
+
+        <div class="bench panel">
+          <div class="bench-tabs seg" role="tablist" aria-label="Benchmark boards">
+            <button type="button" role="tab" id="tab-v100" aria-controls="board-v100" aria-selected="true">V100 · vs llama.cpp</button>
+            <button type="button" role="tab" id="tab-batch" aria-controls="board-batch" aria-selected="false">Batched · vs vLLM</button>
+            <button type="button" role="tab" id="tab-ttft" aria-controls="board-ttft" aria-selected="false">Time to first token</button>
+            <button type="button" role="tab" id="tab-m4" aria-controls="board-m4" aria-selected="false">Apple M4</button>
+          </div>
+          <div class="board" id="board-v100" role="tabpanel" aria-labelledby="tab-v100" data-board="v100"></div>
+          <div class="board" id="board-batch" role="tabpanel" aria-labelledby="tab-batch" data-board="batch" hidden></div>
+          <div class="board" id="board-ttft" role="tabpanel" aria-labelledby="tab-ttft" data-board="ttft" hidden></div>
+          <div class="board" id="board-m4" role="tabpanel" aria-labelledby="tab-m4" data-board="m4" hidden></div>
+        </div>
+        <p class="method">jitllm <code>speed -p 512 -n 128 -r 2</code> against <code>llama-bench -p 512 -n 128 -ngl 99 -r 3</code> on the file jitllm converted from; vLLM 0.18.1, generated tokens over wall clock. Q4_K_M unless named. One pass per host. <a href="/docs/reference/benchmarks/">Hosts, method and the CPU board</a>.</p>
+      </section>
+
+      <section id="compare" class="col sec" aria-labelledby="compare-title">
+        <div class="head">
+          <div>
+            <h2 class="h2" id="compare-title">How it compares</h2>
+            <p class="desc">Pick an engine. Every feature is checked against that project's own documentation and source, and links to it.</p>
+          </div>
+          <a class="more" href="/docs/compare/">The full comparison <span aria-hidden="true">→</span></a>
+        </div>
+        <Versus />
+      </section>
+
+      <section class="col sec" aria-labelledby="analogy-title">
+        <div class="split">
+          <div>
+            <h2 class="h2" id="analogy-title">What an OS does for programs, jitllm does for models.</h2>
+            <p class="lede">It is one process. Inside it, models are the programs, their blocks are the threads, and every CPU core and accelerator on the machine is somewhere they can run.</p>
+            <p class="lede">Placement, paging and tuning are automatic, and every one of those decisions can be forced by the application.</p>
+          </div>
+          <div class="panel map" role="table" aria-label="Operating-system concepts and their jitllm counterparts">
+            <div class="map-row map-head" role="row"><span role="columnheader">Operating system</span><span role="columnheader">jitllm</span></div>
+            <div class="map-row" role="row"><span role="cell">process</span><span role="cell">a loaded model</span></div>
+            <div class="map-row" role="row"><span role="cell">thread</span><span role="cell">a layer, a block</span></div>
+            <div class="map-row" role="row"><span role="cell">CPU cores</span><span role="cell">CPU cores and every accelerator</span></div>
+            <div class="map-row" role="row"><span role="cell">scheduler</span><span role="cell">which block runs where</span></div>
+            <div class="map-row" role="row"><span role="cell">physical page</span><span role="cell">a packed block in a slot</span></div>
+            <div class="map-row" role="row"><span role="cell">page fault</span><span role="cell">a page-in</span></div>
+            <div class="map-row" role="row"><span role="cell">executable</span><span role="cell">the <code>.jlm</code> container</span></div>
+            <div class="map-row" role="row"><span role="cell">system calls</span><span role="cell">OpenAI, Anthropic, Connect APIs</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="principles" class="col sec">
+        <div class="head">
+          <div>
+            <h2 class="h2">Five principles, each held by a test</h2>
+            <p class="desc">Every architecture, kernel and path keeps all five.</p>
+          </div>
+          <a class="more" href="/docs/#five-principles">What they mean <span aria-hidden="true">→</span></a>
+        </div>
+        <ul class="models principles">
+          <li><b>JIT</b><span>Every kernel is emitted at run time for the device in front of it.</span></li>
+          <li><b>No Go compute</b><span>No arithmetic a token runs is a Go loop: a missing kernel is a basic generated one, never a fallback.</span></li>
+          <li><b>Relocation</b><span>Any block, its KV pages and its recurrent state move between devices mid-conversation, with the same answer.</span></li>
+          <li><b>Paging</b><span>A model that does not fit pages; a budget below the model re-reads, with the same answer.</span></li>
+          <li><b>Low to no Go allocation</b><span>A warm token allocates nothing on the Go heap; weights and frames live off it.</span></li>
+        </ul>
+      </section>
+
+      <section id="kernel" class="band">
+        <div class="col sec">
+          <div class="head">
+            <div>
+              <h2 class="h2">The kernel</h2>
+              <p class="desc">Four subsystems between your application and the hardware.</p>
+            </div>
+            <a class="more" href="/docs/concepts/how-it-works/">How it works <span aria-hidden="true">→</span></a>
+          </div>
+          <div class="rail" data-rail>
+            <article class="card">
+              <span class="pix" data-pixel="probe" aria-hidden="true"></span>
+              <span class="num">01 · discover</span>
+              <h3>Enumerates the hardware</h3>
+              <p>Reads the CPU's capabilities and finds installed CUDA and Vulkan libraries or the Metal framework. Shared CPU/GPU memory is counted once, as one pool.</p>
+              <p class="tags">SSE · AVX2 · VNNI · NEON · CUDA · Vulkan · Metal</p>
+            </article>
+            <article class="card">
+              <span class="pix" data-pixel="bolt" aria-hidden="true"></span>
+              <span class="num">02 · compile</span>
+              <h3>Generates the code</h3>
+              <p>Native x86-64 and ARM64 code and GPU kernels, specialized for the model's shapes and weight formats, then tuned by measurement: kernel layouts, worker counts, tiles, splits.</p>
+              <p class="tags">x86-64 · ARM64 · PTX · SPIR-V · MSL</p>
+            </article>
+            <article class="card">
+              <span class="pix" data-pixel="chip" aria-hidden="true"></span>
+              <span class="num">03 · schedule</span>
+              <h3>Places the work</h3>
+              <p>Blocks run on the CPU or on any GPU, spread across several at once. Placement can change between tokens: grow onto a GPU, give blocks back as context grows, tune the split.</p>
+              <p class="tags">CPU ⇄ GPU · multi-GPU · live migration</p>
+            </article>
+            <article class="card">
+              <span class="pix" data-pixel="pages" aria-hidden="true"></span>
+              <span class="num">04 · page</span>
+              <h3>Manages memory</h3>
+              <p>Weights, experts, KV pages and recurrent state move between VRAM, RAM and storage. Run models larger than RAM, and make room for another model without discarding a conversation.</p>
+              <p class="tags">weights · experts · KV · state</p>
+            </article>
+          </div>
+          <div class="rail-bar" aria-hidden="true"><i data-rail-thumb></i></div>
+
+          <dl class="spec">
+            <div><dt>Systems</dt><dd>Linux · macOS · Windows</dd></div>
+            <div><dt>Architectures</dt><dd>x86-64 · ARM64</dd></div>
+            <div><dt>Backends</dt><dd>CPU · CUDA · Vulkan · Metal</dd></div>
+            <div><dt>Setup</dt><dd>one executable, no Python, no SDK</dd></div>
+          </dl>
+        </div>
+      </section>
+
+      <section id="jlm" class="col sec">
+        <div class="split">
+          <div>
+            <p class="eyebrow">The executable format</p>
+            <h2 class="h2 jlm-title">Convert once. Page cheaply forever.</h2>
+            <p class="lede">An OS loads programs from a format built for loading. <code>.jlm</code> is that for models: GGUF or Hugging Face weights, with their quantization preserved, laid out once so evicting and reloading them during inference never repeats the preparation.</p>
+            <p class="lede">One file carries the weights, configuration, tokenizer, chat templates and optional vision tower, for the CLI, the server, the desktop app and the Go library alike.</p>
+            <a class="more" href="/docs/reference/jlm/">The format <span aria-hidden="true">→</span></a>
+          </div>
+          <ul class="points">
+            <li><span class="pix sm" data-pixel="box" aria-hidden="true"></span><div><b>No repacking on page-in</b><p>Quantized weights are stored in the layout the GPU backends share, so a reload is a read.</p></div></li>
+            <li><span class="pix sm" data-pixel="probe" aria-hidden="true"></span><div><b>Straight to the needed bytes</b><p>Predictable block offsets and addressable expert ranges let the pager fetch only what a token uses.</p></div></li>
+            <li><span class="pix sm" data-pixel="chip" aria-hidden="true"></span><div><b>One layout, every device</b><p>CUDA, Vulkan and Metal read the same container, so execution can move between backends and reuse it.</p></div></li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="install" class="col sec">
+        <div class="head">
+          <div>
+            <h2 class="h2">Install jitllm</h2>
+            <p class="desc">Build from source with Go 1.26 or newer. GPU backends use the libraries and drivers already on the machine; jitllm finds them at runtime.</p>
+          </div>
+          <a class="more" href="/docs/install/">Full guide <span aria-hidden="true">→</span></a>
+        </div>
+        <div class="two">
+          <div class="panel step">
+            <div class="step-head"><span class="pix sm" data-pixel="probe" aria-hidden="true"></span><h3>Build and fetch a model</h3></div>
+            <p>Clone, install the CLI and server, and convert a small instruct model (about 386 MB to download).</p>
+            <div class="cmd">
+              <div class="cmd-head"><span>shell</span><button class="copy" type="button" data-copy>Copy</button></div>
+<pre><code><span class="p">$</span> git clone https://github.com/samyfodil/jitllm.git
+<span class="p">$</span> cd jitllm &amp;&amp; go install ./cmd/jitllm
+<span class="p">$</span> (cd server &amp;&amp; go install ./cmd/jitllmd)
+<span class="p">$</span> mkdir -p models
+<span class="p">$</span> jitllm convert -o models smollm2-360m-instruct models/smollm2.jlm</code></pre>
+            </div>
+          </div>
+          <div class="panel step">
+            <div class="step-head"><span class="pix sm" data-pixel="bolt" aria-hidden="true"></span><h3>Serve and stream</h3></div>
+            <p>Start the API server with automatic device selection, then stream a chat from another terminal.</p>
+            <div class="cmd">
+              <div class="cmd-head"><span>shell</span><button class="copy" type="button" data-copy>Copy</button></div>
+<pre><code><span class="p">$</span> jitllmd serve -addr 127.0.0.1:8080 -models ./models \
+    -load smollm2.jlm -id smollm2 -devices auto
+<span class="p">$</span> curl http://127.0.0.1:8080/v1/chat/completions \
+    -H 'Content-Type: application/json' \
+    -d '&#123;"model":"smollm2","stream":true,
+         "messages":[&#123;"role":"user","content":"Hi"&#125;]&#125;'</code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="desktop" class="col sec">
+        <div class="head">
+          <div>
+            <h2 class="h2">A desktop app on the same engine</h2>
+            <p class="desc">Chat, choose a model, convert it, and watch where every block of it sits. The engine runs inside the app's own process.</p>
+          </div>
+          <a class="more" href="/docs/guides/desktop/">The desktop app <span aria-hidden="true">→</span></a>
+        </div>
+        <div class="panel shots" data-shots>
+          <div class="bench-tabs seg" role="tablist" aria-label="Desktop app screens"><button type="button" role="tab" id="shot-tab-chat" aria-controls="shot-chat" aria-selected="true">Chat</button><button type="button" role="tab" id="shot-tab-models" aria-controls="shot-models" aria-selected="false">Models</button><button type="button" role="tab" id="shot-tab-machine" aria-controls="shot-machine" aria-selected="false">Machine</button><button type="button" role="tab" id="shot-tab-discover" aria-controls="shot-discover" aria-selected="false">Discover</button></div>
+          <figure class="shot" id="shot-chat" role="tabpanel" aria-labelledby="shot-tab-chat">
+            <img class="shot-dark" src="/shots/chat-dark.png" width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Chat screen" />
+            <img class="shot-light" src="/shots/chat-light.png" width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Chat screen" />
+            <figcaption>Qwen3-30B-A3B, a 30B mixture of experts, answering on a laptop with a 4 GB GPU: one block on the card, the rest on the CPU, its experts paged from disk.</figcaption>
+          </figure>
+          <figure class="shot" id="shot-models" role="tabpanel" aria-labelledby="shot-tab-models" hidden>
+            <img class="shot-dark" src="/shots/models-dark.png" width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Models screen" />
+            <img class="shot-light" src="/shots/models-light.png" width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Models screen" />
+            <figcaption>The models in your folders, with what each one is and whether it fits, fits on the GPU or pages from disk.</figcaption>
+          </figure>
+          <figure class="shot" id="shot-machine" role="tabpanel" aria-labelledby="shot-tab-machine" hidden>
+            <img class="shot-dark" src="/shots/machine-dark.png" width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Machine screen" />
+            <img class="shot-light" src="/shots/machine-light.png" width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Machine screen" />
+            <figcaption>Where the 30B is: a block on the GPU, 47 on the host, its pages filling a 10.31 GiB budget, and every page the pager has read.</figcaption>
+          </figure>
+          <figure class="shot" id="shot-discover" role="tabpanel" aria-labelledby="shot-tab-discover" hidden>
+            <img class="shot-dark" src="/shots/discover-smartest-dark.png" width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Discover screen" />
+            <img class="shot-light" src="/shots/discover-smartest-light.png" width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Discover screen" />
+            <figcaption>Models this machine runs well, ranked for it, with an expected rate and whether each fits, before anything is downloaded. From the app's mock mode.</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section id="api" class="band">
+        <div class="col sec">
+          <div class="head">
+            <div>
+              <h2 class="h2">System calls your apps already make</h2>
+              <p class="desc">Applications reach the OS through APIs they already speak. Point a client at <code>http://127.0.0.1:8080/v1</code> and use the model's id as its name.</p>
+            </div>
+            <a class="more" href="/docs/guides/serve/">API guide <span aria-hidden="true">→</span></a>
+          </div>
+          <div class="three">
+            <div class="panel api">
+              <span class="num">OpenAI-compatible</span>
+              <code class="route">POST /v1/chat/completions</code>
+              <p>Chat and completion endpoints, streamed, with tool calls through the model's own chat template, for any OpenAI client.</p>
+            </div>
+            <div class="panel api">
+              <span class="num">Anthropic-compatible</span>
+              <code class="route">POST /v1/messages</code>
+              <p>The messages endpoint, streamed, with tool use, for clients written against Anthropic's API.</p>
+            </div>
+            <div class="panel api">
+              <span class="num">Connect API</span>
+              <code class="route">models · sessions · devices</code>
+              <p>Controls for model, session, device and placement, plus telemetry, when you want to steer the runtime.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="models" class="col sec">
+        <div class="head">
+          <div>
+            <h2 class="h2">Bring the models you want</h2>
+            <p class="desc">Convert from GGUF or Hugging Face once, then run the <code>.jlm</code> anywhere jitllm runs.</p>
+          </div>
+          <a class="more" href="/docs/reference/models/">All models <span aria-hidden="true">→</span></a>
+        </div>
+        <ul class="models">
+          <li><b>Llama</b><span>Llama 2 · Llama 3 · Llama 4 · Mistral · Ministral · SmolLM</span></li>
+          <li><b>Qwen</b><span>Qwen2 · Qwen3 · Qwen3.5 · Qwen3 MoE · Qwen3 Next · Qwen1.5 MoE</span></li>
+          <li><b>Gemma</b><span>Gemma 1 · Gemma 2 · Gemma 3 · Gemma 3n · Gemma 4</span></li>
+          <li><b>DeepSeek</b><span>DeepSeek V2 · V3 · V3.2 · V4 · Kimi K2 · Moonlight</span></li>
+          <li><b>GLM · Kimi</b><span>GLM-4 · GLM-4.5 · GLM-4.7-Flash · Kimi Linear · Kimi-K3</span></li>
+          <li><b>Mixtures</b><span>gpt-oss · MiniMax M2 · M3 · OLMoE · Mixtral · DBRX · Ling · dots.llm1 · ERNIE 4.5</span></li>
+          <li><b>State space</b><span>Mamba · Mamba-2 · Jamba · Falcon-H1 · Granite 4.0-H · Nemotron-H · LFM2</span></li>
+          <li><b>Phi</b><span>Phi-2 · Phi-3 · Phi-3.5-MoE · Phi-4</span></li>
+          <li><b>More families</b><span>Granite · Command-R · Hunyuan · OLMo · EXAONE · Seed-OSS · Apertus · Falcon · StableLM · Nemotron · StarCoder</span></li>
+          <li><b>Vision</b><span>Qwen2-VL · Qwen2.5-VL · Qwen3-VL · GLM-4.xV · Gemma 3/3n/4 · InternVL · MiniCPM-V · Pixtral · Llama 4 · Phi-4 · Kimi-VL · SmolVLM · LLaVA</span></li>
+          <li><b>Embeddings</b><span>BERT · nomic-bert · Qwen3-Embedding · EmbeddingGemma</span></li>
+          <li><b>Formats</b><span>GGUF · Hugging Face safetensors → .jlm</span></li>
+        </ul>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <canvas class="field" data-field="ground" aria-hidden="true"></canvas>
+      <div class="col foot-in">
+        <div class="foot-brand" data-quiet>
+          <a href="#top" class="foot-word" aria-label="jitllm, back to top"><span data-pixel="word" aria-hidden="true"></span></a>
+          <p>An operating system for LLM inference.</p>
+          <p><a href="https://github.com/samyfodil/jitllm/blob/main/LICENSE">Apache 2.0</a> · <a href="https://bunshinlabs.com">Bunshin Labs</a></p>
+        </div>
+        <div class="foot-links" data-quiet>
+          <div>
+            <h4>Project</h4>
+            <a href="https://github.com/samyfodil/jitllm">GitHub</a>
+            <a href="https://github.com/samyfodil/jitllm/issues">Issues</a>
+            <a href="https://github.com/samyfodil/jitllm#performance-and-contributing">Contributing</a>
+          </div>
+          <div>
+            <h4>Read</h4>
+            <a href="/docs/get-started/">Quickstart</a>
+            <a href="/docs/guides/serve/">Serve an API</a>
+            <a href="/docs/guides/devices/">Devices and placement</a>
+            <a href="/docs/guides/memory/">Memory and paging</a>
+            <a href="/docs/guides/go/">Embed in Go</a>
+            <a href="/docs/reference/benchmarks/">Benchmarks</a>
+          </div>
+        </div>
+      </div>
+    </footer>
+
+    <div class="picker" data-picker hidden>
+      <div class="picker-scrim" data-picker-close></div>
+      <div class="picker-box" role="dialog" aria-modal="true" aria-labelledby="picker-title">
+        <div class="picker-head">
+          <h2 id="picker-title">Theme</h2>
+          <button class="icon-btn" type="button" data-picker-close aria-label="Close">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="1.8"/></svg>
+          </button>
+        </div>
+        <div class="picker-list" data-picker-list></div>
+      </div>
+    </div>
+
+    <script is:inline src="/app.js"></script>
+    <script is:inline src="/machine.js"></script>
+    <script is:inline src="/numbers.js"></script>
+      <script is:inline>
+      // The desktop screenshots' tabs.
+      for (const root of document.querySelectorAll('[data-shots]')) {
+        const tabs = [...root.querySelectorAll('[role="tab"]')]
+        const show = (t) => tabs.forEach((o) => {
+          o.setAttribute('aria-selected', String(o === t))
+          document.getElementById(o.getAttribute('aria-controls')).hidden = o !== t
+        })
+        tabs.forEach((t) => t.addEventListener('click', () => show(t)))
+      }
+    </script>
+  </body>
+</html>

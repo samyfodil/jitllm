@@ -1,0 +1,218 @@
+---
+// What happens at load, for one matrix product: the shape and weight format
+// come from the model, the instructions from the hardware probe; the emitter
+// writes a loop specialised to all three, maps it executable, and the tuner
+// times variants of it on this machine and keeps the fastest.
+const hosts = [
+  ['vnni', 'AVX2+VNNI'], ['avx2', 'AVX2'], ['sse', 'SSE'], ['neon', 'NEON'],
+  ['ptx', 'CUDA'], ['spirv', 'Vulkan'], ['msl', 'Metal'],
+]
+const formats = ['Q4_0', 'Q8_0', 'Q4_K']
+const ks = [2048, 4096, 8192]
+---
+<figure class="fig not-content" data-fig="jit">
+  <div class="ctl jit-pick">
+    <span class="jit-k">target</span>
+    <span role="group" aria-label="Target" class="jit-seg">{hosts.map(([id, n], i) => <button type="button" data-host={id} aria-pressed={i === 0 ? 'true' : 'false'}>{n}</button>)}</span>
+  </div>
+  <div class="ctl jit-pick">
+    <span class="jit-k">format</span>
+    <span role="group" aria-label="Weight format" class="jit-seg">{formats.map((f, i) => <button type="button" data-fmt={f} aria-pressed={i === 2 ? 'true' : 'false'}>{f}</button>)}</span>
+    <span class="jit-k">k</span>
+    <span role="group" aria-label="Row length" class="jit-seg">{ks.map((k, i) => <button type="button" data-kk={k} aria-pressed={i === 0 ? 'true' : 'false'}>{k}</button>)}</span>
+    <span class="sp"></span>
+    <button type="button" data-replay>Replay</button>
+  </div>
+  <div class="fig-body">
+    <ol class="jit-phases" aria-label="Phases">
+      <li data-ph="0">probe</li><li data-ph="1">emit</li><li data-ph="2">map</li><li data-ph="3">tune</li><li data-ph="4">run</li>
+    </ol>
+    <div class="jit-grid">
+      <div>
+        <div class="lane-label" data-head>sketch of the emitted inner loop</div>
+        <pre class="jit-code" data-code aria-live="off"></pre>
+      </div>
+      <div>
+        <div class="lane-label" data-tunehead>tuner</div>
+        <div class="jit-tune" data-tune></div>
+        <p class="jit-msg" data-msg aria-live="polite"></p>
+      </div>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--m2)"></i>from the hardware probe</span>
+      <span><i style="background:var(--m3)"></i>from the weight format</span>
+      <span><i style="background:var(--brand)"></i>a constant from the shape</span>
+    </div>
+  </div>
+  <figcaption><b>The code is written for this machine and this model, at load.</b> Change the target, format or width and the loop is emitted again: other instructions, other unpacking, another trip count baked in as a constant. This is a sketch of the inner loop's structure, not a disassembly; <code>jitllm asm Q4_K</code> prints the real x86-64 kernel.</figcaption>
+</figure>
+
+<style is:global>
+  [data-fig='jit'] .jit-pick { gap: 0.4rem 0.6rem; }
+  [data-fig='jit'] .jit-k { color: var(--muted); font-size: 11px; }
+  [data-fig='jit'] .jit-seg { display: inline-flex; flex-wrap: wrap; gap: 0.25rem; }
+  .jit-phases { display: flex; gap: 0; margin: 0 0 0.9rem; padding: 0; list-style: none; counter-reset: ph; }
+  .jit-phases li { flex: 1; padding: 0.3rem 0.4rem; font-size: 11px; color: var(--muted); border-bottom: 2px solid var(--line-strong); counter-increment: ph; transition: color 0.3s, border-color 0.3s; }
+  .jit-phases li::before { content: counter(ph) ' '; }
+  .jit-phases li.done { color: var(--text-2); border-color: var(--f-mid); }
+  .jit-phases li.now { color: var(--text); border-color: var(--brand); }
+  .jit-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 1rem; }
+  @media (max-width: 720px) { .jit-grid { grid-template-columns: 1fr; } }
+  .jit-code { margin: 0; min-height: 17.5rem; padding: 0.6rem 0.75rem; background: var(--surface); border: 1px solid var(--line-strong); font: 12px/1.6 var(--sl-font-mono); color: var(--text-2); white-space: pre; overflow-x: auto; }
+  .jit-code .l { display: block; animation: jit-in 0.25s ease-out; }
+  .jit-code .c { color: var(--muted); }
+  .jit-code .h { color: var(--m2); }
+  .jit-code .f, .jit-code .f .c { color: var(--m3); }
+  .jit-code .k { color: var(--brand-ink); background: var(--brand); padding: 0 2px; }
+  .jit-code .cur { display: inline-block; width: 0.55em; height: 1em; vertical-align: -0.15em; background: var(--text); animation: jit-blink 0.8s steps(1) infinite; }
+  @keyframes jit-in { from { opacity: 0; transform: translateX(-4px); } }
+  @keyframes jit-blink { 50% { opacity: 0; } }
+  .jit-tune { display: grid; gap: 0.4rem; }
+  .jit-row { display: grid; grid-template-columns: 6.5rem 1fr 3.5rem; align-items: center; gap: 0.5rem; font-size: 11px; color: var(--text-2); }
+  .jit-row .bar { height: 0.7rem; background: var(--surface); border: 1px solid var(--line-strong); }
+  .jit-row .bar i { display: block; height: 100%; width: 0; background: var(--line-strong); transition: width 0.9s cubic-bezier(.3,.7,.2,1); }
+  .jit-row.win { color: var(--text); }
+  .jit-row.win .bar i { background: var(--brand); }
+  .jit-row .t { text-align: right; font-variant-numeric: tabular-nums; }
+  .jit-msg { margin: 0.8rem 0 0; font: 0.9rem/1.5 var(--sl-font); color: var(--text-2); min-height: 4.5em; }
+  @media (prefers-reduced-motion: reduce) { .jit-code .l { animation: none; } .jit-row .bar i { transition: none; } }
+</style>
+
+<script>
+  import { reduced } from './ticker'
+
+  type Isa = { load: string; and: string; shr: string; dot: string[]; scale: string; loop: string[]; c: string; cpu: boolean }
+  // The instructions each target's generator uses for the pieces of the loop.
+  const ISA: Record<string, Isa> = {
+    vnni: { c: ';', cpu: true, load: 'vmovdqu   ymm1, [rsi]', and: 'vpand     ymm2, ymm1, ymm_0f', shr: 'vpsrlw    ymm3, ymm1, 4', dot: ['vpdpbusd  ymm0, ymm2, ymm4'], scale: 'vfmadd231ps ymm8, ymm9, ymm10', loop: ['add       rsi, STRIDE', 'dec       ecx', 'jnz       .loop'] },
+    avx2: { c: ';', cpu: true, load: 'vmovdqu   ymm1, [rsi]', and: 'vpand     ymm2, ymm1, ymm_0f', shr: 'vpsrlw    ymm3, ymm1, 4', dot: ['vpmaddubsw ymm5, ymm2, ymm4', 'vpmaddwd  ymm5, ymm5, ymm_ones', 'vpaddd    ymm0, ymm0, ymm5'], scale: 'vfmadd231ps ymm8, ymm9, ymm10', loop: ['add       rsi, STRIDE', 'dec       ecx', 'jnz       .loop'] },
+    sse: { c: ';', cpu: true, load: 'movdqu    xmm1, [rsi]', and: 'pand      xmm2, xmm_0f', shr: 'psrlw     xmm3, 4', dot: ['pmaddubsw xmm5, xmm4', 'pmaddwd   xmm5, xmm_ones', 'paddd     xmm0, xmm5'], scale: 'mulps     xmm9, xmm10   ; no FMA here', loop: ['add       rsi, STRIDE', 'dec       ecx', 'jnz       .loop'] },
+    neon: { c: '//', cpu: true, load: 'ldr       q1, [x1], #STRIDE', and: 'and       v2.16b, v1.16b, v15.16b', shr: 'ushr      v3.16b, v1.16b, #4', dot: ['sdot      v0.4s, v2.16b, v4.16b'], scale: 'fmla      v8.4s, v9.4s, v10.4s', loop: ['subs      w3, w3, #1', 'b.ne      loop'] },
+    ptx: { c: '//', cpu: false, load: 'ld.global.u32  %r1, [%rd1];', and: 'and.b32        %r2, %r1, 0x0F0F0F0F;', shr: 'shr.u32        %r3, %r1, 4;', dot: ['dp4a.s32.s32   %r0, %r2, %r4, %r0;'], scale: 'fma.rn.f32     %f0, %f1, %f2, %f0;', loop: ['add.s64        %rd1, %rd1, STRIDE;', 'setp.lt.u32    %p1, %r9, TRIP;', '@%p1 bra       LOOP;'] },
+    spirv: { c: ';', cpu: false, load: '%w  = OpLoad %uint %wp', and: '%lo = OpBitwiseAnd %uint %w %c0f', shr: '%hi = OpShiftRightLogical %uint %w %c4', dot: ['%d  = OpSDot %int %lo %x PackedVectorFormat4x8Bit'], scale: '%s  = OpExtInst %float %glsl Fma %a %b %acc', loop: ['%p  = OpULessThan %bool %i %cTRIP', 'OpBranchConditional %p %loop %done'] },
+    msl: { c: '//', cpu: false, load: 'uint w = W[i];', and: 'uint lo = w & 0x0F0F0F0Fu;', shr: 'uint hi = (w >> 4) & 0x0F0F0F0Fu;', dot: ['acc += dot(unpack_snorm4x8_to_float(lo),', '           unpack_snorm4x8_to_float(x));'], scale: 'sum = fma(d, float(acc), sum);', loop: ['} // for (i = 0; i < TRIP; i++)'] },
+  }
+  const BLOCK: Record<string, number> = { Q4_0: 32, Q8_0: 32, Q4_K: 256 }
+
+  for (const fig of document.querySelectorAll<HTMLElement>('[data-fig="jit"]')) {
+    const $ = <T extends Element>(s: string) => fig.querySelector<T>(s)!
+    const code = $<HTMLElement>('[data-code]')
+    const tune = $<HTMLElement>('[data-tune]')
+    const msg = $<HTMLElement>('[data-msg]')
+    const phases = [...fig.querySelectorAll<HTMLElement>('[data-ph]')]
+    let host = 'vnni', fmt = 'Q4_K', k = 2048
+    let run = 0 // bumped on every change, so a stale animation stops
+
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    const phase = (n: number) => phases.forEach((p, i) => (p.className = i < n ? 'done' : i === n ? 'now' : ''))
+    const wait = (ms: number) => new Promise((r) => setTimeout(r, reduced ? 0 : ms))
+
+    // Each line is [source, text]: h = hardware, f = format, '' = structure.
+    const listing = (): [string, string][] => {
+      const I = ISA[host], c = I.c
+      const trip = k / BLOCK[fmt]
+      const fill = (s: string) =>
+        esc(s).replace('TRIP', `<span class="k">${trip}</span>`).replace('STRIDE', 'stride')
+      const L: [string, string][] = []
+      L.push(['', `<span class="c">${c} ${fmt} matvec, k = ${k}: ${trip} blocks of ${BLOCK[fmt]} per row</span>`])
+      if (I.cpu) L.push(['', `mov       ecx, <span class="k">${trip}</span>`])
+      L.push(['', I.cpu ? '.loop:' : `<span class="c">${c} per thread, ${trip} blocks a row</span>`])
+      L.push(['h', fill(I.load)])
+      if (fmt !== 'Q8_0') {
+        L.push(['f', `<span class="c">${c} unpack 4-bit weights</span>`])
+        L.push(['h', fill(I.and)])
+        L.push(['h', fill(I.shr)])
+      } else L.push(['f', `<span class="c">${c} Q8_0: bytes are the weights, no unpack</span>`])
+      for (const d of I.dot) L.push(['h', fill(d)])
+      if (fmt === 'Q4_K') L.push(['f', `<span class="c">${c} Q4_K: 8 sub-block scales and minimums</span>`])
+      L.push(['h', fill(I.scale)])
+      for (const l of I.loop) L.push(['', fill(l)])
+      return L
+    }
+
+    // Variants the tuner times, and where its answer lives.
+    const variants = () =>
+      ISA[host].cpu
+        ? { what: 'pack width', opts: ['pack 1', 'pack 2', 'pack 4'], where: 'cached in ~/.cache/jitllm, so the next run starts from it' }
+        : { what: 'k-split', opts: ['split 1', 'split 2', 'split 4', 'split 8'], where: 'chosen at load, each time the model opens' }
+
+    // A stable, made-up timing per (selection, variant): illustrative only.
+    const time = (i: number) => {
+      let h = 2166136261
+      for (const ch of `${host}${fmt}${k}${i}`) h = Math.imul(h ^ ch.charCodeAt(0), 16777619)
+      return 0.55 + ((h >>> 0) % 1000) / 2200
+    }
+
+    const play = async () => {
+      const me = ++run
+      const live = () => me === run
+      const I = ISA[host]
+      phase(0)
+      code.innerHTML = ''
+      tune.innerHTML = ''
+      $('[data-head]').textContent = `sketch of the emitted inner loop · ${I.cpu ? 'machine code for this CPU' : 'source handed to the driver'}`
+      msg.textContent = I.cpu
+        ? `The probe reports the CPU's instruction sets; the ${fig.querySelector(`[data-host="${host}"]`)!.textContent} tier's emitters are chosen.`
+        : `The ${fig.querySelector(`[data-host="${host}"]`)!.textContent} backend is opened through the driver, and its code generator chosen.`
+      await wait(900)
+      if (!live()) return
+      phase(1)
+      msg.textContent = 'The emitter writes the loop for this format and width. Shapes are constants, so the trip count is baked in rather than read at run time.'
+      for (const [src, text] of listing()) {
+        if (!live()) return
+        code.insertAdjacentHTML('beforeend', `<span class="l${src ? ' ' + src : ''}">${text}</span>`)
+        await wait(170)
+      }
+      code.insertAdjacentHTML('beforeend', '<span class="cur"></span>')
+      await wait(500)
+      if (!live()) return
+      phase(2)
+      msg.textContent = I.cpu
+        ? 'The bytes go into memory jitllm marks executable. There is no compiler and no file: the assembler is part of jitllm.'
+        : host === 'spirv'
+          ? 'jitllm assembles the SPIR-V words itself and hands them to the Vulkan driver.'
+          : `The ${host === 'ptx' ? 'PTX' : 'Metal Shading Language'} text goes to the driver, which compiles it for this GPU.`
+      await wait(1100)
+      if (!live()) return
+      phase(3)
+      const v = variants()
+      $('[data-tunehead]').textContent = `tuner · ${v.what}, timed on this machine`
+      const ts = v.opts.map((_, i) => time(i))
+      const best = ts.indexOf(Math.min(...ts))
+      tune.innerHTML = v.opts.map((o) => `<div class="jit-row"><span>${o}</span><span class="bar"><i></i></span><span class="t"></span></div>`).join('')
+      msg.textContent = 'The same loop is emitted at each setting and timed on real work. Nothing is read from a table.'
+      const rows = [...tune.children] as HTMLElement[]
+      await wait(50)
+      rows.forEach((r, i) => {
+        r.querySelector<HTMLElement>('i')!.style.width = `${(ts[i] / Math.max(...ts)) * 100}%`
+        r.querySelector('.t')!.textContent = `${ts[i].toFixed(2)}×`
+      })
+      await wait(1200)
+      if (!live()) return
+      rows[best].classList.add('win')
+      phase(4)
+      msg.textContent = `${v.opts[best]} wins and is ${v.where}. Every token now calls this code directly. (Timings here are illustrative.)`
+    }
+
+    const pick = (attr: string, set: (v: string) => void) => {
+      const bs = [...fig.querySelectorAll<HTMLButtonElement>(`[data-${attr}]`)]
+      for (const b of bs)
+        b.addEventListener('click', () => {
+          for (const o of bs) o.setAttribute('aria-pressed', String(o === b))
+          set(b.getAttribute(`data-${attr}`)!)
+          play()
+        })
+    }
+    pick('host', (v) => (host = v))
+    pick('fmt', (v) => (fmt = v))
+    pick('kk', (v) => (k = +v))
+    $('[data-replay]').addEventListener('click', play)
+    // Start when the reader first scrolls to it.
+    new IntersectionObserver(([e], o) => {
+      if (e.isIntersecting) {
+        o.disconnect()
+        play()
+      }
+    }).observe(fig)
+  }
+</script>

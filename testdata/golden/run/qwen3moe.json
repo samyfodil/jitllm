@@ -1,0 +1,17 @@
+[
+ {
+  "prompt": "Once upon a time",
+  "n": 20,
+  "out": ", there was a small town in the middle of nowhere. The town had a lot of people who\n\n"
+ },
+ {
+  "prompt": "The capital of France is",
+  "n": 20,
+  "out": " Paris. The capital of the United States is Washington, D.C. The capital of the United Kingdom\n\n"
+ },
+ {
+  "prompt": "One day, a little",
+  "n": 20,
+  "out": " girl is playing with her cat. She is trying to catch the cat, but the cat is very\n\n"
+ }
+]

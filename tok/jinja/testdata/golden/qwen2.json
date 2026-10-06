@@ -1,0 +1,30 @@
+{
+ "documents": {
+  "ctx": "aa5045b8ee0f8acc",
+  "out": "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\nHow warm does Zürich get in July?<|im_end|>\n<|im_start|>assistant\n"
+ },
+ "multiturn-nogen": {
+  "ctx": "276609d7853f1d87",
+  "out": "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\nName a prime.<|im_end|>\n<|im_start|>assistant\nSeven.<|im_end|>\n<|im_start|>user\nAnother,\nplease.<|im_end|>\n<|im_start|>assistant\n  Eleven.  <|im_end|>\n"
+ },
+ "system-multiturn": {
+  "ctx": "9c5b9a82ee225355",
+  "out": "<|im_start|>system\nYou are a terse assistant.<|im_end|>\n<|im_start|>user\nWhat is the capital of France?<|im_end|>\n<|im_start|>assistant\nParis.<|im_end|>\n<|im_start|>user\nAnd of Switzerland? Answer in one word, ça va ?<|im_end|>\n<|im_start|>assistant\n"
+ },
+ "tools-request": {
+  "ctx": "021bf76d1619911d",
+  "out": "<|im_start|>system\nYou can look the weather up.<|im_end|>\n<|im_start|>user\nWhat is the weather in Zürich?<|im_end|>\n<|im_start|>assistant\n"
+ },
+ "tools-result": {
+  "ctx": "be55739d2e74914c",
+  "out": "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\nWhat is the weather in Zürich for the next 3 days?<|im_end|>\n<|im_start|>assistant\n<|im_end|>\n<|im_start|>tool\n{\"temperature\": 18.5, \"sky\": \"cloudy\"}<|im_end|>\n<|im_start|>assistant\n"
+ },
+ "user": {
+  "ctx": "e73a8d7fc4be7df5",
+  "out": "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\nHello!<|im_end|>\n<|im_start|>assistant\n"
+ },
+ "user-nogen": {
+  "ctx": "f4b91052f1f2d888",
+  "out": "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\nHello!<|im_end|>\n"
+ }
+}

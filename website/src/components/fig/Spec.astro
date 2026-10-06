@@ -1,0 +1,211 @@
+---
+// Speculative decoding, a round at a time: the model's prediction block drafts
+// a few tokens, one pass of the full model checks them all, the drafts that
+// match are kept and the first that does not is replaced by the model's own
+// token. Every round yields at least one token, so it never loses one.
+---
+<figure class="fig not-content" data-fig="spec">
+  <div class="ctl">
+    <label>draft is right <input type="range" min="20" max="95" step="5" value="75" data-p aria-label="How often a drafted token is right" /> <output data-o="p">75</output>%</label>
+    <span class="spec-k" role="group" aria-label="Tokens drafted a round">
+      <span class="spec-kl">drafts a round</span>
+      <button type="button" data-k="auto" aria-pressed="true">auto</button>
+      {[1, 2, 3, 4, 5].map((k) => <button type="button" data-k={k} aria-pressed="false">{k}</button>)}
+    </span>
+    <span class="sp"></span>
+    <button type="button" data-play>Pause</button>
+    <button type="button" data-step>Step</button>
+    <button type="button" data-reset>Reset</button>
+  </div>
+  <div class="fig-body">
+    <div class="lane-label">output</div>
+    <p class="spec-out" data-out aria-live="off"></p>
+    <div class="spec-round">
+      <div class="spec-row"><span class="spec-who">prediction block<small>drafts, one token at a time, cheap</small></span><span class="spec-chips" data-drafts></span></div>
+      <div class="spec-row"><span class="spec-who">full model<small>one pass checks every draft</small></span><span class="spec-chips" data-verify><i class="spec-sweep" data-sweep></i></span></div>
+    </div>
+    <div class="stats" aria-live="polite">
+      <span>passes of the full model <b class="num" data-passes>0</b></span>
+      <span>tokens <b class="num" data-toks>0</b></span>
+      <span>tokens a pass <b class="num" data-tpp>–</b></span>
+      <span>vs one at a time <b class="num" data-speed>–</b></span>
+    </div>
+    <div class="legend">
+      <span><i style="background:color-mix(in srgb,var(--m2) 35%,var(--surface));border-color:var(--m2)"></i>drafted</span>
+      <span><i style="background:color-mix(in srgb,var(--brand) 35%,var(--surface));border-color:var(--brand)"></i>verified, kept</span>
+      <span><i style="background:color-mix(in srgb,var(--m3) 35%,var(--surface));border-color:var(--m3)"></i>the model's own token</span>
+      <span><i style="background:var(--bg-deep)"></i>rejected</span>
+    </div>
+  </div>
+  <figcaption><b>Several tokens for one pass of the full model, and never a different answer.</b> A draft is kept only if the full model agrees with it, so greedy output is token for token what one-at-a-time decoding gives. Lower the hit rate and the gain shrinks toward one token a pass; with <code>auto</code>, like <code>-spec-k 0</code>, the draft count follows the acceptance it measures. The speed-up counts a draft as an eighth of a full pass, an illustration rather than a measurement.</figcaption>
+</figure>
+
+<style is:global>
+  [data-fig='spec'] .spec-k { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.25rem; }
+  [data-fig='spec'] .spec-kl { color: var(--text-2); margin-right: 0.25rem; }
+  .spec-out { margin: 0 0 1rem; min-height: 4.8em; font: 15px/1.6 var(--sl-font, system-ui); color: var(--text); }
+  .spec-out .w { display: inline-block; margin-right: 0.3em; padding: 0 0.15em; border-radius: 2px; animation: spec-in 0.35s ease-out; }
+  .spec-out .w.kept { background: color-mix(in srgb, var(--brand) 22%, transparent); }
+  .spec-out .w.own { background: color-mix(in srgb, var(--m3) 26%, transparent); }
+  .spec-out .w.old { background: none; animation: none; }
+  @keyframes spec-in { from { opacity: 0; transform: translateY(4px); } }
+  .spec-round { display: grid; gap: 0.5rem; padding: 0.75rem; border: 1px solid var(--line-strong); background: var(--surface); }
+  .spec-row { display: grid; grid-template-columns: 10.5rem 1fr; gap: 0.75rem; align-items: center; min-height: 2.2rem; }
+  .spec-who { color: var(--text-2); font-size: 12px; line-height: 1.3; }
+  .spec-who small { display: block; color: var(--muted); font-size: 10.5px; }
+  .spec-chips { position: relative; display: flex; flex-wrap: wrap; gap: 0.35rem; min-height: 1.9rem; align-items: center; }
+  .spec-chip { padding: 0.2rem 0.5rem; font: 12.5px/1.3 var(--sl-font-mono, monospace); border: 1px solid var(--line-strong); background: var(--bg-deep); color: var(--text-2); animation: spec-in 0.25s ease-out; transition: background-color 0.3s, border-color 0.3s, color 0.3s, opacity 0.3s; }
+  .spec-chip.draft { border-color: var(--m2); background: color-mix(in srgb, var(--m2) 22%, var(--bg-deep)); color: var(--text); }
+  .spec-chip.ok { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 26%, var(--bg-deep)); color: var(--text); }
+  .spec-chip.bad { border-color: var(--line-strong); background: var(--bg-deep); color: var(--muted); text-decoration: line-through; opacity: 0.7; }
+  .spec-chip.own { border-color: var(--m3); background: color-mix(in srgb, var(--m3) 28%, var(--bg-deep)); color: var(--text); }
+  .spec-chip .tag { margin-left: 0.35rem; font-size: 10px; opacity: 0.8; }
+  .spec-sweep { position: absolute; top: -2px; bottom: -2px; left: 0; width: 0; border-right: 2px solid var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); pointer-events: none; opacity: 0; }
+  .spec-sweep.go { opacity: 1; width: 100%; transition: width 0.5s linear; }
+  @media (max-width: 640px) { .spec-row { grid-template-columns: 1fr; gap: 0.3rem; } }
+  @media (prefers-reduced-motion: reduce) { .spec-out .w, .spec-chip { animation: none; } .spec-sweep.go { transition: none; } }
+</style>
+
+<script>
+  import { ticker } from './ticker'
+
+  const TEXT = 'Paging moves a model\'s weights between the file and memory as each token needs them , so a model larger than the machine still runs , and a block that fits is read once and never again .'.split(' ')
+  const WRONG = ['the', 'a', 'it', 'is', 'of', 'and', 'to', 'in', 'that', 'its']
+  const DRAFT = 0.125 // a draft token's cost, as a fraction of a pass of the full model
+
+  for (const fig of document.querySelectorAll<HTMLElement>('[data-fig="spec"]')) {
+    const $ = <T extends Element>(s: string) => fig.querySelector<T>(s)!
+    const pIn = $<HTMLInputElement>('[data-p]')
+    const out = $<HTMLElement>('[data-out]')
+    const drafts = $<HTMLElement>('[data-drafts]')
+    const verify = $<HTMLElement>('[data-verify]')
+    const sweep = $<HTMLElement>('[data-sweep]')
+    const kBtns = [...fig.querySelectorAll<HTMLButtonElement>('[data-k]')]
+    let kMode = 'auto'
+
+    let at = 0 // next position in TEXT
+    let passes = 0, toks = 0, cost = 0
+    let seen = 0, hits = 0 // drafts verified and accepted so far, for auto
+    let phase: 'draft' | 'verify' | 'commit' = 'draft'
+    let plan: { word: string; right: boolean }[] = []
+    let k = 3
+
+    const word = (i: number) => TEXT[i % TEXT.length]
+    // auto picks the count with the most tokens per unit of cost at the
+    // acceptance seen so far: a round of k drafts yields 1 + p + ... + p^k.
+    const chooseK = () => {
+      if (kMode !== 'auto') return +kMode
+      const p = seen ? Math.min(0.97, hits / seen) : 0.7
+      let best = 1, bestRate = 0
+      for (let c = 0; c <= 5; c++) {
+        const yieldT = (1 - Math.pow(p, c + 1)) / (1 - p)
+        const rate = yieldT / (1 + c * DRAFT)
+        if (rate > bestRate) [best, bestRate] = [c, rate]
+      }
+      return best
+    }
+    const stats = () => {
+      $('[data-passes]').textContent = String(passes)
+      $('[data-toks]').textContent = String(toks)
+      $('[data-tpp]').textContent = passes ? (toks / passes).toFixed(2) : '–'
+      $('[data-speed]').textContent = cost ? `${(toks / cost).toFixed(2)}×` : '–'
+    }
+    const chip = (text: string, cls: string, tag = '') => {
+      const c = document.createElement('span')
+      c.className = `spec-chip ${cls}`
+      c.innerHTML = `${text.replace(/&/g, '&amp;').replace(/</g, '&lt;')}${tag ? `<span class="tag">${tag}</span>` : ''}`
+      return c
+    }
+    const emit = (w: string, cls: string) => {
+      for (const o of out.querySelectorAll('.w:not(.old)')) o.className = 'w old'
+      const s = document.createElement('span')
+      s.className = `w ${cls}`
+      s.textContent = w
+      out.appendChild(s)
+      // Keep the visible text to a few lines.
+      while (out.children.length > 34) out.firstElementChild!.remove()
+    }
+
+    const step = () => {
+      if (phase === 'draft') {
+        if (!plan.length) {
+          k = chooseK()
+          drafts.replaceChildren()
+          verify.replaceChildren(sweep)
+          sweep.classList.remove('go')
+          // Decide each draft's fate up front; a draft after a wrong one is
+          // drafted from the wrong token and is wrong too.
+          const p = +pIn.value / 100
+          let ok = true
+          for (let j = 0; j < k; j++) {
+            ok = ok && Math.random() < p
+            plan.push({ word: ok ? word(at + j) : WRONG[(at + j * 3) % WRONG.length], right: ok })
+          }
+          if (k === 0) phase = 'verify'
+        }
+        if (k > 0) {
+          const n = drafts.children.length
+          drafts.appendChild(chip(plan[n].word, 'draft'))
+          cost += DRAFT
+          if (n + 1 === k) phase = 'verify'
+        }
+      } else if (phase === 'verify') {
+        // One pass of the full model over every draft at once.
+        passes++
+        cost += 1
+        verify.replaceChildren(sweep)
+        const ds = [...drafts.children] as HTMLElement[]
+        let j = 0
+        while (j < plan.length && plan[j].right) j++
+        ds.forEach((d, i) => {
+          const c = chip(plan[i].word, i < j ? 'ok' : 'bad', i < j ? '✓' : '✗')
+          verify.appendChild(c)
+          d.className = `spec-chip ${i < j ? 'ok' : 'bad'}`
+        })
+        // The model's own token at the first miss, or one past the last draft.
+        verify.appendChild(chip(word(at + j), 'own', !plan.length ? 'no drafts this round' : j < plan.length ? 'its own' : 'one more'))
+        void sweep.offsetWidth
+        sweep.classList.add('go')
+        seen += plan.length
+        hits += j
+        phase = 'commit'
+      } else {
+        let j = 0
+        while (j < plan.length && plan[j].right) j++
+        for (let i = 0; i < j; i++) emit(word(at + i), 'kept')
+        emit(word(at + j), 'own')
+        at += j + 1
+        toks += j + 1
+        plan = []
+        phase = 'draft'
+      }
+      stats()
+    }
+
+    const reset = () => {
+      at = passes = toks = cost = seen = hits = 0
+      plan = []
+      phase = 'draft'
+      out.replaceChildren()
+      drafts.replaceChildren()
+      verify.replaceChildren(sweep)
+      stats()
+    }
+    pIn.addEventListener('input', () => {
+      $('[data-o="p"]').textContent = pIn.value
+      seen = hits = 0
+    })
+    for (const b of kBtns)
+      b.addEventListener('click', () => {
+        kMode = b.dataset.k!
+        for (const o of kBtns) o.setAttribute('aria-pressed', String(o === b))
+      })
+    const t = ticker(fig, step, 480, $('[data-play]'))
+    $('[data-step]').addEventListener('click', () => {
+      t.set(false)
+      step()
+    })
+    $('[data-reset]').addEventListener('click', reset)
+    reset()
+  }
+</script>

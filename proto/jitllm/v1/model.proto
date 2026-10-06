@@ -1,0 +1,232 @@
+syntax = "proto3";
+
+package jitllm.v1;
+
+import "jitllm/v1/common.proto";
+
+// ModelService is model lifecycle: what is on disk, what is loaded, and how a
+// GGUF becomes something this engine can read.
+//
+// The engine reads ONE weight format. `model.Open` refuses anything but a
+// `.jlm` container and returns an error carrying the convert command, so
+// LoadModel surfaces that as a typed refusal (NOT_CONVERTED) with the command
+// in `convert_command` rather than as an opaque failure.
+
+service ModelService {
+  // Containers and GGUFs discovered in the model directory, plus everything
+  // currently loaded.
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse) {}
+  rpc GetModel(GetModelRequest) returns (GetModelResponse) {}
+
+  // Load opens a container and builds the tier. It is the expensive call.
+  rpc LoadModel(LoadModelRequest) returns (LoadModelResponse) {}
+  rpc UnloadModel(UnloadModelRequest) returns (UnloadModelResponse) {}
+
+  // Convert is a GGUF -> .jlm conversion. It streams because a 46 GiB model
+  // takes minutes and a unary call would say nothing until it finished.
+  rpc Convert(ConvertRequest) returns (stream ConvertResponse) {}
+
+  // Tokenizer access. Useful on its own and needed by any client that wants
+  // to count context before spending it.
+  rpc Tokenize(TokenizeRequest) returns (TokenizeResponse) {}
+  rpc Detokenize(DetokenizeRequest) returns (DetokenizeResponse) {}
+
+  // Render a chat template without generating. A model that carries no
+  // template refuses by name rather than silently producing a raw completion,
+  // which is the failure mode the engine records as producing fluent output
+  // and no signal at all.
+  rpc ApplyChatTemplate(ApplyChatTemplateRequest) returns (ApplyChatTemplateResponse) {}
+}
+
+// ModelFile is something on disk that has not necessarily been opened.
+message ModelFile {
+  string path = 1;
+  string name = 2;
+  ByteSize size = 3;
+  // A `.jlm` container can be loaded. A `.gguf` must be converted first.
+  bool is_container = 4;
+  // Container format version, when it is a container and the header parsed.
+  uint32 container_version = 5;
+  // Present when `is_container` is false: the command that would convert it.
+  string convert_command = 6;
+}
+
+// ModelInfo describes a LOADED model. Every field here needs the container
+// open to answer.
+message ModelInfo {
+  string model_id = 1;
+  string path = 2;
+  string name = 3;
+
+  string architecture = 4;
+  int32 block_count = 5;
+  int32 embedding_dim = 6;
+  int32 context_length = 7;
+  int32 vocab_size = 8;
+
+  // Mixture geometry. Zero on a dense model.
+  int32 expert_count = 9;
+  int32 experts_used = 10;
+
+  // A hybrid alternates block kinds. Counts sum to `block_count`.
+  int32 attention_blocks = 11;
+  int32 linear_blocks = 12;
+
+  // Vision tower, when the container carries one. There is ONE container and
+  // one model; the tower is not a second model.
+  bool has_vision_tower = 13;
+  int32 vision_block_count = 14;
+
+  // Chat template presence. A caller that asks for chat on a model with no
+  // template gets a refusal, not a raw completion.
+  bool chat_capable = 15;
+  repeated string chat_template_names = 16;
+
+  // Pager geometry. `page_size` is fixed at conversion and a page holds a
+  // whole block, which is why residency is counted in whole blocks.
+  ByteSize page_size = 17;
+  ByteSize vision_page_size = 18;
+  ByteSize weight_bytes = 19;
+
+  // How many sessions currently hold this model.
+  int32 session_count = 20;
+
+  // Default placement newly created sessions inherit.
+  repeated string default_device_ids = 21;
+
+  // The embedding readout the container states: "mean", "cls" or "last" for
+  // an embedding model, which InferenceService.Embed serves; empty for a
+  // generative model, which Embed refuses.
+  string pooling = 22;
+  // True for an encoder (BERT, nomic-bert). It has no decoder session, so
+  // Generate and CreateSession refuse it and Embed is its only path.
+  bool encoder = 23;
+}
+
+message ListModelsRequest {
+  // Directory to scan. Empty means the server's configured model directory.
+  string directory = 1;
+  // Only report models that are currently loaded.
+  bool loaded_only = 2;
+}
+
+message ListModelsResponse {
+  repeated ModelFile files = 1;
+  repeated ModelInfo loaded = 2;
+  string directory = 3;
+}
+
+message GetModelRequest {
+  string model_id = 1;
+}
+
+message GetModelResponse {
+  ModelInfo model = 1;
+}
+
+message LoadModelRequest {
+  // Path to a `.jlm` container, absolute or relative to the model directory.
+  string path = 1;
+  // Optional stable id. Generated when empty.
+  string model_id = 2;
+
+  // Page budget in bytes. Zero takes the engine's own default, which is a
+  // fraction of the cgroup. A budget that lands one page short of fitting is
+  // a cliff and not a gradient, so this is worth setting deliberately.
+  uint64 page_budget_bytes = 3;
+
+  // Devices to offer blocks to, in preference order, as DeviceRef ids.
+  // Empty means host only.
+  repeated string device_ids = 4;
+
+  // Maximum blocks to place on a device. -1 (the default when unset) means
+  // "as many as fit". This is the seam.
+  optional int32 max_device_blocks = 5;
+
+  // KV cache width. Unset takes the per-architecture default the engine
+  // chooses from emitted kernel sizes.
+  optional bool kv_f16 = 6;
+}
+
+message LoadModelResponse {
+  ModelInfo model = 1;
+  // Wall time the load took, so a caller can tell a paged load from a
+  // resident one without a second call.
+  int64 load_millis = 2;
+}
+
+message UnloadModelRequest {
+  string model_id = 1;
+  // Close sessions holding this model instead of refusing. Without it, a
+  // model with live sessions is refused with FAILED_PRECONDITION.
+  bool force = 2;
+}
+
+message UnloadModelResponse {
+  int32 sessions_closed = 1;
+}
+
+message ConvertRequest {
+  // The GGUF to convert.
+  string source_path = 1;
+  // An optional mmproj GGUF. The two-file contract dies at conversion: one
+  // container carries text and vision.
+  string mmproj_path = 2;
+  // Destination `.jlm`. Empty derives it from `source_path`.
+  string output_path = 3;
+  // Overwrite an existing output.
+  bool overwrite = 4;
+}
+
+message ConvertResponse {
+  // A progress line. The converter reports by phase rather than by byte.
+  string phase = 1;
+  string detail = 2;
+  double fraction = 3;
+  bool done = 4;
+  string output_path = 5;
+  ByteSize output_size = 6;
+}
+
+message TokenizeRequest {
+  string model_id = 1;
+  string text = 2;
+  // Add the vocabulary's begin-of-text token. A RENDERED CHAT TEMPLATE is a
+  // complete prompt and must be tokenized with this FALSE, or the first turn
+  // gets a doubled begin-of-text.
+  bool add_special = 3;
+}
+
+message TokenizeResponse {
+  repeated int32 token_ids = 1;
+  // The text each id decodes to, in order. Useful for showing a caller where
+  // their prompt actually split.
+  repeated string pieces = 2;
+}
+
+message DetokenizeRequest {
+  string model_id = 1;
+  repeated int32 token_ids = 2;
+}
+
+message DetokenizeResponse {
+  string text = 1;
+}
+
+message ChatMessage {
+  string role = 1;
+  string content = 2;
+}
+
+message ApplyChatTemplateRequest {
+  string model_id = 1;
+  repeated ChatMessage messages = 2;
+  bool add_generation_prompt = 3;
+  // Template name. Empty takes the container's default.
+  string template_name = 4;
+}
+
+message ApplyChatTemplateResponse {
+  string prompt = 1;
+  repeated int32 token_ids = 2;
+}

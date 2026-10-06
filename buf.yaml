@@ -1,0 +1,20 @@
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+  except:
+    # A streaming RPC's response is a delta, not the noun the request names, so
+    # ...Response is the honest suffix and RPC_RESPONSE_STANDARD_NAME would
+    # force GenerateResponse to be named after a message it is not.
+    - RPC_REQUEST_RESPONSE_UNIQUE
+    # Complete and Generate take the SAME request and differ only in whether
+    # the response is accumulated, so a second identical message would be a
+    # lie about them being two paths. WatchStats streams the same snapshot
+    # GetStats returns once.
+    - RPC_REQUEST_STANDARD_NAME
+    - RPC_RESPONSE_STANDARD_NAME
+breaking:
+  use:
+    - FILE

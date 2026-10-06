@@ -1,0 +1,81 @@
+/* The seven themes, shared by the landing page ([data-theme]) and the docs
+   ([data-palette], since Starlight owns data-theme there for light/dark).
+   Palettes are the public colour schemes each theme is named after. */
+
+:root,
+[data-theme='tokyo-night'],
+[data-palette='tokyo-night'] {
+  --m1: #9ece6a; --m2: #7aa2f7; --m3: #bb9af7;
+  --bg-deep: #13141c; --bg: #1a1b26; --surface: #1f2230; --surface-2: #24283b;
+  --line: #24283b; --line-strong: #414868;
+  --text: #c0caf5; --text-2: #a9b1d6; --muted: #8b93b8;
+  --brand: #9ece6a; --brand-ink: #0c0e10;
+  --f-bg: #0e0e14; --f-dim: #39482e; --f-mid: #678549; --f-lit: #9ece6a; --f-hover: #bbdd97; --f-crest: #daecc6;
+  --ring: 0 0 0 1px rgb(255 255 255 / 0.07);
+  --ring-hover: 0 0 0 1px rgb(255 255 255 / 0.14);
+  --sel: #292e42;
+  color-scheme: dark;
+}
+[data-theme='catppuccin'],
+[data-palette='catppuccin'] {
+  --m1: #89b4fa; --m2: #a6e3a1; --m3: #cba6f7;
+  --bg-deep: #161622; --bg: #1e1e2e; --surface: #282839; --surface-2: #313244;
+  --line: #313244; --line-strong: #585b70;
+  --text: #cdd6f4; --text-2: #cdd6f4; --muted: #9399b2;
+  --brand: #89b4fa; --brand-ink: #0c0e10;
+  --f-bg: #101019; --f-dim: #34415c; --f-mid: #5b76a4; --f-lit: #89b4fa; --f-hover: #accafc; --f-crest: #d2e2fd;
+  --sel: #313244;
+}
+[data-theme='gruvbox'],
+[data-palette='gruvbox'] {
+  --m1: #7daea3; --m2: #a9b665; --m3: #d8a657;
+  --bg-deep: #1e1e1e; --bg: #282828; --surface: #32302f; --surface-2: #3c3836;
+  --line: #3c3836; --line-strong: #665c54;
+  --text: #d4be98; --text-2: #d4be98; --muted: #a89984;
+  --brand: #7daea3; --brand-ink: #0c0e10;
+  --f-bg: #161616; --f-dim: #354440; --f-mid: #56746d; --f-lit: #7daea3; --f-hover: #a4c6bf; --f-crest: #cee0dc;
+  --sel: #3c3836;
+}
+[data-theme='nord'],
+[data-palette='nord'] {
+  --m1: #81a1c1; --m2: #a3be8c; --m3: #b48ead;
+  --bg-deep: #222730; --bg: #2e3440; --surface: #343b49; --surface-2: #3b4252;
+  --line: #3b4252; --line-strong: #4c566a;
+  --text: #d8dee9; --text-2: #d8dee9; --muted: #9fa7b4;
+  --brand: #81a1c1; --brand-ink: #0c0e10;
+  --f-bg: #191c23; --f-dim: #384452; --f-mid: #596e85; --f-lit: #81a1c1; --f-hover: #a7bdd4; --f-crest: #cfdbe7;
+  --sel: #3b4252;
+}
+[data-theme='everforest'],
+[data-palette='everforest'] {
+  --m1: #7fbbb3; --m2: #a7c080; --m3: #d699b6;
+  --bg-deep: #21272c; --bg: #2d353b; --surface: #303a40; --surface-2: #343f44;
+  --line: #343f44; --line-strong: #475258;
+  --text: #d3c6aa; --text-2: #d3c6aa; --muted: #918f84;
+  --brand: #7fbbb3; --brand-ink: #0c0e10;
+  --f-bg: #181d20; --f-dim: #374c4c; --f-mid: #587f7b; --f-lit: #7fbbb3; --f-hover: #a5cfca; --f-crest: #cee5e2;
+  --sel: #343f44;
+}
+[data-theme='kanagawa'],
+[data-palette='kanagawa'] {
+  --m1: #dcd7ba; --m2: #7e9cd8; --m3: #957fb8;
+  --bg-deep: #17171e; --bg: #1f1f28; --surface: #202838; --surface-2: #223249;
+  --line: #223249; --line-strong: #54546d;
+  --text: #dcd7ba; --text-2: #dcd7ba; --muted: #a7a492;
+  --brand: #dcd7ba; --brand-ink: #0c0e10;
+  --f-bg: #111116; --f-dim: #4e4c47; --f-mid: #8f8c7c; --f-lit: #dcd7ba; --f-hover: #e6e3cf; --f-crest: #f2f0e5;
+  --sel: #223249;
+}
+[data-theme='rose-pine-dawn'],
+[data-palette='rose-pine-dawn'] {
+  --m1: #56949f; --m2: #907aa9; --m3: #d7827e;
+  --bg-deep: #ede7e1; --bg: #faf4ed; --surface: #fffaf3; --surface-2: #ede7e1;
+  --line: #e1dbd5; --line-strong: #cecacd;
+  --text: #575279; --text-2: #5e587d; --muted: #676284;
+  --brand: #56949f; --brand-ink: #ffffff;
+  --f-bg: #e1dbd5; --f-dim: #b7c6c5; --f-mid: #8bafb4; --f-lit: #56949f; --f-hover: #43737c; --f-crest: #2f5157;
+  --ring: 0 0 0 1px rgb(0 0 0 / 0.07), 0 1px 3px rgb(0 0 0 / 0.05);
+  --ring-hover: 0 0 0 1px rgb(0 0 0 / 0.14), 0 1px 3px rgb(0 0 0 / 0.06);
+  --sel: #dfdad9;
+  color-scheme: light;
+}

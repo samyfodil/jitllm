@@ -1,0 +1,46 @@
+---
+title: The .jlm format
+description: jitllm's model container, and why the engine runs no other weight format.
+---
+
+import JlmLayout from '../../../../components/fig/JlmLayout.astro'
+
+A `.jlm` file is a model laid out for paging. Conversion does every piece of layout work once, so that during inference a page-in is a read of a slice of the file into memory and nothing else: no repacking, no transposition, no reconstruction of the source's structure.
+
+The engine reads only `.jlm`. GGUF and safetensors are what the [converter](/docs/guides/convert/) reads, and nothing past it knows they exist. One format means one loader, one layout, one set of kernels and one answer to every question about residency.
+
+<JlmLayout />
+
+## Design
+
+**One layout for every backend.** Quantized weights are stored in the device layout the kernels want: element *u* of consecutive rows adjacent, the scale planes separated from the payload. The CPU reads that layout in place and the GPUs upload it untouched. The same container runs on CUDA, Vulkan, Metal and the host, and a model split across two backends reads one file.
+
+**A page is a block, and the file is the page array.** Block *i* occupies exactly `PageSize` bytes at `DataOff + i × PageSize`, padded at conversion. Finding a block is a multiplication; there is no index to walk and no estimate in the arithmetic.
+
+**Three page arrays.** Text blocks, vision-tower blocks and mixture-of-experts experts each have their own array with its own page size. One size would be wrong in both directions: a vision block and a 30B model's text block differ by fifty times. Experts get their own pages, one per (block, expert), so a token reads only the experts its router selected and the pager can evict them least-recently-used.
+
+**A dense region.** The embedding table, the output projection and the final norm are read every token, so they sit outside the page arrays and are always resident.
+
+**Native widths.** Formats are stored at their own bit widths wherever the kernels can read them there, so a container is close to its GGUF's size: exactly equal for Q4_0, Q5_0, Q5_1, Q8_0, Q4_K, Q5_K and MXFP4, and about 1% larger for Q6_K. Q3_K is the exception, stored at four bits for now.
+
+**Self-contained.** The tokenizer (vocabulary, merges and pre-tokenizer stages), the chat templates, a typed configuration record and the vision tower travel in the file. Inference never opens the source again.
+
+## Structure
+
+| Part | Contents |
+|---|---|
+| Header | 192 bytes: the magic `JITLLM\0\0`, a version, and the offset and length of everything else. Every offset is 64-bit, so containers over 4 GiB work. |
+| Config | the architecture and its constants, as typed fields |
+| Vocab | the tokenizer and chat templates |
+| Tensor table | each tensor's role, block, format, shape and span |
+| Dense region | tensors that belong to no block |
+| Text pages | `NBlocks × PageSize` |
+| Vision pages | `NVisBlocks × VisPageSize` |
+| Expert pages | `NExpPages × ExpPageSize` |
+| Fingerprint | the host, device and build the file was written by, compared on load and never enforced |
+
+Every span is aligned to 4096 bytes, which lets a GPU import a host buffer without a copy and lets eviction drop a span without straddling pages.
+
+## Versions
+
+The version is a separate field from the magic, because "is this a jitllm container" and "can this build read it" are different questions. Any layout change bumps it, and a reader refuses a version it does not know, naming it, rather than misreading it. There is no backward compatibility: a container is rebuilt from its source in seconds to minutes, so it is a cache, not an archive. The current version is 27.

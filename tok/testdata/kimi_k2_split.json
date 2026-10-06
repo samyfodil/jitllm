@@ -1,0 +1,198 @@
+[
+ {
+  "text": "Hello world",
+  "pieces": [
+   "Hello",
+   " world"
+  ]
+ },
+ {
+  "text": "helloWorld",
+  "pieces": [
+   "hello",
+   "World"
+  ]
+ },
+ {
+  "text": "getUserName",
+  "pieces": [
+   "get",
+   "User",
+   "Name"
+  ]
+ },
+ {
+  "text": "iPhone",
+  "pieces": [
+   "i",
+   "Phone"
+  ]
+ },
+ {
+  "text": "HTTPServer isn't ready",
+  "pieces": [
+   "HTTPServer",
+   " isn't",
+   " ready"
+  ]
+ },
+ {
+  "text": "Isn't it",
+  "pieces": [
+   "Isn't",
+   " it"
+  ]
+ },
+ {
+  "text": "价格是100元",
+  "pieces": [
+   "价格是",
+   "100",
+   "元"
+  ]
+ },
+ {
+  "text": "中文abc混合English",
+  "pieces": [
+   "中文",
+   "abc",
+   "混合",
+   "English"
+  ]
+ },
+ {
+  "text": "  leading and   trailing  ",
+  "pieces": [
+   " ",
+   " leading",
+   " and",
+   "  ",
+   " trailing",
+   "  "
+  ]
+ },
+ {
+  "text": "a\n\nb",
+  "pieces": [
+   "a",
+   "\n\n",
+   "b"
+  ]
+ },
+ {
+  "text": "1234567",
+  "pieces": [
+   "123",
+   "456",
+   "7"
+  ]
+ },
+ {
+  "text": "path/to/file.txt",
+  "pieces": [
+   "path",
+   "/to",
+   "/file",
+   ".txt"
+  ]
+ },
+ {
+  "text": "x'S Y'T",
+  "pieces": [
+   "x'S",
+   " Y'T"
+  ]
+ },
+ {
+  "text": "ſ'ſ",
+  "pieces": [
+   "ſ'ſ"
+  ]
+ },
+ {
+  "text": "KaKe",
+  "pieces": [
+   "Ka",
+   "Ke"
+  ]
+ },
+ {
+  "text": "日本語テスト",
+  "pieces": [
+   "日本語",
+   "テスト"
+  ]
+ },
+ {
+  "text": "emoji 🙂 and punct!!",
+  "pieces": [
+   "emoji",
+   " 🙂",
+   " and",
+   " punct",
+   "!!"
+  ]
+ },
+ {
+  "text": "⺀一",
+  "pieces": [
+   "⺀一"
+  ]
+ },
+ {
+  "text": "々〇x",
+  "pieces": [
+   "々〇",
+   "x"
+  ]
+ },
+ {
+  "text": "豈二",
+  "pieces": [
+   "豈二"
+  ]
+ },
+ {
+  "text": "𮯰y",
+  "pieces": [
+   "𮯰",
+   "y"
+  ]
+ },
+ {
+  "text": "tab\tsep",
+  "pieces": [
+   "tab",
+   "\tsep"
+  ]
+ },
+ {
+  "text": " 中文",
+  "pieces": [
+   " ",
+   "中文"
+  ]
+ },
+ {
+  "text": "中 文",
+  "pieces": [
+   "中",
+   " ",
+   "文"
+  ]
+ },
+ {
+  "text": "a中",
+  "pieces": [
+   "a",
+   "中"
+  ]
+ },
+ {
+  "text": "中1",
+  "pieces": [
+   "中",
+   "1"
+  ]
+ }
+]

@@ -1,0 +1,94 @@
+package main
+
+import (
+	"bufio"
+	"flag"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/samyfodil/jitllm/engine/model"
+)
+
+// embedCmd is `jitllm embed <model.jlm> <text...>`: the text's pooled,
+// L2-normalised embedding, printed as one JSON array on stdout.
+//
+// It reads one vector out of the last residual and never computes a logit. The
+// container says which readout (mean, first, last) and whether attention looks
+// both ways, so there is no flag for either: the wrong pooling would give a
+// vector the weights were never trained to produce.
+//
+// With -lines, every line of stdin is embedded in turn and printed one array
+// per line, which is how a corpus is indexed without paying the load per text.
+func embedCmd(args []string) error {
+	fs := flag.NewFlagSet("embed", flag.ExitOnError)
+	showIDs := fs.Bool("ids", false, "print the token ids to stderr")
+	lines := fs.Bool("lines", false, "embed every line of stdin instead of the text arguments")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := misplacedFlag(fs); err != nil {
+		return err
+	}
+	if fs.NArg() < 1 || (fs.NArg() < 2 && !*lines) {
+		return fmt.Errorf("usage: jitllm embed [-ids] [-lines] <model.jlm> <text...>")
+	}
+	t0 := time.Now()
+	m, err := model.Open(fs.Arg(0), loadOpts(nil, 0)...)
+	if err != nil {
+		return err
+	}
+	defer m.Close()
+	if !m.IsEmbedding() {
+		return fmt.Errorf("%s is not an embedding model: its container sets no pooling "+
+			"(generate from it with `jitllm run`)", fs.Arg(0))
+	}
+	if m.Vocab == nil {
+		return fmt.Errorf("%s: no tokenizer: %v", fs.Arg(0), m.TokErr)
+	}
+	e, err := m.NewEmbedder()
+	if err != nil {
+		return err
+	}
+	defer e.Close()
+	fmt.Fprintf(os.Stderr, "%s: %s, %d dims, %v pooling, loaded in %v\n",
+		fs.Arg(0), m.Cfg.Arch, m.Cfg.NEmbd, m.Pooling(), time.Since(t0).Round(time.Millisecond))
+	out := bufio.NewWriter(os.Stdout)
+	defer out.Flush()
+	one := func(text string) error {
+		ids := m.EmbedIDs(text)
+		if *showIDs {
+			fmt.Fprintln(os.Stderr, ids)
+		}
+		t := time.Now()
+		v, err := e.Embed(ids)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "%d tokens in %v\n", len(ids), time.Since(t).Round(time.Microsecond))
+		b := make([]byte, 0, len(v)*12+2)
+		b = append(b, '[')
+		for i, x := range v {
+			if i > 0 {
+				b = append(b, ',')
+			}
+			b = strconv.AppendFloat(b, float64(x), 'g', 8, 32)
+		}
+		b = append(b, ']', '\n')
+		_, err = out.Write(b)
+		return err
+	}
+	if !*lines {
+		return one(strings.Join(fs.Args()[1:], " "))
+	}
+	sc := bufio.NewScanner(os.Stdin)
+	sc.Buffer(make([]byte, 1<<20), 1<<26)
+	for sc.Scan() {
+		if err := one(sc.Text()); err != nil {
+			return err
+		}
+	}
+	return sc.Err()
+}

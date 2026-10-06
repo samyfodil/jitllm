@@ -1,0 +1,30 @@
+{
+ "documents": {
+  "ctx": "2d27c9df7b8468e5",
+  "out": "<|im_system|>system<|im_middle|>You are a helpful assistant<|im_end|><|im_user|>user<|im_middle|>How warm does Zürich get in July?<|im_end|><|im_assistant|>assistant<|im_middle|>"
+ },
+ "multiturn-nogen": {
+  "ctx": "db02fdd6ed378f83",
+  "out": "<|im_system|>system<|im_middle|>You are a helpful assistant<|im_end|><|im_user|>user<|im_middle|>Name a prime.<|im_end|><|im_assistant|>assistant<|im_middle|>Seven.<|im_end|><|im_user|>user<|im_middle|>Another,\nplease.<|im_end|><|im_assistant|>assistant<|im_middle|>  Eleven.  <|im_end|>"
+ },
+ "system-multiturn": {
+  "ctx": "a36a0a7ce2713d6a",
+  "out": "<|im_system|>system<|im_middle|>You are a terse assistant.<|im_end|><|im_user|>user<|im_middle|>What is the capital of France?<|im_end|><|im_assistant|>assistant<|im_middle|>Paris.<|im_end|><|im_user|>user<|im_middle|>And of Switzerland? Answer in one word, ça va ?<|im_end|><|im_assistant|>assistant<|im_middle|>"
+ },
+ "tools-request": {
+  "ctx": "6d88b8c95e269574",
+  "out": "<|im_system|>system<|im_middle|>You can look the weather up.<|im_end|><|im_user|>user<|im_middle|>What is the weather in Zürich?<|im_end|><|im_assistant|>assistant<|im_middle|>"
+ },
+ "tools-result": {
+  "ctx": "46f2192972797982",
+  "out": "<|im_system|>system<|im_middle|>You are a helpful assistant<|im_end|><|im_user|>user<|im_middle|>What is the weather in Zürich for the next 3 days?<|im_end|><|im_assistant|>assistant<|im_middle|><|im_end|>tool<|im_middle|>{\"temperature\": 18.5, \"sky\": \"cloudy\"}<|im_end|><|im_assistant|>assistant<|im_middle|>"
+ },
+ "user": {
+  "ctx": "aff7eb79af7eb847",
+  "out": "<|im_system|>system<|im_middle|>You are a helpful assistant<|im_end|><|im_user|>user<|im_middle|>Hello!<|im_end|><|im_assistant|>assistant<|im_middle|>"
+ },
+ "user-nogen": {
+  "ctx": "e80110e55f61aae6",
+  "out": "<|im_system|>system<|im_middle|>You are a helpful assistant<|im_end|><|im_user|>user<|im_middle|>Hello!<|im_end|>"
+ }
+}

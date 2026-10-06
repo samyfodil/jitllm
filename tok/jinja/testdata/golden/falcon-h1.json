@@ -1,0 +1,30 @@
+{
+ "documents": {
+  "ctx": "e870659768413742",
+  "out": "<|begin_of_text|><|im_start|>user\nHow warm does Zürich get in July?<|im_end|>\n<|im_start|>assistant\n"
+ },
+ "multiturn-nogen": {
+  "ctx": "86d2e224702509ab",
+  "out": "<|begin_of_text|><|im_start|>user\nName a prime.<|im_end|>\n<|im_start|>assistant\nSeven.<|im_end|>\n<|im_start|>user\nAnother,\nplease.<|im_end|>\n<|im_start|>assistant\n  Eleven.  <|im_end|>\n"
+ },
+ "system-multiturn": {
+  "ctx": "4b4ad45c8b24c9de",
+  "out": "<|begin_of_text|><|im_start|>system\nYou are a terse assistant.<|im_end|>\n<|im_start|>user\nWhat is the capital of France?<|im_end|>\n<|im_start|>assistant\nParis.<|im_end|>\n<|im_start|>user\nAnd of Switzerland? Answer in one word, ça va ?<|im_end|>\n<|im_start|>assistant\n"
+ },
+ "tools-request": {
+  "ctx": "0a99ee67a9bc3fd9",
+  "out": "<|begin_of_text|><|im_start|>system\nYou can look the weather up.\n\nYou are a function calling AI model. You are provided with function signature within <tools> </tools> XML tags. You may call one or more functions to assist with the user query. Don't make assumptions about what values to plug into functions.\n<tools>\n[{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get the current weather for a city\", \"parameters\": {\"type\": \"object\", \"properties\": {\"location\": {\"type\": \"string\", \"description\": \"City name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}, \"days\": {\"type\": \"integer\", \"description\": \"Forecast length\"}, \"radius_km\": {\"type\": \"number\", \"description\": \"Search radius\", \"default\": 5.0}}, \"required\": [\"location\"]}}}]\n</tools>\nFor each function call, return a json object with function name and arguments within <tool_call> </tool_call> tags with the following schema:\n<tool_call>\n{'arguments': <args-dict>, 'name': <function-name>}\n</tool_call>\n<|im_start|>user\nWhat is the weather in Zürich?<|im_end|>\n<|im_start|>assistant\n"
+ },
+ "tools-result": {
+  "ctx": "52285d25c34d3b8c",
+  "out": "<|begin_of_text|><|im_start|>system\nYou are a function calling AI model. You are provided with function signature within <tools> </tools> XML tags. You may call one or more functions to assist with the user query. Don't make assumptions about what values to plug into functions.\n<tools>\n[{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get the current weather for a city\", \"parameters\": {\"type\": \"object\", \"properties\": {\"location\": {\"type\": \"string\", \"description\": \"City name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}, \"days\": {\"type\": \"integer\", \"description\": \"Forecast length\"}, \"radius_km\": {\"type\": \"number\", \"description\": \"Search radius\", \"default\": 5.0}}, \"required\": [\"location\"]}}}]\n</tools>\nFor each function call, return a json object with function name and arguments within <tool_call> </tool_call> tags with the following schema:\n<tool_call>\n{'arguments': <args-dict>, 'name': <function-name>}\n</tool_call>\n<|im_start|>user\nWhat is the weather in Zürich for the next 3 days?<|im_end|>\n<|im_start|>assistant\n<|im_end|>\n<|im_start|>tool\n{\"temperature\": 18.5, \"sky\": \"cloudy\"}<|im_end|>\n<|im_start|>assistant\n"
+ },
+ "user": {
+  "ctx": "80b2176a4553e197",
+  "out": "<|begin_of_text|><|im_start|>user\nHello!<|im_end|>\n<|im_start|>assistant\n"
+ },
+ "user-nogen": {
+  "ctx": "639d15dfbeb2f834",
+  "out": "<|begin_of_text|><|im_start|>user\nHello!<|im_end|>\n"
+ }
+}

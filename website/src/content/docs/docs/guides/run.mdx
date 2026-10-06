@@ -1,0 +1,133 @@
+---
+title: Run from the command line
+description: Prompts, chat templates, sampling, images, embeddings and benchmarks with the jitllm binary.
+---
+
+import Spec from '../../../../components/fig/Spec.astro'
+
+`jitllm run` loads a container, generates, prints the text and a line of statistics, and exits. It is the quickest way to try a model and the easiest place to see what the engine is doing.
+
+```sh
+jitllm run [flags] model.jlm "prompt..."
+```
+
+Flags go **before** the model path. Everything after the path is the prompt, so a flag written after it would be read as prompt text; jitllm refuses that rather than guess.
+
+## Completion or chat
+
+By default the prompt is a raw completion: the model continues the text.
+
+```sh
+jitllm run -n 64 models/llama.jlm "The capital of France is"
+```
+
+For an instruct model, `-chat` renders the prompt through the model's own chat template, the one stored in the container, and `-system` adds a system message:
+
+```sh
+jitllm run -chat -system "Answer in one sentence." -n 128 \
+  models/qwen3-8b.jlm "What is a mixture of experts?"
+```
+
+Under `-chat` the prompt is not echoed, because what the model received is the rendered template, not your text.
+
+## Sampling
+
+Generation is greedy unless you ask otherwise. The sampling flag names match llama.cpp's.
+
+| Flag | Default | Effect |
+|---|---|---|
+| `-n N` | 32 | tokens to generate |
+| `-temp F` | 0 | sampling temperature; 0 is greedy |
+| `-top-k N` | 0 (off) | keep only the k most likely tokens |
+| `-top-p F` | 0 (off) | nucleus sampling |
+| `-min-p F` | 0 (off) | keep tokens above min-p × p(best) |
+| `-repeat-penalty F` | 1 (off) | penalise recently seen tokens |
+| `-repeat-last-n N` | 64 | how far back the penalty looks |
+| `-seed N` | 0 | RNG seed |
+
+```sh
+jitllm run -chat -temp 0.7 -top-p 0.9 -n 256 models/smollm2.jlm "Write a haiku about caches."
+```
+
+Sampling runs as generated code like everything else; it does not sort the vocabulary in Go.
+
+## Speculative decoding
+
+A model that ships its own multi-token-prediction block (Qwen3.5 and Qwen3.6, DeepSeek-V3-class models, GLM-4.7-Flash, and GLM-4.5 when the checkpoint carries it) can draft several tokens with it and check them all in one pass of the full model:
+
+```sh
+jitllm run -chat -spec mtp -n 256 models/qwen3.6.jlm "Explain paging in one paragraph."
+```
+
+Nothing about the output changes. Greedy decoding gives exactly the tokens it gives one at a time, since every draft is verified and the first wrong one replaced; with sampling, drafts are accepted by a rejection test against the sampler's own distribution, so the output is distributed exactly as plain sampling's. <Spec />
+
+With `-spec-k 0`, the default, jitllm chooses how many to draft each round from the acceptance and timing it measures, and stops drafting where no count pays. A model without a prediction block refuses `-spec` by name, and `-spec` does not combine with `-image` or `-kv-cache`.
+
+## Ask about an image
+
+A container with a vision tower takes an image in the prompt:
+
+```sh
+jitllm convert -o models smolvlm-256m-instruct models/smolvlm.jlm
+jitllm run -image picture.png -n 128 models/smolvlm.jlm "What is in this image?"
+```
+
+The tower is part of the same model: it shares the page budget and the worker pool with the language model, and its blocks run on a GPU when one is placed. Its pages are handed back once the image is encoded.
+
+## Embeddings
+
+An embedding model produces one vector instead of text. `embed` prints it as a JSON array, pooled and L2-normalised the way the model was trained; the container records the pooling, so there is no flag to get it wrong.
+
+```sh
+jitllm convert -o models all-minilm-l6-v2 models/minilm.jlm
+jitllm embed models/minilm.jlm "a sentence to embed"
+
+# One vector per line of stdin, loading the model once.
+jitllm embed -lines models/minilm.jlm < sentences.txt
+```
+
+BERT and nomic-bert encoders run, as do Qwen3-Embedding and EmbeddingGemma.
+
+## Reuse a prompt prefix
+
+For a long system prompt or a shared document, keep a KV cache on disk. A later run whose prompt starts the same way skips the part it has already seen:
+
+```sh
+jitllm run -chat -kv-cache models/kv-cache -n 128 models/smollm2.jlm "Explain how a solar panel works."
+```
+
+The cache holds the prompt's KV pages and its final logits, so a fully cached prompt starts generating at once. It defaults to 8 GiB and evicts the least recently used pages beyond that; `-kv-cache-max` changes the limit (0 is unbounded). The cache is addressed in chunks of 16 positions, so two prompts that share fewer than 16 tokens share nothing.
+
+The same directory lets a context outgrow memory: `-kv-budget SIZE` caps the history a run holds in memory, spills older pages there and reads them back when attention needs them.
+
+## Measure speed
+
+```sh
+# llama-bench's pp/tg: a 512-token prompt and 128 generated tokens, warmed, 3 times.
+jitllm speed -p 512 -n 128 -r 3 models/llama.jlm
+
+# Time to first token: cold (opening the model to the first token) and warm (a fresh session).
+jitllm speed -ttft -p 512 -r 7 models/llama.jlm
+
+# Eight separate sessions, decoded one after another and then together.
+jitllm speed -devices cuda:0 -sessions 8 -p 32 -n 64 models/llama.jlm
+
+# Many sequences of one prompt decoded together on one device: the serving number.
+jitllm batch -devices cuda:0 -batch 64 -n 128 models/llama.jlm "Hello"
+```
+
+`run`'s own statistics include the first prompt of the process, which compiles and loads the batched kernels; `speed` excludes that warm-up, as `llama-bench` does. `batch` reports generated tokens over the whole wall clock, which is how vLLM counts. `speed -gcstats` adds what the Go collector did during each timed phase.
+
+## Inspect
+
+```sh
+jitllm hardware                       # CPU tier, GPUs, spendable memory
+jitllm library                        # the catalog
+jitllm tokenize models/llama.jlm "Hello, world"
+jitllm asm Q4_K                       # the x86-64 kernel generated for a format
+jitllm verify -n 32 models/llama.jlm  # compare CPU and GPU logits (needs a GPU)
+```
+
+`verify` runs the same tokens on the host and on the device and reports where their logits part, with the margin. It is the tool to reach for when a GPU answer looks wrong.
+
+The [CLI reference](/docs/reference/cli/) lists every flag.

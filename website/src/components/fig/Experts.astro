@@ -1,0 +1,73 @@
+---
+// Expert pages: each expert of a mixture block is its own page, evicted least
+// recently used, so a token reads only the routed experts it does not hold.
+const E = 32
+---
+<figure class="fig not-content" data-fig="experts">
+  <div class="ctl">
+    <label>expert pages held <input type="range" min="4" max={E} value="12" data-c aria-label="Expert pages the budget holds" /> <output data-co>12</output> of {E}</label>
+    <span class="sp"></span>
+    <button type="button" data-play>Pause</button>
+  </div>
+  <div class="fig-body">
+    <div class="lane-label">one mixture block: {E} experts, the router picks 4 a token</div>
+    <div class="cells" data-grid style="--n:16" aria-hidden="true">
+      {Array.from({ length: E }, (_, i) => <div class="cell disk">{i}</div>)}
+    </div>
+    <div class="stats" aria-live="polite">
+      <span>this token read <b class="num" data-now>0</b> expert pages</span>
+      <span>average <b class="num" data-avg>0</b> a token</span>
+      <span>a whole-block page would read <b class="num">{E}</b></span>
+    </div>
+    <div class="legend"><span><i style="background:color-mix(in srgb,var(--gpu) 30%,var(--surface))"></i>resident expert page</span><span><i style="box-shadow:0 0 0 2px var(--text)"></i>routed this token</span><span><i style="background:var(--m3)"></i>read from disk this token</span></div>
+  </div>
+  <figcaption><b>A token reads what it routes to, and only if it is not already there.</b> On Moonlight-16B-A3B under a 6 GB budget, giving each expert its own page took CPU decode from 0.890 to 0.144 GiB read a token, and ran 3.1× faster.</figcaption>
+</figure>
+
+<style is:global>
+  [data-fig='experts'] .cell.read { background: color-mix(in srgb, var(--m3) 55%, var(--surface)); border-color: var(--m3); color: var(--text); }
+</style>
+
+<script>
+  import { ticker } from './ticker'
+
+  for (const fig of document.querySelectorAll<HTMLElement>('[data-fig="experts"]')) {
+    const $ = <T extends Element>(s: string) => fig.querySelector<T>(s)!
+    const cells = [...fig.querySelectorAll<HTMLElement>('[data-grid] .cell')]
+    const E = cells.length, K = 4
+    const cIn = $<HTMLInputElement>('[data-c]')
+    let resident: number[] = [] // least recently used first
+    let picks: number[] = []
+    let reads = 0, toks = 0
+
+    const step = () => {
+      // Routing has some locality: an expert picked last token is likelier again.
+      const next = new Set<number>()
+      for (const p of picks) if (Math.random() < 0.35) next.add(p)
+      while (next.size < K) next.add(Math.floor(Math.random() * E))
+      picks = [...next]
+      const C = +cIn.value
+      const read: number[] = []
+      for (const e of picks) {
+        const at = resident.indexOf(e)
+        if (at >= 0) resident.splice(at, 1)
+        else read.push(e)
+        resident.push(e)
+      }
+      while (resident.length > C) resident.shift()
+      reads += read.length
+      toks++
+      cells.forEach((c, i) => {
+        c.className = `cell ${read.includes(i) ? 'read' : resident.includes(i) ? 'gpu' : 'disk'}${picks.includes(i) ? ' on' : ''}`
+      })
+      $('[data-now]').textContent = String(read.length)
+      $('[data-avg]').textContent = (reads / toks).toFixed(1)
+    }
+    cIn.addEventListener('input', () => {
+      $('[data-co]').textContent = cIn.value
+      reads = toks = 0
+    })
+    ticker(fig, step, 900, $('[data-play]'))
+    step()
+  }
+</script>

@@ -1,0 +1,33 @@
+{
+ "documents": {
+  "ctx": "176132759acb2009",
+  "out": "<s>[INST] How warm does Zürich get in July? [/INST]"
+ },
+ "multiturn-nogen": {
+  "ctx": "b36c6712d7e27b03",
+  "out": "<s>[INST] Name a prime. [/INST]Seven.</s>[INST] Another,\nplease. [/INST]  Eleven.  </s>"
+ },
+ "system-multiturn": {
+  "by": "TemplateError",
+  "ctx": "9822b569e91e2503",
+  "raise": "Conversation roles must alternate user/assistant/user/assistant/..."
+ },
+ "tools-request": {
+  "by": "TemplateError",
+  "ctx": "ec898728a6051dcb",
+  "raise": "Conversation roles must alternate user/assistant/user/assistant/..."
+ },
+ "tools-result": {
+  "by": "TemplateError",
+  "ctx": "14d8f33d56e0e540",
+  "raise": "Conversation roles must alternate user/assistant/user/assistant/..."
+ },
+ "user": {
+  "ctx": "f4349b5821b64a48",
+  "out": "<s>[INST] Hello! [/INST]"
+ },
+ "user-nogen": {
+  "ctx": "e63aeb8a52e4642c",
+  "out": "<s>[INST] Hello! [/INST]"
+ }
+}

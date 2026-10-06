@@ -1,0 +1,30 @@
+{
+ "documents": {
+  "ctx": "176132759acb2009",
+  "out": "<extra_id_0>System\n\n<extra_id_1>User\nHow warm does Zürich get in July?\n<extra_id_1>Assistant\n"
+ },
+ "multiturn-nogen": {
+  "ctx": "b36c6712d7e27b03",
+  "out": "<extra_id_0>System\n\n<extra_id_1>User\nName a prime.\n<extra_id_1>Assistant\nSeven.\n<extra_id_1>User\nAnother,\nplease.\n<extra_id_1>Assistant\nEleven.\n"
+ },
+ "system-multiturn": {
+  "ctx": "9822b569e91e2503",
+  "out": "<extra_id_0>System\nYou are a terse assistant.\n\n<extra_id_1>User\nWhat is the capital of France?\n<extra_id_1>Assistant\nParis.\n<extra_id_1>User\nAnd of Switzerland? Answer in one word, ça va ?\n<extra_id_1>Assistant\n"
+ },
+ "tools-request": {
+  "ctx": "ec898728a6051dcb",
+  "out": "<extra_id_0>System\nYou can look the weather up.\n\n<tool> {\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get the current weather for a city\", \"parameters\": {\"type\": \"object\", \"properties\": {\"location\": {\"type\": \"string\", \"description\": \"City name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}, \"days\": {\"type\": \"integer\", \"description\": \"Forecast length\"}, \"radius_km\": {\"type\": \"number\", \"description\": \"Search radius\", \"default\": 5.0}}, \"required\": [\"location\"]}}} </tool>\n\n<extra_id_1>User\nWhat is the weather in Zürich?\n<extra_id_1>Assistant\n"
+ },
+ "tools-result": {
+  "ctx": "14d8f33d56e0e540",
+  "out": "<extra_id_0>System\n<tool> {\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get the current weather for a city\", \"parameters\": {\"type\": \"object\", \"properties\": {\"location\": {\"type\": \"string\", \"description\": \"City name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}, \"days\": {\"type\": \"integer\", \"description\": \"Forecast length\"}, \"radius_km\": {\"type\": \"number\", \"description\": \"Search radius\", \"default\": 5.0}}, \"required\": [\"location\"]}}} </tool>\n\n<extra_id_1>User\nWhat is the weather in Zürich for the next 3 days?\n<extra_id_1>Assistant\n\n<extra_id_1>Tool\n{\"temperature\": 18.5, \"sky\": \"cloudy\"}\n<extra_id_1>Assistant\n"
+ },
+ "user": {
+  "ctx": "f4349b5821b64a48",
+  "out": "<extra_id_0>System\n\n<extra_id_1>User\nHello!\n<extra_id_1>Assistant\n"
+ },
+ "user-nogen": {
+  "ctx": "e63aeb8a52e4642c",
+  "out": "<extra_id_0>System\n\n<extra_id_1>User\nHello!\n"
+ }
+}

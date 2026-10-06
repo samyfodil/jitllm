@@ -1,0 +1,122 @@
+# Release configuration. `.github/workflows/release.yml` runs it on a v* tag;
+# locally, `goreleaser release --snapshot --clean` builds everything into dist/
+# without publishing.
+version: 2
+
+project_name: jitllm
+
+git:
+  # Only v* tags are releases. safety/detached-2026-09-13 is a bookmark, and
+  # without this it could be taken as the previous release when the changelog
+  # looks for one. Named in full: these entries are exact tag names.
+  ignore_tags:
+    - safety/detached-2026-09-13
+
+builds:
+  # The engine's CLI, from the root module.
+  - id: jitllm
+    main: ./cmd/jitllm
+    binary: jitllm
+    env:
+      # There is no cgo anywhere: CUDA, Vulkan and Metal are opened at run time
+      # through goffi (jit/gpu/ffi), and every kernel is generated in process. So one Linux
+      # runner cross-builds every target.
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      # Builds, but nothing has ever run the arm64 kernels on Windows.
+      - goos: windows
+        goarch: arm64
+
+  # The daemon: its own module (server/go.mod) so the engine keeps one
+  # dependency; `dir` builds it from there.
+  - id: jitllmd
+    dir: server
+    main: ./cmd/jitllmd
+    binary: jitllmd
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: default
+    ids: [jitllm, jitllmd]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+# macOS signing.
+#
+# With no secrets set this block is disabled and the darwin binaries keep the
+# ad-hoc signature Go's linker gives every darwin/arm64 binary. That signature
+# carries no hardened runtime, and jit/cpu/exec_darwin.go measures that such a
+# binary runs generated code with no codesign step at all. The release
+# workflow's smoke job runs the shipped darwin archive on a macOS runner to
+# prove it for each release.
+#
+# With a Developer ID certificate and an App Store Connect API key in the
+# secrets, the binaries are signed with the hardened runtime and the JIT
+# entitlements, then notarized. This runs on Linux (goreleaser uses quill).
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      ids: [jitllm, jitllmd]
+      sign:
+        certificate: "{{ .Env.MACOS_SIGN_P12 }}"
+        password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
+        entitlements: ./.github/release/entitlements.plist
+      notarize:
+        issuer_id: "{{ .Env.MACOS_NOTARY_ISSUER_ID }}"
+        key_id: "{{ .Env.MACOS_NOTARY_KEY_ID }}"
+        key: "{{ .Env.MACOS_NOTARY_KEY }}"
+        wait: true
+        timeout: 20m
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^Merge "
+  groups:
+    - title: Documentation and measurements
+      regexp: '^(docs|website)[:(]'
+      order: 1
+    - title: Changes
+      order: 0
+
+release:
+  github:
+    owner: samyfodil
+    name: jitllm
+  # The workflow publishes the draft only after the shipped archives have run
+  # on Linux amd64, Linux arm64 and macOS arm64.
+  draft: true
+  replace_existing_draft: true
+  prerelease: auto

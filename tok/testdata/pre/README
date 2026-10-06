@@ -1,0 +1,100 @@
+Offline pre-tokenizers: one model's own tokenizer.json pre_tokenizer per file.
+
+WHY THESE EXIST
+  The gates in tok/ compare what tok.ParsePreTokenizer builds at runtime against
+  what scripts/gentok baked into tok/pretokenizers.go. Both used to need the
+  network to say anything about a REAL model, so the alternative was a
+  hand-written approximation of a tokenizer.json -- which tests the test author's
+  memory of the artefact, not the artefact. These are the artefacts, dumped by
+  the generator itself:
+
+      go run ./scripts/gentok -dump tok/testdata/pre tok/pretokenizers.go
+
+WHAT IS IN A FILE
+  The pre_tokenizer object VERBATIM, byte for byte as the repo serves it, under a
+  one-line {"pre_tokenizer": ...} wrapper. The wrapper is there because
+  ParsePreTokenizer takes a tokenizer.json and looks for that key -- a bare object
+  would be testdata the parser it is testdata FOR cannot read. Nothing inside the
+  braces is reformatted, so a diff against the upstream file stays readable.
+
+  The rest of tokenizer.json is NOT here. It is megabytes of vocabulary and merges
+  that the GGUF already carries; WithTokenizer overrides the pre-tokenizer only.
+
+WHY THESE ELEVEN
+  tok/pipeline.go's header names SEVEN distinct pipeline shapes that occur in the
+  wild. One file per shape, plus four that share a shape with one already here,
+  three of them differing INSIDE it -- which is the exact difference a shape-only sample set
+  misses, and each was found by a model tokenizing wrong rather than by design.
+
+  llama-bpe shares qwen2's shape and differs in the digit quantifier. gpt-4o
+  shares it too and differs in the whole splitting ALGORITHM: o200k splits letter
+  runs by case and hangs the contraction off the end of one, where llama3 takes a
+  single \p{L}+ run and treats the contraction as its own leading alternative.
+  The table gave gpt-4o llama3's parameters, and every gpt-oss model tokenized
+  "Isn't" as three tokens instead of two until 2026-09-19. Ten names in the
+  directory carry that shape.
+
+      file             shape                                              repo @ main
+      ---------------  -------------------------------------------------  -----------
+      qwen2.json       Split -> ByteLevel(use_regex=false)                 Qwen/Qwen3-Embedding-0.6B @ 97b0c614
+      gpt-2.json       ByteLevel(use_regex=true)                           evilfreelancer/ruGPT3XL @ d35fdf92
+      smollm.json      Digits(individual) -> ByteLevel(use_regex=true)     HuggingFaceTB/SmolLM-135M @ 1d461723
+      falcon3.json     Punctuation -> ByteLevel(=true) -> Digits(indiv)    tiiuae/Falcon3-7B-Base @ bf3d7ed5
+      falcon-h1.json   Punctuation -> Split -> ByteLevel(=false) -> Split  tiiuae/Falcon-H1-34B-Base @ db4eb5f3
+      llama-bpe.json   Split(digit group 3) -> ByteLevel(use_regex=false)  NousResearch/Meta-Llama-3-8B @ 315b2009
+      gpt-4o.json      Split(o200k case runs)  -> ByteLevel(use_regex=false) Xenova/gpt-4o
+      seed-coder.json  Split(no newline tail)  -> ByteLevel(use_regex=false) ByteDance-Seed/Seed-Coder-8B-Base
+
+  seed-coder is the eighth for the same reason as gpt-4o: it shares llama3's
+  shape and differs inside it. Its punctuation run is ` ?[^\s\p{L}\p{N}\r\n]+`
+  with no [\r\n]* tail, so "):\n" is two pieces where llama3 makes one; the
+  table gave it llama3's parameters until the Seed-OSS fixture's tokenizer.json
+  golden caught it.
+      hunyuan-dense.json  DigitGroups -> KanaHanRuns -> HunyuanSplit -> ByteLevel(=false)
+                                                                           tencent/Hunyuan-0.5B-Instruct
+
+      deepseek-v3.json    the same shape and the same three patterns   deepseek-ai/DeepSeek-V3
+
+  deepseek-v3.json is the re-deriving command below (it reformats). Its three
+  Splits are hunyuan-dense's byte for byte -- Hunyuan's tokenizer is DeepSeek
+  V3's -- and its table row, with hy_v4's and joyai-llm's (whose repos serve the
+  identical object), still read them as three llama3 splits after
+  hunyuan-dense's was corrected, so "12345" tokenized digit by digit until
+  DeepSeek V3.2's fixture compared against tokenizer.json.
+
+      spark2_5.json       DigitGroups -> KanaHanRuns -> SparkSplit -> Digits(indiv) -> ByteLevel(=false)
+                                                                           XHToken/Spark-X2.5-1.7B
+
+  spark2_5.json is the seventh shape. Its first two Splits are Hunyuan's; its
+  third is a variant (no [\r\n]* tail on the punctuation run, and [\r\n] a
+  piece of one character where Hunyuan's has \s*[\r\n]+), and a Digits stage
+  follows. Its table row read all three as llama3 splits until the variant
+  became pretok.OpSparkSplit; tok.TestSparkSplitsAsItsTokenizerDoes holds it
+  to HuggingFace tokenizers on the shared corpus.
+
+  hunyuan-dense.json and spark2_5.json are written by
+  scripts/hunyuansplitgold.py, which REFORMATS
+  (json.dump) where the generator copies bytes; the pattern strings are the
+  artefact's. Its three Splits are each a whole pattern rather than the
+  alternation skeleton, and reading them as the skeleton gave three llama3
+  splits that isolated every digit.
+
+  Each is https://huggingface.co/<repo>/resolve/main/tokenizer.json, fetched
+  2026-09-12. The name on the left is the tokenizer.ggml.pre name; the repo on the
+  right is the one llama.cpp's convert_hf_to_gguf_update.py names as DEFINING that
+  name, resolved at llama.cpp@3057bb66.
+
+  llama-bpe is the one indirection: its defining repo meta-llama/Meta-Llama-3-8B
+  is gated, so the file comes from the mirror in scripts/gentok/pipeline.go --
+  admitted there only because both repos serve tokenizer.json at git blob
+  b197f72effb9d5ed16ee0f5663e11e4cfac2ba62, i.e. the same bytes rather than a
+  lookalike.
+
+RE-DERIVING ONE
+  curl -sL https://huggingface.co/<repo>/resolve/main/tokenizer.json \
+    | python3 -c 'import sys,json; print(json.dumps({"pre_tokenizer": json.load(sys.stdin)["pre_tokenizer"]}))'
+
+  That reformats. The generator does not -- prefer the -dump command above, and
+  expect a diff if the repo has moved since the date named here. A file that no
+  longer matches its row in tok/pretokenizers.go is a FINDING, not a stale fixture:
+  either the model changed its tokenizer or the table is wrong about it.

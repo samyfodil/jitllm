@@ -1,0 +1,31 @@
+{
+ "documents": {
+  "ctx": "fb8e6db157b0aef4",
+  "out": "\n\nUser: How warm does Zürich get in July?\n\nAssistant:"
+ },
+ "multiturn-nogen": {
+  "ctx": "e631c00b615bc569",
+  "out": "\n\nUser: Name a prime.\n\nAssistant: Seven.\n\nUser: Another,\nplease.\n\nAssistant: Eleven."
+ },
+ "system-multiturn": {
+  "ctx": "7d3c1dce75766a2d",
+  "out": "You are a terse assistant.\n\nUser: What is the capital of France?\n\nAssistant: Paris.\n\nUser: And of Switzerland? Answer in one word, ça va ?\n\nAssistant:"
+ },
+ "tools-request": {
+  "ctx": "3fafa39f19fa9ce7",
+  "out": "You can look the weather up.\n\nUser: What is the weather in Zürich?\n\nAssistant:"
+ },
+ "tools-result": {
+  "by": "TemplateError",
+  "ctx": "d4f76e56c8925125",
+  "raise": "Conversation roles must alternate user/assistant/user/assistant/..."
+ },
+ "user": {
+  "ctx": "edcf7211e3081c09",
+  "out": "\n\nUser: Hello!\n\nAssistant:"
+ },
+ "user-nogen": {
+  "ctx": "85dd5a30289921c4",
+  "out": "\n\nUser: Hello!"
+ }
+}

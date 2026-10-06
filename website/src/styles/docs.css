@@ -1,0 +1,53 @@
+/* Starlight in jitllm's colours. The palette tokens (--bg, --text, --brand,
+   --f-*) come from public/themes.css, selected by data-palette on <html>;
+   this maps them onto Starlight's scale, which runs from --sl-color-white (the
+   strongest text) to --sl-color-black (the page), in dark and light alike. */
+:root,
+:root[data-theme='light'] {
+  --sl-font: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  --sl-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --sl-color-accent-low: var(--f-dim);
+  --sl-color-accent: var(--brand);
+  --sl-color-accent-high: var(--f-crest);
+  --sl-color-white: var(--text);
+  --sl-color-gray-1: var(--text);
+  --sl-color-gray-2: var(--text-2);
+  --sl-color-gray-3: var(--muted);
+  --sl-color-gray-4: var(--line-strong);
+  --sl-color-gray-5: var(--line);
+  --sl-color-gray-6: var(--surface);
+  --sl-color-gray-7: var(--surface);
+  --sl-color-black: var(--bg);
+  --sl-color-text-invert: var(--brand-ink);
+
+  --sl-border-radius: 0;
+}
+
+::selection { background: var(--sel); }
+
+/* Square corners, as on the landing page. */
+.sl-markdown-content :is(pre, code, .expressive-code .frame) { border-radius: 0; }
+
+/* Tables: numbers line up, and a wide table scrolls inside the column. */
+.sl-markdown-content table { font-variant-numeric: tabular-nums; }
+.sl-markdown-content table code { white-space: nowrap; }
+.sl-markdown-content small { color: var(--muted); font-size: 0.8em; }
+
+/* Cards are square too. */
+.card, .sl-link-card { border-radius: 0; }
+
+/* Card icons take the theme's three accents instead of Starlight's rainbow. */
+.card-grid > .card { --c: var(--m1); }
+.card-grid > .card:nth-child(4n + 2) { --c: var(--m2); }
+.card-grid > .card:nth-child(4n + 3) { --c: var(--m3); }
+.card-grid > .card:nth-child(4n + 4) { --c: var(--brand); }
+.card-grid > .card {
+  --sl-card-border: var(--c);
+  --sl-card-bg: color-mix(in srgb, var(--c) 14%, transparent);
+}
+
+/* The desktop app's screenshots: the one matching the theme shows. */
+.sl-markdown-content img.shot-dark, .sl-markdown-content img.shot-light { width: 100%; height: auto; border: 1px solid var(--line-strong); }
+:root[data-theme='light'] .sl-markdown-content img.shot-dark { display: none; }
+:root:not([data-theme='light']) .sl-markdown-content img.shot-light { display: none; }

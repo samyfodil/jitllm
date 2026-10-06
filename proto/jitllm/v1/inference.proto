@@ -1,0 +1,232 @@
+syntax = "proto3";
+
+package jitllm.v1;
+
+import "jitllm/v1/common.proto";
+import "jitllm/v1/model.proto";
+
+// InferenceService is the generate path. Both compatibility shims -- the
+// OpenAI one and the Anthropic one -- are thin adapters over THIS, not
+// parallel implementations of it.
+
+service InferenceService {
+  // The streaming path. A generate is a sequence of events rather than a
+  // sequence of strings, because a caller needs to know it was QUEUED behind
+  // another session on the same device, and a bare token stream cannot say so.
+  rpc Generate(GenerateRequest) returns (stream GenerateResponse) {}
+
+  // The same path, accumulated. It exists so a non-streaming client is not
+  // forced to consume a stream; it is the streaming path with the events
+  // collected, not a second implementation.
+  rpc Complete(GenerateRequest) returns (CompleteResponse) {}
+
+  // Stop a generation that is in flight on a session. Closing the stream does
+  // this too; this exists for a client that holds the stream somewhere else.
+  rpc Cancel(CancelRequest) returns (CancelResponse) {}
+
+  // One vector per input from an embedding model's pooled readout: the
+  // container's own pooling, its projection heads, then an L2 normalisation.
+  // The vectors are the ones `jitllm embed` prints for the same model and
+  // text. A model whose container states no pooling is refused: its last
+  // residual has no readout the weights were trained for.
+  rpc Embed(EmbedRequest) returns (EmbedResponse) {}
+}
+
+// PromptInput is the one prompt representation. Text and token ids are the two
+// honest forms; chat is a third because rendering the template is the engine's
+// job and a caller that renders it itself will get the special tokens wrong.
+message PromptInput {
+  oneof input {
+    string text = 1;
+    TokenIDs token_ids = 2;
+    ChatPrompt chat = 3;
+  }
+}
+
+message TokenIDs {
+  repeated int32 ids = 1;
+}
+
+message ChatPrompt {
+  repeated ChatMessage messages = 1;
+  // A system message. Carried separately because one of the two compat APIs
+  // puts it in a top-level field and the other puts it in the message list,
+  // and flattening it here loses which one the caller meant.
+  optional string system = 2;
+  bool add_generation_prompt = 3;
+  string template_name = 4;
+}
+
+message GenerateRequest {
+  // Generate against an existing session, keeping its KV cache and position.
+  // Mutually exclusive with `model_id`.
+  string session_id = 1;
+  // Generate against a model in an EPHEMERAL session created for this call
+  // and closed when it ends.
+  string model_id = 2;
+
+  PromptInput prompt = 3;
+  int32 max_tokens = 4;
+  SamplingParams sampling = 5;
+  repeated string stop = 6;
+
+  // Continue from the session's existing position instead of prefilling from
+  // scratch. False re-prefills, which is what a stateless client wants.
+  bool continue_session = 7;
+
+  // Emit the prompt's tokens back before generation starts. Off by default:
+  // echoing the prompt is what makes a completion read as one continuous
+  // text, and a chat turn is not one.
+  bool echo_prompt = 8;
+
+  // Maximum milliseconds to wait for the device's scratch before starting.
+  // Zero waits indefinitely. A second session is never refused, but a caller
+  // may decline to wait.
+  int32 queue_timeout_millis = 9;
+
+  // Keep generating past an end-of-generation token, up to max_tokens: the
+  // token is sampled, emitted and fed like any other, as vLLM's `ignore_eos`
+  // does (llama-server's bans the token from sampling instead). Stop strings
+  // still end the generate. For a run whose length must be fixed, such as a
+  // benchmark.
+  bool ignore_eos = 10;
+}
+
+// GenerateResponse is one event. The oneof is deliberate: a token stream that
+// cannot report "you waited 4 s for a device" hides the one property of this
+// engine a caller most needs to see.
+message GenerateResponse {
+  oneof event {
+    GenerateStarted started = 1;
+    GenerateToken token = 2;
+    GenerateFinished finished = 3;
+  }
+}
+
+message GenerateStarted {
+  string session_id = 1;
+  string model_id = 2;
+  // True when the session was created for this call and will be closed after.
+  bool ephemeral_session = 3;
+
+  int32 prompt_tokens = 4;
+  // Milliseconds this request waited before it ran: for its device's gate
+  // while another session held it, or, when `batched`, for admission into the
+  // model's step loop. Zero on an idle host or device.
+  int64 queued_millis = 5;
+  // Requests ahead of this one in that queue when it arrived.
+  int32 queue_depth_on_entry = 6;
+
+  // Where the blocks ran. A caller comparing two rates needs this, and the
+  // engine's own rule is that a backend is quoted with every number.
+  int32 device_blocks = 7;
+  int32 host_blocks = 8;
+  repeated string device_ids = 9;
+
+  // Prefill wall time. When `batched`, the prompt went in chunks inside steps
+  // shared with requests decoding, and this spans all of them.
+  int64 prefill_millis = 10;
+
+  // True when this request decodes as a row of its model's step loop, sharing
+  // each decode step with the model's other live requests (ModelStats.batch).
+  // False when it runs alone on its gates: a host-only model, a session not
+  // wholly on one device, or batching turned off.
+  bool batched = 11;
+}
+
+message GenerateToken {
+  int32 token_id = 1;
+  // The incremental text this token contributed. Empty when the token is a
+  // partial UTF-8 sequence whose bytes are held back until it completes.
+  string text = 2;
+  int32 index = 3;
+}
+
+message GenerateFinished {
+  FinishReason reason = 1;
+  // The stop string that matched, when `reason` is STOP.
+  string stop_matched = 2;
+
+  int32 prompt_tokens = 3;
+  int32 completion_tokens = 4;
+
+  int64 prefill_millis = 5;
+  int64 decode_millis = 6;
+
+  // Reported as a rate AND as the bytes behind it, because a rate alone is
+  // unfalsifiable. `bytes_per_token` is what the pager actually moved.
+  double decode_tokens_per_second = 7;
+  uint64 bytes_per_token = 8;
+
+  // The session's position after this generation, so a caller continuing a
+  // conversation knows where it is without a second call.
+  int32 position = 9;
+}
+
+message CompleteResponse {
+  GenerateStarted started = 1;
+  string text = 2;
+  repeated int32 token_ids = 3;
+  GenerateFinished finished = 4;
+}
+
+message CancelRequest {
+  string session_id = 1;
+}
+
+message CancelResponse {
+  bool was_generating = 1;
+}
+
+// EmbedInput is one text to embed. Text is tokenized as `jitllm embed`
+// tokenizes it -- the specials the model's tokenizer adds, and for a
+// last-token pooled decoder the EOS it pools at. Token ids are taken verbatim:
+// a caller sending ids owns those specials.
+message EmbedInput {
+  oneof input {
+    string text = 1;
+    TokenIDs token_ids = 2;
+  }
+}
+
+// EmbedRequest carries no pooling, normalisation or truncation switch, as the
+// CLI carries none: the container says how the vector is read out, a vector
+// read out any other way is one the weights were never trained to produce,
+// and a silently truncated input is an embedding of a different text. An
+// input longer than the model takes is refused with the limit named.
+message EmbedRequest {
+  // A loaded model's id, or the file name it was loaded from.
+  string model_id = 1;
+  // Embedded in order, through one embedder, in one turn on the host.
+  repeated EmbedInput inputs = 2;
+  // The vector width wanted. Zero, or the model's own width, is the model's
+  // vector. Any other width is refused: a shorter prefix is an embedding only
+  // for a model trained for Matryoshka truncation, and the container records
+  // no such property.
+  int32 dimensions = 3;
+  // Maximum milliseconds to wait for the host before starting. Zero waits
+  // indefinitely.
+  int32 queue_timeout_millis = 4;
+}
+
+message Embedding {
+  // L2-normalised.
+  repeated float vector = 1;
+  // The tokens this input ran as, specials included.
+  int32 tokens = 2;
+}
+
+message EmbedResponse {
+  string model_id = 1;
+  // One per input, in input order.
+  repeated Embedding embeddings = 2;
+  int32 dimensions = 3;
+  // The container's readout: "mean", "cls" or "last".
+  string pooling = 4;
+  int32 total_tokens = 5;
+  // Milliseconds this request waited for the host while other work held it.
+  int64 queued_millis = 6;
+  int32 queue_depth_on_entry = 7;
+  // Wall time of the embedding itself, every input.
+  int64 embed_millis = 8;
+}

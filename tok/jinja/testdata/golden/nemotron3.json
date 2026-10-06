@@ -1,0 +1,30 @@
+{
+ "documents": {
+  "ctx": "acf5c30c6c9e9672",
+  "out": "<|im_start|>system\n<|im_end|>\n<|im_start|>user\nHow warm does Zürich get in July?<|im_end|>\n<|im_start|>assistant\n<think>\n"
+ },
+ "multiturn-nogen": {
+  "ctx": "0ddc55db5f1956b6",
+  "out": "<|im_start|>system\n<|im_end|>\n<|im_start|>user\nName a prime.<|im_end|>\n<|im_start|>assistant\n<think></think>Seven.<|im_end|>\n<|im_start|>user\nAnother,\nplease.<|im_end|>\n<|im_start|>assistant\n<think></think>  Eleven.<|im_end|>\n"
+ },
+ "system-multiturn": {
+  "ctx": "e19003585895ec2d",
+  "out": "<|im_start|>system\nYou are a terse assistant.<|im_end|>\n<|im_start|>user\nWhat is the capital of France?<|im_end|>\n<|im_start|>assistant\n<think></think>Paris.<|im_end|>\n<|im_start|>user\nAnd of Switzerland? Answer in one word, ça va ?<|im_end|>\n<|im_start|>assistant\n<think>\n"
+ },
+ "tools-request": {
+  "ctx": "f820a6826e0bcdd5",
+  "out": "<|im_start|>system\nYou can look the weather up.\n\n# Tools\n\nYou have access to the following functions:\n\n<tools>\n<function>\n<name>get_weather</name>\n<description>Get the current weather for a city</description>\n<parameters>\n<parameter>\n<name>location</name>\n<type>string</type>\n<description>City name</description>\n</parameter>\n<parameter>\n<name>unit</name>\n<type>string</type>\n<enum>[\"celsius\", \"fahrenheit\"]</enum>\n</parameter>\n<parameter>\n<name>days</name>\n<type>integer</type>\n<description>Forecast length</description>\n</parameter>\n<parameter>\n<name>radius_km</name>\n<type>number</type>\n<description>Search radius</description>\n<default>5.0</default>\n</parameter>\n<required>[\"location\"]</required>\n</parameters>\n</function>\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT><|im_end|>\n<|im_start|>user\nWhat is the weather in Zürich?<|im_end|>\n<|im_start|>assistant\n<think>\n"
+ },
+ "tools-result": {
+  "ctx": "cd00466bed0fafd9",
+  "out": "<|im_start|>system\n# Tools\n\nYou have access to the following functions:\n\n<tools>\n<function>\n<name>get_weather</name>\n<description>Get the current weather for a city</description>\n<parameters>\n<parameter>\n<name>location</name>\n<type>string</type>\n<description>City name</description>\n</parameter>\n<parameter>\n<name>unit</name>\n<type>string</type>\n<enum>[\"celsius\", \"fahrenheit\"]</enum>\n</parameter>\n<parameter>\n<name>days</name>\n<type>integer</type>\n<description>Forecast length</description>\n</parameter>\n<parameter>\n<name>radius_km</name>\n<type>number</type>\n<description>Search radius</description>\n<default>5.0</default>\n</parameter>\n<required>[\"location\"]</required>\n</parameters>\n</function>\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT><|im_end|>\n<|im_start|>user\nWhat is the weather in Zürich for the next 3 days?<|im_end|>\n<|im_start|>assistant\n<think></think>\n<tool_call>\n<function=get_weather>\n<parameter=location>\nZürich\n</parameter>\n<parameter=unit>\ncelsius\n</parameter>\n<parameter=days>\n3\n</parameter>\n<parameter=radius_km>\n10.0\n</parameter>\n</function>\n</tool_call>\n<|im_end|>\n<|im_start|>user\n<tool_response>\n{\"temperature\": 18.5, \"sky\": \"cloudy\"}\n</tool_response>\n<|im_end|>\n<|im_start|>assistant\n<think>\n"
+ },
+ "user": {
+  "ctx": "0bfabbf3058f06f8",
+  "out": "<|im_start|>system\n<|im_end|>\n<|im_start|>user\nHello!<|im_end|>\n<|im_start|>assistant\n<think>\n"
+ },
+ "user-nogen": {
+  "ctx": "3489b7160ae29cb7",
+  "out": "<|im_start|>system\n<|im_end|>\n<|im_start|>user\nHello!<|im_end|>\n"
+ }
+}

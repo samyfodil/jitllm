@@ -1,0 +1,35 @@
+{
+ "about": "The conversations every template in templates/ is rendered over, by tok/jinja's TestChatTemplatesMatchTransformers and engine/model's TestChatPromptMatchesTransformers, and by scripts/chatgold.py for the goldens. They are what an OpenAI-shaped request carries: content a string, an assistant turn that only calls a tool carrying empty content, a tool result naming its call and function, and the call id nine alphanumerics because Mistral's template refuses any other. $ARGS stands for the call's arguments in the family's shape -- the mapping below, or its text where the manifest says arguments: string -- and tools for openai's list, or cohere's where the manifest says tools: cohere. documents are what a RAG template (Command-R's rag) reads, bound only by the documents case. The floats are there because 18.0 prints as 18.0 in Python.",
+ "arguments": {"location": "Zürich", "unit": "celsius", "days": 3, "radius_km": 10.0},
+ "tools": {
+  "openai": [{"type": "function", "function": {"name": "get_weather", "description": "Get the current weather for a city", "parameters": {"type": "object", "properties": {"location": {"type": "string", "description": "City name"}, "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}, "days": {"type": "integer", "description": "Forecast length"}, "radius_km": {"type": "number", "description": "Search radius", "default": 5.0}}, "required": ["location"]}}}],
+  "cohere": [{"name": "get_weather", "description": "Get the current weather for a city", "parameter_definitions": {"location": {"description": "City name", "type": "str", "required": true}, "unit": {"description": "celsius or fahrenheit", "type": "str", "required": false}, "days": {"description": "Forecast length", "type": "int", "required": false}, "radius_km": {"description": "Search radius", "type": "float", "required": false}}}]
+ },
+ "documents": [{"title": "Zürich climate", "text": "July is the warmest month, averaging 24.0 C at its highs."}, {"title": "Lake Zürich", "text": "The lake reaches 22.5 C in late summer."}],
+ "cases": [
+  {"name": "user", "add_generation_prompt": true,
+   "messages": [{"role": "user", "content": "Hello!"}]},
+  {"name": "user-nogen", "add_generation_prompt": false,
+   "messages": [{"role": "user", "content": "Hello!"}]},
+  {"name": "system-multiturn", "add_generation_prompt": true,
+   "messages": [{"role": "system", "content": "You are a terse assistant."},
+    {"role": "user", "content": "What is the capital of France?"},
+    {"role": "assistant", "content": "Paris."},
+    {"role": "user", "content": "And of Switzerland? Answer in one word, ça va ?"}]},
+  {"name": "multiturn-nogen", "add_generation_prompt": false,
+   "messages": [{"role": "user", "content": "Name a prime."},
+    {"role": "assistant", "content": "Seven."},
+    {"role": "user", "content": "Another,\nplease."},
+    {"role": "assistant", "content": "  Eleven.  "}]},
+  {"name": "tools-request", "add_generation_prompt": true, "tools": true,
+   "messages": [{"role": "system", "content": "You can look the weather up."},
+    {"role": "user", "content": "What is the weather in Zürich?"}]},
+  {"name": "tools-result", "add_generation_prompt": true, "tools": true,
+   "messages": [{"role": "user", "content": "What is the weather in Zürich for the next 3 days?"},
+    {"role": "assistant", "content": "", "tool_calls": [{"id": "a1b2c3d4e", "type": "function", "function": {"name": "get_weather", "arguments": "$ARGS"}}]},
+    {"role": "tool", "content": "{\"temperature\": 18.5, \"sky\": \"cloudy\"}", "tool_call_id": "a1b2c3d4e", "name": "get_weather"}]},
+  {"name": "documents", "add_generation_prompt": true, "documents": true,
+   "messages": [{"role": "user", "content": "How warm does Zürich get in July?"}]},
+  {"name": "image", "add_generation_prompt": true, "image": true}
+ ]
+}

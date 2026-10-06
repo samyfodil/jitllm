@@ -1,0 +1,131 @@
+---
+// jitllm against one engine at a time, from the checked data in
+// src/data/engines.json. Pick an engine; every feature shows
+// both marks, how each engine does it, and the source.
+import data from '../data/engines.json'
+
+interface Props {
+  start?: string
+}
+const { start = 'llama.cpp' } = Astro.props
+const others = data.engines.slice(1).map((e) => e.name)
+---
+<div class="vs not-content" data-vs data-start={start}>
+  <div class="vs-pick" role="tablist" aria-label="Engine to compare with jitllm">
+    {others.map((n) => <button type="button" role="tab" data-e={n} aria-selected={n === start ? 'true' : 'false'}>{n}</button>)}
+  </div>
+  <div class="vs-head">
+    <p class="vs-sum" aria-live="polite" data-sum></p>
+    <label class="vs-diff"><input type="checkbox" data-diff /> differences only</label>
+  </div>
+  <div class="vs-table" data-table></div>
+  <p class="vs-foot">Checked against each project's own documentation and source; every mark links to it. Out of date? <a href="https://github.com/samyfodil/jitllm/issues">Tell us</a>.</p>
+  <script type="application/json" data-json set:html={JSON.stringify(data)} />
+</div>
+
+<style is:global>
+  .vs { margin: 1.5rem 0; font: 14px/1.5 var(--sl-font, var(--sans, system-ui)); color: var(--text); }
+  .vs-pick { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+  .vs-pick button {
+    padding: 0.4rem 0.75rem; font: 12.5px/1 var(--sl-font-mono, var(--mono, monospace)); color: var(--text-2);
+    background: var(--bg-deep); border: 1px solid var(--line-strong); cursor: pointer;
+  }
+  .vs-pick button:hover { color: var(--text); background: var(--surface-2); }
+  .vs-pick button[aria-selected='true'] { color: var(--brand-ink); background: var(--brand); border-color: var(--brand); }
+  .vs-pick button:focus-visible, .vs-diff input:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+  .vs-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.5rem 1rem; margin: 1rem 0 0.6rem; }
+  .vs-sum { margin: 0; color: var(--text-2); }
+  .vs-sum b { color: var(--text); font-weight: 600; }
+  .vs-diff { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 13px; color: var(--muted); cursor: pointer; }
+  .vs-diff input { accent-color: var(--brand); }
+  .vs-table { border: 1px solid var(--line-strong); background: var(--bg-deep); }
+  .vs-g { padding: 0.75rem 0.9rem 0.3rem; font: 11px/1 var(--sl-font-mono, var(--mono, monospace)); letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+  .vs-row { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 0.75rem; padding: 0.55rem 0.9rem; border-top: 1px solid var(--line); align-items: start; }
+  .vs-row.vs-cols { border-top: 0; padding-top: 0.6rem; padding-bottom: 0.6rem; font: 11.5px/1.3 var(--sl-font-mono, var(--mono, monospace)); color: var(--muted); background: var(--surface); }
+  .vs-row.vs-cols .me { color: var(--brand); }
+  .vs-row.same { opacity: 0.72; }
+  .vs-f { color: var(--text); }
+  .vs-c { display: flex; gap: 0.5rem; min-width: 0; }
+  .vs-c .m { flex: 0 0 1.1rem; text-align: center; font-size: 15px; line-height: 1.35; }
+  .vs-c .n { min-width: 0; font-size: 12.5px; color: var(--text-2); overflow-wrap: anywhere; }
+  .vs-c a.n { color: var(--text-2); text-decoration: none; border-bottom: 1px dotted var(--line-strong); }
+  .vs-c a.n:hover { color: var(--brand); }
+  .vs-c .m.yes { color: var(--brand); }
+  .vs-c .m.partial { color: var(--m3); }
+  .vs-c .m.no { color: var(--muted); }
+  .vs-c .m.unknown { color: var(--muted); opacity: 0.6; }
+  .vs-half { display: inline-block; width: 0.72em; height: 0.72em; vertical-align: -0.05em; border: 1.5px solid currentColor; border-radius: 50%; background: linear-gradient(90deg, currentColor 50%, transparent 50%); }
+  .vs-empty { padding: 1.25rem 0.9rem; color: var(--muted); }
+  .vs-foot { margin: 0.6rem 0 0; font-size: 12.5px; color: var(--muted); }
+  .vs-foot a { color: var(--text-2); }
+  @media (max-width: 640px) {
+    .vs-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .vs-row .vs-f { grid-column: 1 / -1; font-weight: 500; }
+    .vs-row.vs-cols span:first-child { display: none; }
+  }
+</style>
+
+<script>
+  type Cell = { v: 'yes' | 'partial' | 'no' | 'unknown'; note?: string; src?: string }
+  type Data = { groups: { name: string; rows: [string, string][] }[]; engines: { name: string; url: string; cells: Record<string, Cell> }[] }
+
+  const esc = (s: string) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`)
+  const WORD = { yes: 'yes', partial: 'partly', no: 'no', unknown: 'not documented' }
+  const mark = (v: Cell['v']) => (v === 'partial' ? '<i class="vs-half"></i>' : { yes: '✓', no: '✗', unknown: '?' }[v])
+
+  for (const root of document.querySelectorAll<HTMLElement>('[data-vs]')) {
+    const d: Data = JSON.parse(root.querySelector('[data-json]')!.textContent!)
+    const me = d.engines[0]
+    const tabs = [...root.querySelectorAll<HTMLButtonElement>('[data-e]')]
+    const diff = root.querySelector<HTMLInputElement>('[data-diff]')!
+    let pick = root.dataset.start!
+
+    const cell = (c: Cell) => {
+      const note = esc(c.note || WORD[c.v])
+      const n = c.src ? `<a class="n" href="${esc(c.src)}">${note}</a>` : `<span class="n">${note}</span>`
+      return `<div class="vs-c"><span class="m ${c.v}" aria-label="${WORD[c.v]}">${mark(c.v)}</span>${n}</div>`
+    }
+
+    const render = () => {
+      const other = d.engines.find((e) => e.name === pick)!
+      let only = 0, both = 0, theirs = 0
+      let html = `<div class="vs-row vs-cols"><span>feature</span><span class="me">jitllm</span><span>${esc(other.name)}</span></div>`
+      for (const g of d.groups) {
+        let rows = ''
+        for (const [id, label] of g.rows) {
+          const a = me.cells[id] ?? { v: 'unknown' }
+          const b = other.cells[id] ?? { v: 'unknown' }
+          const same = a.v === b.v
+          if (a.v === 'yes' && b.v !== 'yes') only++
+          else if (a.v === 'yes' && b.v === 'yes') both++
+          else if (b.v === 'yes' && a.v !== 'yes') theirs++
+          if (diff.checked && same) continue
+          rows += `<div class="vs-row${same ? ' same' : ''}"><span class="vs-f">${esc(label)}</span>${cell(a)}${cell(b)}</div>`
+        }
+        if (rows) html += `<div class="vs-g">${esc(g.name)}</div>${rows}`
+      }
+      if (diff.checked && !html.includes('vs-f')) html += `<p class="vs-empty">No differences.</p>`
+      root.querySelector('[data-table]')!.innerHTML = html
+      root.querySelector('[data-sum]')!.innerHTML =
+        `jitllm has <b>${only}</b> of these features that ${esc(other.name)} does not fully have; both have <b>${both}</b>` +
+        (theirs ? `; ${esc(other.name)} has <b>${theirs}</b> that jitllm does not.` : '.')
+      tabs.forEach((t) => t.setAttribute('aria-selected', String(t.dataset.e === pick)))
+    }
+
+    tabs.forEach((t, i) => {
+      t.addEventListener('click', () => {
+        pick = t.dataset.e!
+        render()
+      })
+      t.addEventListener('keydown', (e) => {
+        const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
+        if (!step) return
+        const n = tabs[(i + step + tabs.length) % tabs.length]
+        n.focus()
+        n.click()
+      })
+    })
+    diff.addEventListener('change', render)
+    render()
+  }
+</script>

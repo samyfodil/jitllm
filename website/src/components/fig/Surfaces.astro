@@ -1,0 +1,26 @@
+---
+// jitllmd: three surfaces on one address, all projections of one engine.
+---
+<figure class="fig not-content">
+  <div class="fig-body">
+    <div class="flow" role="img" aria-label="OpenAI clients, Anthropic clients and Connect or gRPC clients, including the jitllmd command itself, reach one address. Each surface is a projection of the same engine, which holds models and sessions and runs them on the CPU and GPUs.">
+      <div class="col">
+        <div class="box">OpenAI SDK, curl</div>
+        <div class="box">Anthropic SDK</div>
+        <div class="box">jitllmd, Connect and gRPC clients</div>
+      </div>
+      <div class="arrow"><i></i></div>
+      <div class="col">
+        <div class="box hi">/v1/chat/completions<small>/v1/completions, /v1/models</small></div>
+        <div class="box hi">/v1/messages</div>
+        <div class="box hi">/jitllm.v1.*<small>models, devices, sessions, placement, telemetry</small></div>
+      </div>
+      <div class="arrow"><i></i></div>
+      <div class="col">
+        <div class="box hi2">one engine<small>loaded models, their sessions and queues</small></div>
+        <div class="box">CPU · GPUs</div>
+      </div>
+    </div>
+  </div>
+  <figcaption><b>One address, one engine.</b> No surface has an inference path of its own; a request on any of them runs in a session of the same loaded model.</figcaption>
+</figure>

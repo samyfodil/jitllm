@@ -1,0 +1,30 @@
+{
+ "documents": {
+  "ctx": "fb8e6db157b0aef4",
+  "out": "<|user|>How warm does Zürich get in July?<|end|><|assistant|>"
+ },
+ "multiturn-nogen": {
+  "ctx": "e631c00b615bc569",
+  "out": "<|user|>Name a prime.<|end|><|assistant|>Seven.<|end|><|user|>Another,\nplease.<|end|><|assistant|>  Eleven.  <|end|><|endoftext|>"
+ },
+ "system-multiturn": {
+  "ctx": "7d3c1dce75766a2d",
+  "out": "<|system|>You are a terse assistant.<|end|><|user|>What is the capital of France?<|end|><|assistant|>Paris.<|end|><|user|>And of Switzerland? Answer in one word, ça va ?<|end|><|assistant|>"
+ },
+ "tools-request": {
+  "ctx": "3fafa39f19fa9ce7",
+  "out": "<|system|>You can look the weather up.<|end|><|user|>What is the weather in Zürich?<|end|><|assistant|>"
+ },
+ "tools-result": {
+  "ctx": "d4f76e56c8925125",
+  "out": "<|user|>What is the weather in Zürich for the next 3 days?<|end|><|assistant|><|end|><|tool|>{\"temperature\": 18.5, \"sky\": \"cloudy\"}<|end|><|assistant|>"
+ },
+ "user": {
+  "ctx": "edcf7211e3081c09",
+  "out": "<|user|>Hello!<|end|><|assistant|>"
+ },
+ "user-nogen": {
+  "ctx": "85dd5a30289921c4",
+  "out": "<|user|>Hello!<|end|><|endoftext|>"
+ }
+}

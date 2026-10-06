@@ -1,0 +1,155 @@
+syntax = "proto3";
+
+package jitllm.v1;
+
+import "jitllm/v1/common.proto";
+
+// SessionService is session lifecycle.
+//
+// A SESSION owns the sequence; the TIER owns the model. That split is the
+// engine's own, and it is why a session is a first-class object here rather
+// than something implied by a request: a session holds a KV cache, a position,
+// and a placement, and all three outlive any one generate call.
+//
+// THE SERIALISATION IS PART OF THE CONTRACT. The engine allocates one scratch
+// set per DEVICE, so two sessions placed on the same device are correct but
+// cannot run at the same time. This service reports that rather than hiding
+// it: `Session.execution`, `Session.queue_position` and `GetDeviceQueue` exist
+// so a caller sees the queue instead of inferring it from latency. A second
+// session is never REFUSED for it -- it is admitted and it waits.
+
+service SessionService {
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse) {}
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse) {}
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse) {}
+  rpc CloseSession(CloseSessionRequest) returns (CloseSessionResponse) {}
+
+  // Forget the token stream without tearing the session down. Keeps the
+  // placement and the allocated KV; drops the history.
+  rpc ResetSession(ResetSessionRequest) returns (ResetSessionResponse) {}
+
+  // What is waiting on a device, and why.
+  rpc GetDeviceQueue(GetDeviceQueueRequest) returns (GetDeviceQueueResponse) {}
+}
+
+message Session {
+  string session_id = 1;
+  string model_id = 2;
+
+  // Maximum sequence length this session's KV cache was sized for.
+  int32 max_seq = 3;
+  // Positions currently held.
+  int32 position = 4;
+
+  // Devices this session's blocks are placed on, and how many blocks each
+  // holds. A session with no device entry runs entirely on the host.
+  repeated string device_ids = 5;
+  int32 device_blocks = 6;
+  int32 host_blocks = 7;
+
+  // Bytes of KV cache this session holds. KV is charged PER SESSION, so this
+  // is the number that decides how many sessions a card can hold -- and the
+  // engine has not measured that ceiling, which `SessionBudget` says out loud.
+  ByteSize kv_bytes = 8;
+
+  ExecutionMode execution = 9;
+  // Zero while running or when nothing is ahead. Positive while this session
+  // is waiting for the device's scratch.
+  int32 queue_position = 10;
+  bool generating = 11;
+
+  int64 created_unix_millis = 12;
+  int64 last_used_unix_millis = 13;
+
+  // Total tokens this session has produced, and prefilled.
+  int64 tokens_generated = 14;
+  int64 tokens_prefilled = 15;
+}
+
+// SessionBudget is the honest answer to "how many sessions fit". Two of its
+// three numbers are measured and the third is not, and the message says which.
+message SessionBudget {
+  ByteSize kv_bytes_per_session = 1;
+  ByteSize kv_bytes_in_use = 2;
+  int32 sessions_open = 3;
+
+  // The engine does not know how many sessions a device holds at a given
+  // MaxSeq: KV is charged per session and the device ledger cannot express
+  // it. This is ALWAYS false today. A client must not read `kv_bytes_*` as an
+  // admission limit.
+  bool sessions_per_device_measured = 4;
+  string unmeasured_note = 5;
+}
+
+message CreateSessionRequest {
+  string model_id = 1;
+  // Optional stable id. Generated when empty.
+  string session_id = 2;
+  // KV capacity in positions. Zero takes the model's context length.
+  int32 max_seq = 3;
+
+  // Placement for this session. Empty inherits the model's default.
+  repeated string device_ids = 4;
+  // Maximum blocks on a device. Unset means "as many as fit".
+  optional int32 max_device_blocks = 5;
+
+  // Let the engine adopt one block per token while serving, growing the
+  // device's share as memory frees. This is the `-gpu-grow` behaviour.
+  bool relocate_while_serving = 6;
+
+  // Sampler defaults for generate calls that do not carry their own.
+  SamplingParams sampling = 7;
+}
+
+message CreateSessionResponse {
+  Session session = 1;
+  SessionBudget budget = 2;
+}
+
+message GetSessionRequest {
+  string session_id = 1;
+}
+
+message GetSessionResponse {
+  Session session = 1;
+  SessionBudget budget = 2;
+}
+
+message ListSessionsRequest {
+  // Filter. Empty means all.
+  string model_id = 1;
+  string device_id = 2;
+}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+}
+
+message CloseSessionRequest {
+  string session_id = 1;
+}
+
+message CloseSessionResponse {}
+
+message ResetSessionRequest {
+  string session_id = 1;
+}
+
+message ResetSessionResponse {
+  Session session = 1;
+}
+
+message GetDeviceQueueRequest {
+  string device_id = 1;
+}
+
+message GetDeviceQueueResponse {
+  string device_id = 1;
+  ExecutionMode execution = 2;
+  // Sessions attached, in queue order. The head is the one holding the
+  // scratch when `running` is true.
+  repeated string session_ids = 3;
+  bool running = 4;
+  int32 waiting = 5;
+  string note = 6;
+}

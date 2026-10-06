@@ -1,0 +1,31 @@
+{
+ "documents": {
+  "ctx": "f68534fa0ae1eb14",
+  "out": "<BOS_TOKEN><|START_OF_TURN_TOKEN|><|USER_TOKEN|>How warm does Zürich get in July?<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>"
+ },
+ "multiturn-nogen": {
+  "ctx": "45cb23798862ef71",
+  "out": "<BOS_TOKEN><|START_OF_TURN_TOKEN|><|USER_TOKEN|>Name a prime.<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>Seven.<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|USER_TOKEN|>Another,\nplease.<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>Eleven.<|END_OF_TURN_TOKEN|>"
+ },
+ "system-multiturn": {
+  "ctx": "ad2077a817811e04",
+  "out": "<BOS_TOKEN><|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>You are a terse assistant.<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|USER_TOKEN|>What is the capital of France?<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>Paris.<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|USER_TOKEN|>And of Switzerland? Answer in one word, ça va ?<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>"
+ },
+ "tools-request": {
+  "ctx": "023cc0829b1c6ade",
+  "out": "<BOS_TOKEN><|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>You can look the weather up.<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|USER_TOKEN|>What is the weather in Zürich?<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>"
+ },
+ "tools-result": {
+  "by": "TemplateError",
+  "ctx": "605635a862afa5e0",
+  "raise": "Conversation roles must alternate user/assistant/user/assistant/..."
+ },
+ "user": {
+  "ctx": "cf6a18c9fe3ec48e",
+  "out": "<BOS_TOKEN><|START_OF_TURN_TOKEN|><|USER_TOKEN|>Hello!<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>"
+ },
+ "user-nogen": {
+  "ctx": "4e01e6433ce7b3b6",
+  "out": "<BOS_TOKEN><|START_OF_TURN_TOKEN|><|USER_TOKEN|>Hello!<|END_OF_TURN_TOKEN|>"
+ }
+}

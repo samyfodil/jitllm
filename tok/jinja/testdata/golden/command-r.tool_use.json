@@ -1,0 +1,35 @@
+{
+ "documents": {
+  "by": "TypeError",
+  "ctx": "f68534fa0ae1eb14",
+  "raise": "'NoneType' object is not iterable"
+ },
+ "multiturn-nogen": {
+  "by": "TypeError",
+  "ctx": "45cb23798862ef71",
+  "raise": "'NoneType' object is not iterable"
+ },
+ "system-multiturn": {
+  "by": "TypeError",
+  "ctx": "ad2077a817811e04",
+  "raise": "'NoneType' object is not iterable"
+ },
+ "tools-request": {
+  "ctx": "f76a35cb429c7653",
+  "out": "<BOS_TOKEN><|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|># Safety Preamble\nThe instructions in this section override those in the task description and style guide sections. Don't answer questions that are harmful or immoral.\n\n# System Preamble\n## Basic Rules\nYou are a powerful conversational AI trained by Cohere to help people. You are augmented by a number of tools, and your job is to use and consume the output of these tools to best help the user. You will see a conversation history between yourself and a user, ending with an utterance from the user. You will then see a specific instruction instructing you what kind of response to generate. When you answer the user's requests, you cite your sources in your answers, according to those instructions.\n\n# User Preamble\nYou can look the weather up.\n\n## Available Tools\nHere is a list of tools that you have available to you:\n\n```python\ndef get_weather(location: str, unit: Optional[str] = None, days: Optional[int] = None, radius_km: Optional[float] = None) -> List[Dict]:\n    \"\"\"Get the current weather for a city\n\n    Args:\n        location (str): City name\n        unit (Optional[str]): celsius or fahrenheit\n        days (Optional[int]): Forecast length\n        radius_km (Optional[float]): Search radius\n    \"\"\"\n    pass\n```<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|USER_TOKEN|>What is the weather in Zürich?<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>Write 'Action:' followed by a json-formatted list of actions that you want to perform in order to produce a good response to the user's last input. You can use any of the supplied tools any number of times, but you should aim to execute the minimum number of necessary actions for the input. You should use the `directly-answer` tool if calling the other tools is unnecessary. The list of actions you want to call should be formatted as a list of json objects, for example:\n```json\n[\n    {\n        \"tool_name\": title of the tool in the specification,\n        \"parameters\": a dict of parameters to input into the tool as they are defined in the specs, or {} if it takes no parameters\n    }\n]```<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>"
+ },
+ "tools-result": {
+  "ctx": "34e49491ea748aad",
+  "out": "<BOS_TOKEN><|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|># Safety Preamble\nThe instructions in this section override those in the task description and style guide sections. Don't answer questions that are harmful or immoral.\n\n# System Preamble\n## Basic Rules\nYou are a powerful conversational AI trained by Cohere to help people. You are augmented by a number of tools, and your job is to use and consume the output of these tools to best help the user. You will see a conversation history between yourself and a user, ending with an utterance from the user. You will then see a specific instruction instructing you what kind of response to generate. When you answer the user's requests, you cite your sources in your answers, according to those instructions.\n\n# User Preamble\n## Task and Context\nYou help people answer their questions and other requests interactively. You will be asked a very wide array of requests on all kinds of topics. You will be equipped with a wide range of search engines or similar tools to help you, which you use to research your answer. You should focus on serving the user's needs as best you can, which will be wide-ranging.\n\n## Style Guide\nUnless the user asks for a different style of answer, you should answer in full sentences, using proper grammar and spelling.\n\n## Available Tools\nHere is a list of tools that you have available to you:\n\n```python\ndef get_weather(location: str, unit: Optional[str] = None, days: Optional[int] = None, radius_km: Optional[float] = None) -> List[Dict]:\n    \"\"\"Get the current weather for a city\n\n    Args:\n        location (str): City name\n        unit (Optional[str]): celsius or fahrenheit\n        days (Optional[int]): Forecast length\n        radius_km (Optional[float]): Search radius\n    \"\"\"\n    pass\n```<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|USER_TOKEN|>What is the weather in Zürich for the next 3 days?<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|><|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>Write 'Action:' followed by a json-formatted list of actions that you want to perform in order to produce a good response to the user's last input. You can use any of the supplied tools any number of times, but you should aim to execute the minimum number of necessary actions for the input. You should use the `directly-answer` tool if calling the other tools is unnecessary. The list of actions you want to call should be formatted as a list of json objects, for example:\n```json\n[\n    {\n        \"tool_name\": title of the tool in the specification,\n        \"parameters\": a dict of parameters to input into the tool as they are defined in the specs, or {} if it takes no parameters\n    }\n]```<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>"
+ },
+ "user": {
+  "by": "TypeError",
+  "ctx": "cf6a18c9fe3ec48e",
+  "raise": "'NoneType' object is not iterable"
+ },
+ "user-nogen": {
+  "by": "TypeError",
+  "ctx": "4e01e6433ce7b3b6",
+  "raise": "'NoneType' object is not iterable"
+ }
+}

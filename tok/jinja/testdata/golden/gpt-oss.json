@@ -1,0 +1,30 @@
+{
+ "documents": {
+  "ctx": "5851e70ec149f2eb",
+  "out": "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\nCurrent date: 2024-07-26\n\nReasoning: medium\n\n# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>user<|message|>How warm does Zürich get in July?<|end|><|start|>assistant"
+ },
+ "multiturn-nogen": {
+  "ctx": "40c20fe3d44f6326",
+  "out": "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\nCurrent date: 2024-07-26\n\nReasoning: medium\n\n# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>user<|message|>Name a prime.<|end|><|start|>assistant<|channel|>final<|message|>Seven.<|end|><|start|>user<|message|>Another,\nplease.<|end|><|start|>assistant<|channel|>final<|message|>  Eleven.  <|return|>"
+ },
+ "system-multiturn": {
+  "ctx": "e650e4bc338e91b9",
+  "out": "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\nCurrent date: 2024-07-26\n\nReasoning: medium\n\n# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions\n\nYou are a terse assistant.\n\n<|end|><|start|>user<|message|>What is the capital of France?<|end|><|start|>assistant<|channel|>final<|message|>Paris.<|end|><|start|>user<|message|>And of Switzerland? Answer in one word, ça va ?<|end|><|start|>assistant"
+ },
+ "tools-request": {
+  "ctx": "0be1b61c41ddf87e",
+  "out": "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\nCurrent date: 2024-07-26\n\nReasoning: medium\n\n# Valid channels: analysis, commentary, final. Channel must be included for every message.\nCalls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Instructions\n\nYou can look the weather up.\n\n# Tools\n\n## functions\n\nnamespace functions {\n\n// Get the current weather for a city\ntype get_weather = (_: {\n// City name\nlocation: string,\nunit?: \"celsius\" | \"fahrenheit\",\n// Forecast length\ndays?: number,\n// Search radius\nradius_km?: number, // default: 5.0,\n}) => any;\n\n} // namespace functions<|end|><|start|>user<|message|>What is the weather in Zürich?<|end|><|start|>assistant"
+ },
+ "tools-result": {
+  "ctx": "7db2c3cea91e4470",
+  "out": "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\nCurrent date: 2024-07-26\n\nReasoning: medium\n\n# Valid channels: analysis, commentary, final. Channel must be included for every message.\nCalls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Tools\n\n## functions\n\nnamespace functions {\n\n// Get the current weather for a city\ntype get_weather = (_: {\n// City name\nlocation: string,\nunit?: \"celsius\" | \"fahrenheit\",\n// Forecast length\ndays?: number,\n// Search radius\nradius_km?: number, // default: 5.0,\n}) => any;\n\n} // namespace functions<|end|><|start|>user<|message|>What is the weather in Zürich for the next 3 days?<|end|><|start|>assistant to=functions.get_weather<|channel|>commentary json<|message|>{\"location\": \"Zürich\", \"unit\": \"celsius\", \"days\": 3, \"radius_km\": 10.0}<|call|><|start|>functions.get_weather to=assistant<|channel|>commentary<|message|>\"{\\\"temperature\\\": 18.5, \\\"sky\\\": \\\"cloudy\\\"}\"<|end|><|start|>assistant"
+ },
+ "user": {
+  "ctx": "db365efdaa0be00c",
+  "out": "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\nCurrent date: 2024-07-26\n\nReasoning: medium\n\n# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>user<|message|>Hello!<|end|><|start|>assistant"
+ },
+ "user-nogen": {
+  "ctx": "c93831e28dcf6bf3",
+  "out": "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\nCurrent date: 2024-07-26\n\nReasoning: medium\n\n# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>user<|message|>Hello!<|end|>"
+ }
+}

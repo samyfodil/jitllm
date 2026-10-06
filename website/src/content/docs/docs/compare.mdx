@@ -1,0 +1,30 @@
+---
+title: Compared with other engines
+description: jitllm's features checked against llama.cpp, Ollama, vLLM, SGLang, TensorRT-LLM, MLX, mistral.rs, ZML, Magnitude and colibri and the measured results.
+---
+
+import Versus from '../../../components/Versus.astro'
+
+Every row is a jitllm feature, and every mark was checked against the other project's own documentation or source, which it links to. These projects move fast: if a mark is out of date, [open an issue](https://github.com/samyfodil/jitllm/issues) and it will be corrected.
+
+## Pick an engine
+
+<Versus />
+
+## Measured
+
+Taken on the same machine, in the same pass, on the same weights. Ratios are jitllm's rate divided by the other engine's; the [benchmarks](/docs/reference/benchmarks/) page has every row and the method.
+
+| Against | Hardware | What was measured | Result |
+|---|---|---|---|
+| llama.cpp | V100, 1 to 5 GPUs, 35 models | Prefill, 512-token prompt | ahead on 34, level on 1; up to 4.62× |
+| llama.cpp | V100, 35 models | Decode, 128 tokens | ahead on all 35; 1.01× to 1.35× |
+| llama.cpp | V100, 11 models | Time to first token, ~2048-token prompt | sooner on all 11; up to 4.08× |
+| llama.cpp | Xeon E5-2680 v4, CPU, 6 models | Prefill and decode | prefill ahead on all 6; mixtures' decode level or ahead; dense decode 3 to 5% behind |
+| llama.cpp | Apple M4, Metal and CPU, 7 models | Prefill and decode | Metal decode ahead on 4; Metal prefill behind on 6, by up to 14%; CPU decode 0.90× to 1.09× |
+| vLLM 0.18.1 | V100 | Batched decode, Llama-3.1-8B, 16 to 128 sequences | 2.42× to 5.53× |
+| vLLM 0.18.1 | V100 | Time to first token, ~2048-token prompt | sooner on every model it loaded |
+| mistral.rs 0.9.4 | Xeon CPU, Apple M4 | Prefill and decode | ahead everywhere it ran |
+| ZML | Xeon CPU | Decode, bf16 weights | ahead on both models |
+
+Magnitude, colibri, SGLang and TensorRT-LLM have not been measured against jitllm yet.

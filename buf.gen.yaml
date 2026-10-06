@@ -1,0 +1,20 @@
+version: v2
+
+# Regenerate with `buf generate` from the repository root. `clean` makes the
+# output a function of the .proto files alone: a message deleted from a .proto
+# cannot survive in server/gen as a stale Go type.
+clean: true
+
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/samyfodil/jitllm/server/gen
+
+plugins:
+  - local: protoc-gen-go
+    out: server/gen
+    opt: paths=source_relative
+  - local: protoc-gen-connect-go
+    out: server/gen
+    opt: paths=source_relative

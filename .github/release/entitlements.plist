@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The same two entitlements a cross-compiled arm64 test binary is signed
+	     with before it runs on a Mac.
+	     They matter only under the hardened runtime, which notarization
+	     requires: jit/cpu maps generated code with mmap(RW) + mprotect(RX), and
+	     a hardened binary without allow-unsigned-executable-memory is
+	     SIGKILLed on its first fetch from that page (jit/cpu/exec_darwin.go). -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+</dict>
+</plist>

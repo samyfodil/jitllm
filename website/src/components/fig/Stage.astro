@@ -1,0 +1,280 @@
+---
+// One concept of the runtime, as a widget. Every concept uses the same
+// picture: a model's blocks, the places a block can be (the card, host RAM,
+// the .jlm file on disk) and the KV pages each block grows. Each `step` turns
+// on one more mechanism than the one before and gives the reader the control
+// that mechanism has.
+interface Props {
+  step: 'fault' | 'place' | 'kv' | 'weights' | 'spill' | 'relocate'
+}
+const { step } = Astro.props
+const N = 8
+const gpu = step !== 'fault'
+const captions: Record<Props['step'], string> = {
+  fault: '<b>Opening reads nothing; the first token reads each block once.</b> With a budget that holds the model, every later token reads nothing from disk.',
+  place: '<b>Drag the seam.</b> A token runs the card\'s blocks, crosses the seam once, and finishes on the host. A block on the card has no copy in host RAM.',
+  kv: '<b>History is allocated a page at a time.</b> Each block keeps its own KV pages, on the side the block runs. A short conversation holds a few pages, not a reservation for the whole context.',
+  weights: '<b>Set host RAM one page short.</b> Under MRU a token pays one page-in; under LRU every fault evicts the block the token needs next, and the whole host side is read every token.',
+  spill: '<b>Lower -kv-budget.</b> The oldest pages move to the -kv-cache directory; attention still reads all of the history, so they stream back each token, outlined as they are read.',
+  relocate: '<b>Let the conversation grow.</b> When the card\'s weights and history no longer fit, -relocate hands its last block to the host, KV pages and all. Turn it off and the context stops growing on the card.',
+}
+---
+<figure class="fig not-content" data-fig="stage" data-step={step}>
+  <div class="ctl">
+    {step === 'fault' && <button type="button" data-reopen>Reopen the model</button>}
+    {step === 'place' && <label>blocks on cuda:0 <input type="range" min="0" max={N} value="4" data-seam aria-label="Blocks on cuda:0" /> <output data-o="seam">4</output></label>}
+    {step === 'kv' && <label>context <input type="range" min="0" max="32" value="0" data-ctx aria-label="Positions of context" /> <output data-o="ctx">0</output> positions</label>}
+    {step === 'weights' && <>
+      <label>host RAM <input type="range" min="1" max="4" value="3" data-ram aria-label="Block pages host RAM holds" /> <output data-o="ram">3</output> of 4 pages</label>
+      <span role="group" aria-label="Eviction policy" style="display:inline-flex;gap:0.25rem"><button type="button" data-pol="mru" aria-pressed="true">MRU</button><button type="button" data-pol="lru" aria-pressed="false">LRU</button></span>
+    </>}
+    {step === 'spill' && <label>-kv-budget <input type="range" min="0" max="16" value="8" data-kvb aria-label="KV pages host RAM holds" /> <output data-o="kvb">8</output> pages</label>}
+    {step === 'relocate' && <label><input type="checkbox" data-reloc checked /> -relocate</label>}
+    <span class="sp"></span>
+    <button type="button" data-play>Pause</button>
+    {step !== 'fault' && <button type="button" data-reset>Reset</button>}
+  </div>
+  <div class="fig-body">
+    <div class="stg" style={`--n:${N};--lanes:${gpu ? 3 : 2}`}>
+      <div class="stg-lanes" aria-hidden="true">
+        {gpu && <div class="stg-lane"><span>cuda:0<small>VRAM</small></span></div>}
+        <div class="stg-lane"><span>host<small>RAM</small></span></div>
+        <div class="stg-lane"><span>disk<small>{step === 'spill' ? '.jlm · kv-cache' : '.jlm file'}</small></span></div>
+      </div>
+      <div class="stg-cols" aria-hidden="true">
+        {Array.from({ length: N }, (_, i) => <div class="stg-col"><div class="stg-b">{i}</div></div>)}
+      </div>
+    </div>
+    <div class="stats" data-stats aria-live="polite"></div>
+    {gpu && step !== 'place' && (
+      <div class="legend">
+        <span><i style="background:color-mix(in srgb,var(--gpu) 30%,var(--surface));border-color:var(--gpu)"></i>block weights</span>
+        <span><i style="background:var(--m2);border-color:var(--m2)"></i>a KV page ({4} positions)</span>
+        <span><i style="box-shadow:0 0 0 2px var(--text)"></i>the token</span>
+        <span><i style="box-shadow:0 0 0 2px var(--m3)"></i>read from disk</span>
+      </div>
+    )}
+  </div>
+  <figcaption set:html={captions[step]} />
+</figure>
+
+<style is:global>
+  .stg { position: relative; --lh: 4.4rem; height: calc(var(--lanes) * var(--lh)); }
+  .stg-lanes { position: absolute; inset: 0; display: grid; grid-template-rows: repeat(var(--lanes), 1fr); }
+  .stg-lane { border-bottom: 1px dashed var(--line-strong); display: flex; align-items: center; }
+  .stg-lane:last-child { border-bottom: 0; }
+  .stg-lane span { width: 4.75rem; color: var(--text-2); font-size: 11px; line-height: 1.3; }
+  .stg-lane small { display: block; color: var(--muted); font-size: 10px; }
+  .stg-cols { position: absolute; left: 5rem; right: 0; top: 0; bottom: 0; display: grid; grid-template-columns: repeat(var(--n), 1fr); gap: 6px; }
+  .stg-col { position: relative; }
+  .stg-b, .stg-k { position: absolute; left: 0; top: 0; transition: transform 0.55s cubic-bezier(.3,.7,.2,1), opacity 0.35s, background-color 0.35s, border-color 0.35s; }
+  .stg-b { right: 0; height: 1.6rem; display: grid; place-items: center; font-size: 10px; color: var(--text); border: 1px solid var(--line-strong); background: var(--surface); }
+  .stg-b.gpu { border-color: var(--gpu); background: color-mix(in srgb, var(--gpu) 28%, var(--surface)); }
+  .stg-b.host { border-color: color-mix(in srgb, var(--host) 60%, transparent); background: color-mix(in srgb, var(--host) 22%, var(--surface)); }
+  .stg-b.disk { border-color: color-mix(in srgb, var(--disk) 50%, transparent); background: color-mix(in srgb, var(--disk) 12%, var(--surface)); color: var(--muted); }
+  .stg-b.on { box-shadow: 0 0 0 2px var(--text); z-index: 2; }
+  .stg-b.read, .stg-k.read { box-shadow: 0 0 0 2px var(--m3); z-index: 2; }
+  .stg-k { width: var(--sq, 9px); height: var(--sq, 9px); background: var(--m2); border: 1px solid color-mix(in srgb, var(--m2) 60%, var(--bg-deep)); }
+  .stg-k.disk { background: color-mix(in srgb, var(--m2) 30%, var(--surface)); }
+  .stg-k.gone { opacity: 0; }
+  @media (prefers-reduced-motion: reduce) { .stg-b, .stg-k { transition: none; } }
+</style>
+
+<script>
+  import { ticker } from './ticker'
+
+  const PER = 4 // positions a KV page holds
+  const MAXP = 8 // KV pages drawn per block
+  const W = 4, U = 1, CARD = 24 // the card's budget: weights cost W a block, a KV page U
+
+  for (const fig of document.querySelectorAll<HTMLElement>('[data-fig="stage"]')) {
+    const $ = <T extends Element>(s: string) => fig.querySelector<T>(s)
+    const step = fig.dataset.step!
+    const gpuLane = step !== 'fault'
+    const stg = $<HTMLElement>('.stg')!
+    const cols = [...fig.querySelectorAll<HTMLElement>('.stg-col')]
+    const blocks = cols.map((c) => c.querySelector<HTMLElement>('.stg-b')!)
+    const N = cols.length
+    const kv = cols.map((c) =>
+      Array.from({ length: MAXP }, () => {
+        const k = document.createElement('div')
+        k.className = 'stg-k gone'
+        c.appendChild(k)
+        return k
+      }),
+    )
+    const input = (name: string) => $<HTMLInputElement>(`[data-${name}]`)
+    const out = (name: string, v: string | number) => {
+      const o = $(`[data-o="${name}"]`)
+      if (o) o.textContent = String(v)
+    }
+
+    // The step's mechanisms and starting point.
+    const growKV = ['kv', 'spill', 'relocate'].includes(step)
+    const START = { fault: 0, place: 4, kv: 4, weights: 4, spill: 4, relocate: 4 }[step]!
+    let seam = START
+    let ram = step === 'weights' ? 3 : step === 'relocate' ? 4 : N
+    let pol = 'mru'
+    let pos = step === 'spill' ? 8 : 0
+    let at = -1, clock = 0, tokens = 0
+    let res: boolean[] = [], used: number[] = []
+    let pins = 0, lastPins = -1, back = 0, lastBack = -1, readTotal = 0
+    const reading = new Set<HTMLElement>()
+
+    const kvBudget = () => (step === 'spill' ? +input('kvb')!.value : 0)
+    const pages = () => (growKV || step === 'kv' ? Math.min(MAXP, Math.ceil(pos / PER)) : 0)
+    const resident = () => res.reduce((n, r, i) => n + (r && i >= seam ? 1 : 0), 0)
+    const spilled = () => {
+      const s = new Set<string>()
+      const B = kvBudget()
+      if (!B) return s
+      const P = pages()
+      let inRam = (N - seam) * P
+      for (let j = 0; j < P && inRam > B; j++)
+        for (let i = seam; i < N && inRam > B; i++, inRam--) s.add(`${i}:${j}`)
+      return s
+    }
+    const reset = () => {
+      seam = step === 'place' ? +input('seam')!.value : START
+      pos = step === 'spill' ? 8 : step === 'kv' ? +input('ctx')!.value : 0
+      at = -1
+      clock = tokens = readTotal = pins = back = 0
+      lastPins = lastBack = -1
+      res = Array(N).fill(false)
+      used = Array(N).fill(0)
+      // Every step but the first starts with the host's RAM filled in order.
+      if (step !== 'fault') for (let i = seam; i < N && resident() < ram; i++) res[i] = true
+      reading.clear()
+      draw()
+    }
+
+    const lh = () => parseFloat(getComputedStyle(stg).getPropertyValue('--lh')) * parseFloat(getComputedStyle(document.documentElement).fontSize)
+    const row = (lane: number) => (gpuLane ? lane : lane - 1) // lane 0 is the card
+
+    const draw = () => {
+      const h = lh(), P = pages(), sp = spilled()
+      // KV pages are four to a row, sized to the column.
+      const sq = Math.max(4, Math.min(9, Math.floor((cols[0].clientWidth - 6) / 4)))
+      stg.style.setProperty('--sq', `${sq}px`)
+      let kg = 0, kh = 0, kd = 0
+      blocks.forEach((b, i) => {
+        const l = i < seam ? 0 : res[i] ? 1 : 2
+        b.className = `stg-b ${['gpu', 'host', 'disk'][l]}${i === at ? ' on' : ''}${reading.has(b) ? ' read' : ''}`
+        b.style.transform = `translateY(${row(l) * h + 6}px)`
+        kv[i].forEach((k, j) => {
+          const live = j < P, disk = sp.has(`${i}:${j}`)
+          const l2 = disk ? 2 : i < seam ? 0 : 1
+          if (live) disk ? kd++ : l2 === 0 ? kg++ : kh++
+          k.className = `stg-k${live ? '' : ' gone'}${disk ? ' disk' : ''}${reading.has(k) ? ' read' : ''}`
+          k.style.transform = `translate(${(j % 4) * (sq + 2)}px, ${row(l2) * h + 6 + 28 + Math.floor(j / 4) * (sq + 2)}px)`
+        })
+      })
+      const stat = (label: string, v: string | number) => `<span>${label} <b class="num">${v}</b></span>`
+      const s: string[] = []
+      if (step === 'fault') s.push(stat('tokens', tokens), stat('blocks read this token', pins), stat('blocks read in total', readTotal))
+      if (step === 'place') s.push(stat('blocks on the card', seam), stat('on the host', N - seam), stat('seam crossings a token', seam > 0 && seam < N ? 1 : 0))
+      if (step === 'kv') s.push(stat('positions', pos), stat('KV pages a block', P), stat('on the card', kg), stat('in RAM', kh))
+      if (step === 'weights') s.push(stat('host blocks', N - seam), stat('host RAM', `${ram} pages`), stat('page-ins last token', lastPins < 0 ? '–' : lastPins))
+      if (step === 'spill') s.push(stat('KV pages in RAM', kh), stat('spilled', kd), stat('streamed back last token', lastBack < 0 ? '–' : lastBack))
+      if (step === 'relocate') s.push(stat('positions', pos), stat('blocks on the card', seam), stat('card used', `${Math.round(((seam * W + seam * P * U) / CARD) * 100)}%`), stat('page-ins last token', lastPins < 0 ? '–' : lastPins))
+      $('[data-stats]')!.innerHTML = s.join('')
+    }
+
+    const tick = () => {
+      reading.clear()
+      at++
+      if (at >= N) {
+        at = 0
+        tokens++
+        lastPins = pins
+        lastBack = back
+        pins = back = 0
+        if (step === 'kv' || growKV) {
+          pos++
+          if (step === 'kv') {
+            if (pos > PER * MAXP) pos = 0
+            input('ctx')!.value = String(pos)
+            out('ctx', pos)
+          } else if (Math.ceil(pos / PER) > MAXP) {
+            // A new conversation: the history goes, the placement comes back.
+            return reset()
+          }
+        }
+        if (step === 'relocate') {
+          const full = seam * W + seam * pages() * U > CARD
+          if (full && input('reloc')!.checked && seam > 0) {
+            seam--
+            res[seam] = false
+          } else if (full) {
+            pos--
+          }
+        }
+      }
+      clock++
+      if (at >= seam) {
+        if (!res[at]) {
+          pins++
+          readTotal++
+          reading.add(blocks[at])
+          if (resident() >= ram) {
+            // Evict by policy among the host's resident blocks.
+            let v = -1
+            for (let i = seam; i < N; i++)
+              if (res[i] && (v < 0 || (pol === 'mru' ? used[i] > used[v] : used[i] < used[v]))) v = i
+            if (v >= 0) res[v] = false
+          }
+          res[at] = true
+        }
+        used[at] = clock
+        for (const key of spilled()) {
+          const [i, j] = key.split(':').map(Number)
+          if (i === at) {
+            back++
+            reading.add(kv[i][j])
+          }
+        }
+      }
+      draw()
+    }
+
+    input('seam')?.addEventListener('input', () => {
+      const to = +input('seam')!.value
+      // A block leaving the card is faulted into RAM when the token reaches it.
+      for (let i = Math.min(seam, to); i < Math.max(seam, to); i++) res[i] = false
+      seam = to
+      out('seam', to)
+      draw()
+    })
+    input('ctx')?.addEventListener('input', () => {
+      pos = +input('ctx')!.value
+      out('ctx', pos)
+      draw()
+    })
+    input('ram')?.addEventListener('input', () => {
+      ram = +input('ram')!.value
+      out('ram', ram)
+      while (resident() > ram) {
+        const v = res.lastIndexOf(true)
+        res[v] = false
+      }
+      lastPins = -1
+      draw()
+    })
+    input('kvb')?.addEventListener('input', () => {
+      out('kvb', input('kvb')!.value)
+      lastBack = -1
+      draw()
+    })
+    for (const b of fig.querySelectorAll<HTMLButtonElement>('[data-pol]'))
+      b.addEventListener('click', () => {
+        pol = b.dataset.pol!
+        for (const o of fig.querySelectorAll('[data-pol]')) o.setAttribute('aria-pressed', String(o === b))
+        reset()
+      })
+    $('[data-reset]')?.addEventListener('click', reset)
+    $('[data-reopen]')?.addEventListener('click', reset)
+    addEventListener('resize', draw)
+    reset()
+    ticker(fig, tick, step === 'kv' ? 90 : 110, $<HTMLButtonElement>('[data-play]'))
+  }
+</script>

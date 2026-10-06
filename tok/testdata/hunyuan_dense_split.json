@@ -1,0 +1,499 @@
+[
+ {
+  "text": "def getUserName(self):\n    return 12345",
+  "pieces": [
+   "def",
+   " getUserName",
+   "(self",
+   "):\n",
+   "   ",
+   " return",
+   " ",
+   "123",
+   "45"
+  ]
+ },
+ {
+  "text": "The capital of France is",
+  "pieces": [
+   "The",
+   " capital",
+   " of",
+   " France",
+   " is"
+  ]
+ },
+ {
+  "text": " leading space and  double  spaces\nline two\ttab",
+  "pieces": [
+   " leading",
+   " space",
+   " and",
+   " ",
+   " double",
+   " ",
+   " spaces",
+   "\n",
+   "line",
+   " two",
+   "\ttab"
+  ]
+ },
+ {
+  "text": "12345 1234567 3.14159 (42) -7 x86_64 2025年10月3日",
+  "pieces": [
+   "123",
+   "45",
+   " ",
+   "123",
+   "456",
+   "7",
+   " ",
+   "3",
+   ".",
+   "141",
+   "59",
+   " (",
+   "42",
+   ")",
+   " -",
+   "7",
+   " x",
+   "86",
+   "_",
+   "64",
+   " ",
+   "202",
+   "5",
+   "年",
+   "10",
+   "月",
+   "3",
+   "日"
+  ]
+ },
+ {
+  "text": "价格是12345元，日期2025-10-03。",
+  "pieces": [
+   "价格是",
+   "123",
+   "45",
+   "元",
+   "，",
+   "日期",
+   "202",
+   "5",
+   "-",
+   "10",
+   "-",
+   "03",
+   "。"
+  ]
+ },
+ {
+  "text": "日本語のテキストです。カタカナとひらがな",
+  "pieces": [
+   "日本語のテキストです",
+   "。",
+   "カタカナとひらがな"
+  ]
+ },
+ {
+  "text": "中文abc混合English词",
+  "pieces": [
+   "中文",
+   "abc",
+   "混合",
+   "English",
+   "词"
+  ]
+ },
+ {
+  "text": "(foo) [bar] {baz} 'quote' \"double\" `tick`",
+  "pieces": [
+   "(foo",
+   ")",
+   " [",
+   "bar",
+   "]",
+   " {",
+   "baz",
+   "}",
+   " '",
+   "quote",
+   "'",
+   " \"",
+   "double",
+   "\"",
+   " `",
+   "tick",
+   "`"
+  ]
+ },
+ {
+  "text": "don't won't I'm we'll they've she'd it's",
+  "pieces": [
+   "don",
+   "'t",
+   " won",
+   "'t",
+   " I",
+   "'m",
+   " we",
+   "'ll",
+   " they",
+   "'ve",
+   " she",
+   "'d",
+   " it",
+   "'s"
+  ]
+ },
+ {
+  "text": "x+=1; y-->0 && z!=2 || w<=3",
+  "pieces": [
+   "x",
+   "+=",
+   "1",
+   ";",
+   " y",
+   "-->",
+   "0",
+   " &&",
+   " z",
+   "!=",
+   "2",
+   " ||",
+   " w",
+   "<=",
+   "3"
+  ]
+ },
+ {
+  "text": "a/b/c http://example.com/path?q=1&r=2#frag",
+  "pieces": [
+   "a",
+   "/b",
+   "/c",
+   " http",
+   "://",
+   "example",
+   ".com",
+   "/path",
+   "?q",
+   "=",
+   "1",
+   "&r",
+   "=",
+   "2",
+   "#frag"
+  ]
+ },
+ {
+  "text": "\n\n\nthree newlines\r\n\r\ncrlf  \n  \n mixed",
+  "pieces": [
+   "\n\n\n",
+   "three",
+   " newlines",
+   "\r\n\r\n",
+   "crlf",
+   "  \n  \n",
+   " mixed"
+  ]
+ },
+ {
+  "text": "trailing spaces   ",
+  "pieces": [
+   "trailing",
+   " spaces",
+   "   "
+  ]
+ },
+ {
+  "text": "   ",
+  "pieces": [
+   "   "
+  ]
+ },
+ {
+  "text": "tab\t\tdouble tab\t",
+  "pieces": [
+   "tab",
+   "\t",
+   "\tdouble",
+   " tab",
+   "\t"
+  ]
+ },
+ {
+  "text": "emoji 🎉🔥 mixed 👍🏽 with ascii",
+  "pieces": [
+   "emoji",
+   " 🎉🔥",
+   " mixed",
+   " 👍🏽",
+   " with",
+   " ascii"
+  ]
+ },
+ {
+  "text": "café naïve résumé",
+  "pieces": [
+   "café",
+   " naïve",
+   " résumé"
+  ]
+ },
+ {
+  "text": "é combining à́ marks ́alone",
+  "pieces": [
+   "é",
+   " combining",
+   " à́",
+   " marks",
+   " ́alone"
+  ]
+ },
+ {
+  "text": "nbsp here em-space　ideographic",
+  "pieces": [
+   "nbsp",
+   " here",
+   " em",
+   "-space",
+   "　ideographic"
+  ]
+ },
+ {
+  "text": "zero​width‍joiner﻿bom",
+  "pieces": [
+   "zero",
+   "​width",
+   "‍joiner",
+   "﻿bom"
+  ]
+ },
+ {
+  "text": "Ω≈ç√∫˜µ≤≥÷ ©®™ §¶",
+  "pieces": [
+   "Ω",
+   "≈",
+   "ç",
+   "√∫˜",
+   "µ",
+   "≤≥÷",
+   " ©®™",
+   " §¶"
+  ]
+ },
+ {
+  "text": "math: ∑_{i=1}^{n} x_i² ≥ 0",
+  "pieces": [
+   "math",
+   ":",
+   " ∑_{",
+   "i",
+   "=",
+   "1",
+   "}^{",
+   "n",
+   "}",
+   " x",
+   "_i",
+   "²",
+   " ≥",
+   " ",
+   "0"
+  ]
+ },
+ {
+  "text": "Ⅻ ½ ① ٣ ४ ൬",
+  "pieces": [
+   "Ⅻ",
+   " ",
+   "½",
+   " ",
+   "①",
+   " ",
+   "٣",
+   " ",
+   "४",
+   " ",
+   "൬"
+  ]
+ },
+ {
+  "text": "Привет, мир! Γειά σου κόσμε",
+  "pieces": [
+   "Привет",
+   ",",
+   " мир",
+   "!",
+   " Γειά",
+   " σου",
+   " κόσμε"
+  ]
+ },
+ {
+  "text": "مرحبا بالعالم שלום עולם",
+  "pieces": [
+   "مرحبا",
+   " بالعالم",
+   " שלום",
+   " עולם"
+  ]
+ },
+ {
+  "text": "!!!??? ... --- ___ ***",
+  "pieces": [
+   "!!!???",
+   " ...",
+   " ---",
+   " ___",
+   " ***"
+  ]
+ },
+ {
+  "text": ".hidden -flag --long-flag @user #tag $var %mod",
+  "pieces": [
+   ".hidden",
+   " -",
+   "flag",
+   " --",
+   "long",
+   "-flag",
+   " @",
+   "user",
+   " #",
+   "tag",
+   " $",
+   "var",
+   " %",
+   "mod"
+  ]
+ },
+ {
+  "text": "C++ C# F# .NET node.js",
+  "pieces": [
+   "C",
+   "++",
+   " C",
+   "#",
+   " F",
+   "#",
+   " .",
+   "NET",
+   " node",
+   ".js"
+  ]
+ },
+ {
+  "text": "MixedCASE_123-456 snake_case camelCase",
+  "pieces": [
+   "MixedCASE",
+   "_",
+   "123",
+   "-",
+   "456",
+   " snake",
+   "_case",
+   " camelCase"
+  ]
+ },
+ {
+  "text": "\u0000\u0001 binary-ish",
+  "pieces": [
+   "\u0000\u0001",
+   " binary",
+   "-ish"
+  ]
+ },
+ {
+  "text": "",
+  "pieces": []
+ },
+ {
+  "text": "a",
+  "pieces": [
+   "a"
+  ]
+ },
+ {
+  "text": "1",
+  "pieces": [
+   "1"
+  ]
+ },
+ {
+  "text": " 1",
+  "pieces": [
+   " ",
+   "1"
+  ]
+ },
+ {
+  "text": "한국어 텍스트입니다",
+  "pieces": [
+   "한국어",
+   " 텍스트입니다"
+  ]
+ },
+ {
+  "text": "ﾊﾝｶｸｶﾀｶﾅ and ｆｕｌｌｗｉｄｔｈ",
+  "pieces": [
+   "ﾊﾝｶｸｶﾀｶﾅ",
+   " and",
+   " ｆｕｌｌｗｉｄｔｈ"
+  ]
+ },
+ {
+  "text": "end.\n\nnext!\r\n\r\nthird?\n",
+  "pieces": [
+   "end",
+   ".\n\n",
+   "next",
+   "!\r\n\r\n",
+   "third",
+   "?\n"
+  ]
+ },
+ {
+  "text": "a,\nb;\r\n c:\n\n d",
+  "pieces": [
+   "a",
+   ",\n",
+   "b",
+   ";\r\n",
+   " c",
+   ":\n\n",
+   " d"
+  ]
+ },
+ {
+  "text": "  \n  \n\t\nindented\n    block",
+  "pieces": [
+   "  \n  \n\t\n",
+   "indented",
+   "\n",
+   "   ",
+   " block"
+  ]
+ },
+ {
+  "text": "x)\n}\n]\n",
+  "pieces": [
+   "x",
+   ")\n",
+   "}\n",
+   "]\n"
+  ]
+ },
+ {
+  "text": "line sep para",
+  "pieces": [
+   "line",
+   " sep",
+   " para"
+  ]
+ }
+]

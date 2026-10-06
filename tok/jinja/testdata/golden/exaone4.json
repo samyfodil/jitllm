@@ -1,0 +1,30 @@
+{
+ "documents": {
+  "ctx": "ed7ae16c344d98f0",
+  "out": "[|user|]\nHow warm does Zürich get in July?[|endofturn|]\n[|assistant|]\n<think>\n\n</think>\n\n"
+ },
+ "multiturn-nogen": {
+  "ctx": "ece8855f46730023",
+  "out": "[|user|]\nName a prime.[|endofturn|]\n[|assistant|]\n<think>\n\n</think>\n\nSeven.[|endofturn|]\n[|user|]\nAnother,\nplease.[|endofturn|]\n[|assistant|]\n<think>\n\n</think>\n\n  Eleven.  [|endofturn|]\n"
+ },
+ "system-multiturn": {
+  "ctx": "c78b1a2952fe2a21",
+  "out": "[|system|]\nYou are a terse assistant.[|endofturn|]\n[|user|]\nWhat is the capital of France?[|endofturn|]\n[|assistant|]\n<think>\n\n</think>\n\nParis.[|endofturn|]\n[|user|]\nAnd of Switzerland? Answer in one word, ça va ?[|endofturn|]\n[|assistant|]\n<think>\n\n</think>\n\n"
+ },
+ "tools-request": {
+  "ctx": "16b32e01c402ec6c",
+  "out": "[|system|]\nYou can look the weather up.\n\n# Available Tools\nYou can use none, one, or multiple of the following tools by calling them as functions to help with the user’s query.\nHere are the tools available to you in JSON format within <tool> and </tool> tags:\n<tool>{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get the current weather for a city\", \"parameters\": {\"type\": \"object\", \"properties\": {\"location\": {\"type\": \"string\", \"description\": \"City name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}, \"days\": {\"type\": \"integer\", \"description\": \"Forecast length\"}, \"radius_km\": {\"type\": \"number\", \"description\": \"Search radius\", \"default\": 5.0}}, \"required\": [\"location\"]}}}</tool>\n\nFor each function call you want to make, return a JSON object with function name and arguments within <tool_call> and </tool_call> tags, like:\n<tool_call>{\"name\": function_1_name, \"arguments\": {argument_1_name: argument_1_value, argument_2_name: argument_2_value}}</tool_call>\n<tool_call>{\"name\": function_2_name, \"arguments\": {...}}</tool_call>\n...\nNote that if no argument name is specified for a tool, you can just print the argument value directly, without the argument name or JSON formatting.[|endofturn|]\n[|user|]\nWhat is the weather in Zürich?[|endofturn|]\n[|assistant|]\n<think>\n\n</think>\n\n"
+ },
+ "tools-result": {
+  "ctx": "a542cc3422c2532d",
+  "out": "[|system|]\n# Available Tools\nYou can use none, one, or multiple of the following tools by calling them as functions to help with the user’s query.\nHere are the tools available to you in JSON format within <tool> and </tool> tags:\n<tool>{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get the current weather for a city\", \"parameters\": {\"type\": \"object\", \"properties\": {\"location\": {\"type\": \"string\", \"description\": \"City name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}, \"days\": {\"type\": \"integer\", \"description\": \"Forecast length\"}, \"radius_km\": {\"type\": \"number\", \"description\": \"Search radius\", \"default\": 5.0}}, \"required\": [\"location\"]}}}</tool>\n\nFor each function call you want to make, return a JSON object with function name and arguments within <tool_call> and </tool_call> tags, like:\n<tool_call>{\"name\": function_1_name, \"arguments\": {argument_1_name: argument_1_value, argument_2_name: argument_2_value}}</tool_call>\n<tool_call>{\"name\": function_2_name, \"arguments\": {...}}</tool_call>\n...\nNote that if no argument name is specified for a tool, you can just print the argument value directly, without the argument name or JSON formatting.[|endofturn|]\n[|user|]\nWhat is the weather in Zürich for the next 3 days?[|endofturn|]\n[|assistant|]\n<think>\n\n</think>\n\n<tool_call>{\"name\": \"get_weather\", \"arguments\": {\"location\": \"Zürich\", \"unit\": \"celsius\", \"days\": 3, \"radius_km\": 10.0}}</tool_call>[|endofturn|]\n[|tool|]\n<tool_result>{\"result\": \"{\\\"temperature\\\": 18.5, \\\"sky\\\": \\\"cloudy\\\"}\"}</tool_result>[|endofturn|]\n[|assistant|]\n<think>\n\n</think>\n\n"
+ },
+ "user": {
+  "ctx": "9d2ebb8c7a90ae82",
+  "out": "[|user|]\nHello![|endofturn|]\n[|assistant|]\n<think>\n\n</think>\n\n"
+ },
+ "user-nogen": {
+  "ctx": "1a8ed4a952c0d7fa",
+  "out": "[|user|]\nHello![|endofturn|]\n"
+ }
+}

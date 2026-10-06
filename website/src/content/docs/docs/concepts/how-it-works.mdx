@@ -1,0 +1,114 @@
+---
+title: How it works
+description: 'jitllm as an operating system for inference: a compiler per machine, a scheduler for blocks, and a pager for weights and state.'
+---
+
+import Pipeline from '../../../../components/fig/Pipeline.astro'
+import Jit from '../../../../components/fig/Jit.astro'
+import Stage from '../../../../components/fig/Stage.astro'
+import Experts from '../../../../components/fig/Experts.astro'
+
+Most inference engines are a set of hand-written kernels and a loop that calls them. jitllm is closer to an operating system. It treats a model the way an OS treats a process, and the machine's CPUs, GPUs and memory as resources to schedule it onto.
+
+| An operating system | jitllm |
+|---|---|
+| a process | a loaded model |
+| a thread | a block of the model |
+| CPU cores | CPU cores and every accelerator |
+| the scheduler | which block runs where |
+| a physical page | a block, an expert or a run of KV positions, in memory |
+| swap | the `.jlm` file on disk |
+| a page fault | a page-in |
+
+It is one process: the analogy is about what it decides, not how it is built.
+
+
+<Pipeline />
+
+## A compiler for the machine in front of it
+
+There is no library of precompiled kernels. At load, jitllm probes the CPU and every GPU, then emits machine code for the model's actual shapes and weight formats: x86-64 or ARM64 instructions for the host, PTX, SPIR-V or Metal for the devices. The assemblers are part of jitllm, written in Go.
+
+Specializing per machine and per model is what makes a kernel fast here. Shapes are constants, so loops unroll to exact widths; register allocation is planned for the model's dimensions; and the code uses the instructions this CPU has (VNNI, or a sequence that does the same job on a CPU without it).
+
+Then it measures. Tuners time real kernels on this machine and cache what wins: how many rows each worker takes, how many tokens a prefill tile holds, how a matrix product splits across GPU threads, how many cores a region wants. A choice that depends on the machine is measured on the machine, not read from a table.
+
+<Jit />
+
+### What JIT means here
+
+Several engines now say they compile on your machine. They do not compile the same thing, and the difference is who writes the kernel.
+
+| | jitllm | Triton (vLLM, SGLang) | Magnitude |
+|---|---|---|---|
+| Who writes a kernel | jitllm's emitters, Go code that writes the kernel for the shape, format and instructions in front of it | A person, in Triton's Python language, one function per kernel | A person: "hand-optimized kernels for popular open-weight families", as templated source |
+| What turns it into machine code | jitllm's own assemblers: x86-64 and ARM64 bytes directly; PTX, SPIR-V and MSL that the GPU driver finishes | Triton's compiler, through MLIR and LLVM, then the GPU vendor's assembler | NVRTC, NVIDIA's run-time C++ compiler, which it ships; the operating system's Metal compiler |
+| When | At load, for this model on this machine | The first call with new specializations, then cached on disk | On the device, before a model runs |
+| What is baked in | The model's shapes as constants, its weight formats, the instruction set this CPU or GPU has | The arguments the author marked constant, types, alignment | The parameters the author declared |
+| The CPU | Generated at run time, like the GPU | Not covered: Triton writes GPU kernels | "CPU kernels are compiled into the binary" |
+| Tuning | Times variants on real work on this machine and keeps the fastest | Times the configurations the author listed (`@triton.autotune`) | "A time-bounded local search of the author's declared parameter domain" |
+| Needed at run time | Nothing but the GPU driver | Python, PyTorch, and Triton with its LLVM | Its bundled NVRTC |
+
+Triton and Magnitude compile kernels a person wrote, at run time, with a compiler. jitllm generates the kernel: a person writes the emitter, and the emitter writes the code for whatever model and hardware it meets, on the CPU as well as the GPU, with no compiler in the loop on the CPU and no kernel source to fill in. So a new shape needs no new code at all, a new weight format or instruction set needs one emitter case rather than a kernel per model family, and a model nobody has tuned for still runs entirely as generated code. `torch.compile` comes closest on the Python side: it generates Triton kernels from a PyTorch graph, which Triton then compiles. Magnitude's description is from its [README](https://github.com/magnitudedev/magnitude) and its [compilation design](https://github.com/magnitudedev/magnitude/blob/main/design/inference/seismic-compilation.md); Triton's from its [documentation](https://triton-lang.org/).
+
+There is no interpreted fallback. A shape without an optimized kernel gets a basic generated one, on the CPU or the device, so a model never quietly drops into slow Go loops.
+
+## A model is pages in a file
+
+A transformer is a stack of repeating blocks, and a block is the unit everything below is decided in. Conversion writes each block as one fixed-size page of the [`.jlm` file](/docs/reference/jlm/), already in the layout every backend reads, so bringing a block into memory is a read and nothing else.
+
+Opening a model reads no weights. The first token reads each block as it reaches it; a budget that holds the whole model never evicts, so from then on a token reads nothing from disk.
+
+<Stage step="fault" />
+
+## A block is the unit of placement
+
+jitllm keeps the graph (embedding, sampling, the order of blocks) on the host and hands devices whole blocks. A device runs a block's attention, norms, feed-forward and expert routing without returning to the host between them, so a token crosses between the card and the host once, at the seam.
+
+The first blocks go to the fastest device, the rest to the next, and whatever no device takes runs on the CPU. A block on the card has no second copy in host RAM. See [Devices and placement](/docs/guides/devices/) for choosing devices and writing a placement map.
+
+<Stage step="place" />
+
+## The KV cache is paged too
+
+Every token leaves a row of attention history in every block. jitllm stores it in fixed-size pages that are allocated as the context grows, not reserved for the longest context up front, and each block's pages live on whichever side the block runs: on the card in a per-layer page pool, on the host in RAM.
+
+<Stage step="kv" />
+
+## Weights page when memory is short
+
+When host RAM holds fewer block pages than the host runs blocks, the missing ones are read from the file as the token reaches them. Block pages are evicted most recently used first, which is optimal for a model scanned front to back every token: one page short of fitting costs one page-in a token. Least recently used, the textbook default, would evict exactly the block needed next and read the whole host side every token.
+
+<Stage step="weights" />
+
+A mixture of experts pages at a finer grain: each expert is its own page, evicted least recently used, so a token reads only the experts its router chose and does not already hold.
+
+<Experts />
+
+## KV pages spill when history outgrows memory
+
+`-kv-budget` caps how much history a session holds in memory. Older KV pages move to the `-kv-cache` directory, and since attention reads the whole history every token, they stream back as it reads them. A context longer than memory runs, more slowly, instead of failing. The same directory keeps prompt prefixes for reuse; see [Memory and paging](/docs/guides/memory/#long-context).
+
+<Stage step="spill" />
+
+## Placement moves while a conversation runs
+
+The seam can move between tokens, and a block's KV pages move with it, so nothing is recomputed. `-relocate` uses that when the card fills: as the context grows, the card's history takes the room its weights had, and the last block on the card moves to the host instead of the request failing. The host then pages what it now holds, by the same rules as before.
+
+<Stage step="relocate" />
+
+## Many models, many conversations
+
+A server holds several models at once and many sessions per model. Each session owns its sequence (its KV cache, its position and where its blocks run) while the model's weights are shared. On a device, each session's history lives in its own pages of a shared pool, so sessions never see each other's state. Requests on a device decode together, as rows of one step that reads each block's weights once for all of them, and a joining request's prompt rides in the same steps a chunk at a time, so it never stalls the rows already generating.
+
+## How correctness is checked
+
+Every generated kernel is tested against a reference implementation, including ragged shapes and a deliberate violation to prove the test can fail. Each architecture is checked against an outside reference, llama.cpp or Hugging Face transformers, on real checkpoints: token by token, and on the logits themselves where a greedy transcript could hide a bug. Device placement is checked end to end against the host on models that have the feature being placed.
+
+## Where to read more
+
+The repository records the measurements behind each design decision, including the ones that were tried and did not pay:
+
+- [`docs/design`](https://github.com/samyfodil/jitllm/tree/main/docs/design): block paging, device KV paging, device sessions.
+- [`docs/engineering-history`](https://github.com/samyfodil/jitllm/tree/main/docs/engineering-history): CPU and GPU kernels, model correctness, placement, scheduling and measurement.
+- [`docs/perf/current.md`](https://github.com/samyfodil/jitllm/blob/main/docs/perf/current.md): the performance scoreboard and every row below parity.

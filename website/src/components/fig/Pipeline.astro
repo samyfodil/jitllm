@@ -1,0 +1,26 @@
+---
+// From a source checkpoint to running code: convert once, then the runtime
+// pages, places and compiles for the machine in front of it.
+---
+<figure class="fig not-content">
+  <div class="fig-body">
+    <div class="flow" role="img" aria-label="GGUF, safetensors or a catalog name are converted once into a .jlm container; the runtime pages it, places its blocks and generates code for the CPU and GPUs, with a KV store beside it.">
+      <div class="col">
+        <div class="box">GGUF</div>
+        <div class="box">safetensors<small>dir or hf://</small></div>
+        <div class="box">catalog name</div>
+      </div>
+      <div class="arrow wide"><em>convert</em><i></i></div>
+      <div class="col"><div class="box hi">.jlm<small>weights, config, tokenizer, templates, vision tower</small></div></div>
+      <div class="arrow"><i></i></div>
+      <div class="col"><div class="box hi2">runtime<small>paging · placement · tuning</small></div></div>
+      <div class="arrow both"><i></i></div>
+      <div class="col">
+        <div class="box">CPU JIT<small>x86-64 · ARM64</small></div>
+        <div class="box">GPU JIT<small>PTX · SPIR-V · MSL</small></div>
+        <div class="box hi3">KV store<small>pages on disk</small></div>
+      </div>
+    </div>
+  </div>
+  <figcaption><b>Convert once, compile every time.</b> The container fixes the layout; the kernels are generated at load for whatever CPU and GPUs the runtime finds.</figcaption>
+</figure>

@@ -1,0 +1,84 @@
+---
+title: Memory and paging
+description: How jitllm runs models larger than RAM, what a page budget is, and how to set one.
+---
+
+import Stage from '../../../../components/fig/Stage.astro'
+import Experts from '../../../../components/fig/Experts.astro'
+
+jitllm manages memory the way an operating system does. The `.jlm` file is the backing store; a page is a block of the model; a page-in is a read from disk. A model runs whether or not it fits, and how fast it runs depends on how much of it is resident.
+
+## A model that fits never pages
+
+Paging is always on, but it only costs something when memory is short. If the page budget holds every block, each block is read once, at load, and nothing is ever evicted. A token then reads nothing from disk.
+
+Loading is proportional to what is read, not to the size of the model: jitllm opens an 80B model in seconds, and faults each block in the first time it is needed.
+
+## The page budget
+
+`-maxmem SIZE` sets how much host memory the weights may occupy: `12G`, `512M`, or a byte count.
+
+```sh
+jitllm run -maxmem 4G models/model.jlm "Hello"
+jitllmd serve -load model.jlm -maxmem 12G
+```
+
+With no budget on Linux, jitllm takes 80% of the smaller of the process's cgroup memory limit and the system's available memory; the rest is headroom for the KV cache and scratch buffers. On macOS and Windows there is no automatic budget: weights stay resident unless you set one.
+
+The budget is charged for what a block actually uses, not for the largest block in the model, so a model whose blocks differ in size fits as many as the bytes allow.
+
+A running server can change the budget between tokens (`jitllmd place -model M -maxmem 8G`, or `Model.SetPageBudget` in Go). Shrinking it evicts; growing it lets more blocks stay.
+
+## What gets paged, and how
+
+| Region | Treatment |
+|---|---|
+| Embeddings, output projection, final norm | read every token, so always resident |
+| Block pages | one page per block. Evicted most-recently-used first, which is optimal for a model scanned front to back every token. |
+| Expert pages | a mixture of experts keeps each expert in its own page, evicted least-recently-used, so a token reads only the experts its router chose |
+| KV cache | fixed-size pages allocated as the context grows, on the CPU and on each device; movable between them, and able to spill to disk |
+
+Reads bypass the OS page cache (`O_DIRECT`), so the model is in memory once, owned by jitllm, rather than twice. The file is read, never memory-mapped: parallel reads are faster than page faults, and eviction stays jitllm's decision rather than the kernel's.
+
+The memory the weights are read into lives outside the Go heap, in anonymous mappings jitllm allocates and frees itself. Weights stay resident for the life of a model, and on the heap they would sit on the garbage collector's goal: a budget near the memory limit made the collector run back to back and free nothing, at up to 40% of the CPU. Off the heap the collector never sees them, and closing a model hands every byte back.
+
+<Experts />
+
+Giving each expert its own page is what makes large mixtures practical. On Moonlight-16B-A3B, CPU decode on a six-core laptop with a 6 GB budget ran 3.1× faster than with experts stored inside their block's page, and read 0.144 GiB per token instead of 0.890.
+
+## Running larger than RAM
+
+Nothing special is needed: run the model, and blocks that do not fit are read from disk as tokens need them. Put the model on a fast NVMe drive, because it becomes the speed limit. A mixture of experts suffers least, since each token touches a small fraction of its weights.
+
+The budget has a cliff, not a slope.
+
+<Stage step="weights" />
+ A dense model one page short of fitting evicts and re-reads a whole block every token. If a model almost fits, a slightly larger budget is worth far more than it looks.
+
+## GPUs have budgets too
+
+Device memory is budgeted the same way. See [Devices and placement](/docs/guides/devices/#how-much-memory-a-device-gets) for how the default is chosen, and for device paging and expert streaming when a model does not fit on the card.
+
+## Long context
+
+The KV cache is paged too, so a long context costs memory as it grows rather than up front. `-kv-budget SIZE` caps how much history a run keeps in memory: older pages spill to the `-kv-cache` directory and are read back when attention needs them, so a context longer than memory still runs, more slowly.
+
+```sh
+jitllm run -kv-cache ~/.cache/jitllm-kv -kv-budget 2G \
+  -n 512 models/model.jlm "$(cat long-document.txt)"
+```
+
+<Stage step="spill" />
+
+On a GPU the history lives in per-layer page pools on the card, and pages that do not fit are streamed past the pool rather than failing the request.
+
+## The prefix cache
+
+`-kv-cache DIR` keeps KV pages on disk, keyed by the prompt prefix they came from. A later prompt that starts the same way (the same system prompt, the same document) reuses them and skips that part of the prefill. A prompt that is entirely cached starts generating at once, because its final logits are stored too.
+
+```sh
+jitllm run -chat -kv-cache ~/.cache/jitllm-kv -kv-cache-max 16G \
+  models/model.jlm "Summarise the attached report."
+```
+
+For a hybrid model (Qwen3-Next, Qwen3.5, Kimi-Linear), the recurrent layers' state can only be captured where a prefill ended, so a hybrid reuses an earlier prompt only when the new one begins with all of it, not with just part of it.

@@ -1,0 +1,127 @@
+name: release
+
+# A v* tag builds every archive into a DRAFT release, runs the shipped
+# archives on three hosts, and publishes the draft only if all three decoded
+# a real model correctly.
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: "1.27.x"
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # create the draft release and upload to it
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the changelog is built from the commits since the last tag
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            go.sum
+            server/go.sum
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Optional. Unset, the darwin binaries ship with the linker's ad-hoc
+          # signature; set, they are signed with the hardened runtime plus the
+          # JIT entitlements and notarized. See .goreleaser.yaml.
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+          retention-days: 7
+
+  # Run what was shipped, not what was built in CI: the archive, its checksum,
+  # and on macOS its actual signature. `hardware` alone never executes a
+  # generated kernel, so each host also converts and decodes a 360M model and
+  # checks the answer, because a rate or an exit code is not evidence that the
+  # engine computed the model.
+  smoke:
+    needs: goreleaser
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux_amd64
+          - runner: ubuntu-24.04-arm
+            target: linux_arm64
+          - runner: macos-15
+            target: darwin_arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      MODELS: ${{ github.workspace }}/models
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+      - name: verify checksum and unpack
+        run: |
+          set -euo pipefail
+          cd dist
+          archive=$(ls ./*_"${{ matrix.target }}".tar.gz)
+          grep " ${archive#./}\$" checksums.txt > want.txt
+          if command -v sha256sum >/dev/null; then sha256sum -c want.txt; else shasum -a 256 -c want.txt; fi
+          mkdir ../bin && tar -xzf "$archive" -C ../bin
+          ls -l ../bin
+      - name: signature (macos)
+        if: runner.os == 'macOS'
+        run: |
+          codesign -dv --verbose=2 bin/jitllm 2>&1
+          codesign -d --entitlements - bin/jitllm 2>&1 || true
+      - name: hardware
+        run: bin/jitllm hardware
+      - uses: actions/cache@v6
+        with:
+          # The GGUF only: a container is tied to the converter that wrote it.
+          path: ${{ env.MODELS }}/SmolLM2-360M-Instruct-Q8_0.gguf
+          key: smoke-SmolLM2-360M-Instruct-Q8_0.gguf
+      - name: convert and decode
+        run: |
+          set -euo pipefail
+          mkdir -p "$MODELS"
+          rm -f "${MODELS:?}"/*.jlm
+          bin/jitllm convert -o "$MODELS" smollm2-360m-instruct
+          bin/jitllm run -devices cpu -n 8 "$MODELS/SmolLM2-360M-Instruct-Q8_0.jlm" \
+            "The capital of France is" > out.txt 2> err.txt || { cat out.txt err.txt; exit 1; }
+          cat out.txt
+          grep '^ids ' err.txt
+          grep -q 'Paris' out.txt || { echo "::error::decode did not answer Paris"; exit 1; }
+
+  publish:
+    needs: smoke
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: publish the draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false

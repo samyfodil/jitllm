@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# go vet with an ALLOWLIST of known-and-argued unsafe.Pointer findings.
+#
+#     scripts/vet            # the engine module
+#     scripts/vet server     # a nested module: server, common, ui, tui
+#
+# ★ go1.27.1's vet FLAGS jit/gpu/ffi's noescape AND IT IS RIGHT TO. That function
+# is the uintptr round trip on purpose -- byte for byte what the runtime and
+# purego carry -- because there is no way to tell the compiler "this pointer does
+# not escape" without writing the dangerous pattern. go1.26's vet passed it and
+# 1.27.1's does not, so plain `go vet ./...` became a gate that ALWAYS fails,
+# which RULE 10 says is worse than no gate.
+#
+# ★ AND THE OBVIOUS FIXES ARE BOTH WRONG. `-unsafeptr=false` repo-wide would hide
+# a real misuse somewhere else. Excluding the package does not work either: 1.27's
+# vet reports the diagnostic through the import graph, so the finding surfaces
+# even when jit/gpu/ffi is not in the package list.
+#
+# ★ ON WINDOWS THREE MORE ARE ALLOWED, all one shape: an address the OS returned
+# as a uintptr (VirtualAlloc in jit/cpu/exec_windows.go, twice; MapViewOfFile in
+# convert/gguf/mmap_windows.go) turned into a pointer. That memory is outside the
+# Go heap, so the collector never moves or frees it, which is the hazard the
+# analyzer guards against; and Go's syscall package hands those addresses back
+# only as uintptr, so there is no other way to write the conversion.
+#
+# So the gate asserts the finding SET: ALLOW is matched on file and message with
+# the line:column stripped (a comment edit moves the line and must not turn the
+# gate red), and in the engine module each must occur EXACTLY its count, so a
+# second misuse in the same file still fails. A nested module sees those files
+# only through its imports, and whether vet reports a dependency's finding there
+# differs by target (server and ui report noescape for windows, not for linux),
+# so there a finding is allowed up to its count and the exact count is the engine
+# module's to hold.
+set -uo pipefail
+cd "$(dirname "$0")/.." || exit 1
+
+mod=.
+if [ $# -gt 0 ] && [ -f "$1/go.mod" ]; then
+  mod=$1
+  shift
+fi
+cd "$mod" || exit 1
+
+# "file: message" then its count.
+ALLOW=('jit/gpu/ffi/ffi.go: possible misuse of unsafe.Pointer' 1)
+if [ "$(go env GOOS)" = windows ]; then
+  ALLOW+=('jit/cpu/exec_windows.go: possible misuse of unsafe.Pointer' 2
+    'convert/gguf/mmap_windows.go: possible misuse of unsafe.Pointer' 1)
+fi
+
+out=$(go vet "$@" ./... 2>&1)
+# A finding is "path:line:col: message"; the key drops line:col, the ../ a
+# nested module prints before the engine's files, and Windows' backslashes.
+# A fresh module cache prints "go: downloading ..." lines, which are not findings.
+findings=$(printf '%s\n' "$out" | grep -v '^#' | grep -v '^go: downloading ' | grep -v '^\s*$' | tr -d '\r' || true)
+
+rc=0
+unexpected=""
+# seen[j] counts ALLOW's j-th entry. An indexed array: macOS's bash 3.2 has no
+# associative ones.
+seen=()
+for ((i = 0; i < ${#ALLOW[@]}; i += 2)); do seen+=(0); done
+while IFS= read -r line; do
+  [ -z "$line" ] && continue
+  key=$(printf '%s' "$line" | tr '\\' '/' | sed -E 's#^(\.\./)+##; s#^([^:]+\.go):[0-9]+:[0-9]+:#\1:#')
+  allowed=0
+  for ((i = 0; i < ${#ALLOW[@]}; i += 2)); do
+    if [ "$key" = "${ALLOW[i]}" ]; then
+      allowed=1
+      seen[i / 2]=$((seen[i / 2] + 1))
+    fi
+  done
+  [ $allowed = 0 ] && unexpected+="$line"$'\n'
+done <<<"$findings"
+
+if [ -n "$unexpected" ]; then
+  printf '%s' "$unexpected"
+  echo "scripts/vet: the above are NOT in the allowlist" >&2
+  rc=1
+fi
+summary=()
+for ((i = 0; i < ${#ALLOW[@]}; i += 2)); do
+  k=${ALLOW[i]} want=${ALLOW[i + 1]} got=${seen[i / 2]}
+  if { [ "$mod" = . ] && [ "$got" != "$want" ]; } || [ "$got" -gt "$want" ]; then
+    echo "scripts/vet: '$k' was found $got times, the allowlist says $want." >&2
+    echo "  Either the code changed or the analyzer did. Re-argue it and update ALLOW;" >&2
+    echo "  an allowlist nobody re-derives is how a stale exemption outlives its reason." >&2
+    rc=1
+  fi
+  summary+=("${k%%:*} x$got")
+done
+if [ $rc = 0 ]; then
+  echo "vet clean in $mod ($(go env GOOS)/$(go env GOARCH); allowlisted: ${summary[*]})"
+fi
+exit $rc

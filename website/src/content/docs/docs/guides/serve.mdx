@@ -1,0 +1,215 @@
+---
+title: Serve an API
+description: Run jitllmd for OpenAI and Anthropic clients, with streaming, tool calls, sessions and the Connect control plane.
+---
+
+import Surfaces from '../../../../components/fig/Surfaces.astro'
+
+`jitllmd serve` runs the engine as a server. One address carries three surfaces, all projections of the same engine with no second inference path behind any of them:
+
+| Path | Surface |
+|---|---|
+| `POST /v1/chat/completions` | OpenAI chat completions |
+| `POST /v1/completions` | OpenAI text completions |
+| `GET /v1/models` | OpenAI model list |
+| `POST /v1/embeddings` | OpenAI embeddings |
+| `POST /v1/messages` | Anthropic messages |
+| `/jitllm.v1.*` | the Connect control plane (Connect, gRPC and gRPC-Web) |
+| `GET /healthz` | returns `ok` |
+
+<Surfaces />
+
+## Start the server
+
+```sh
+jitllmd serve -addr 127.0.0.1:8080 -models ./models \
+  -load qwen3-8b.jlm -id qwen3 -devices auto
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `-addr` | `:8080` | listen address |
+| `-models DIR` | a developer path | directory scanned by the model list and used to resolve a bare model name. Always pass it. |
+| `-load FILE` | | a `.jlm` to load at startup, absolute or relative to `-models` |
+| `-id NAME` | generated (`m-…`) | the model name clients send. The file name without `.jlm` works too. |
+| `-devices SPEC` | CPU only | where to run it, in the [device grammar](/docs/guides/devices/#the-device-grammar). Empty opens no device. |
+| `-maxmem SIZE` | engine's own budget | host page budget, e.g. `8G` |
+| `-gpu-layers N` | -1 | at most N blocks on a device; -1 is as many as fit |
+| `-sessions N` | 1 | concurrent sessions each device block reserves a KV cache for |
+| `-max-seq N` | model's context | default KV capacity per session, in positions |
+| `-host-concurrency N` | 1 | sessions that may run on the CPU at once |
+| `-device-concurrency N` | 1 | sessions that may run alone on one device at once; sessions wholly on a device batch instead |
+| `-max-batch N` | 0 | requests of one device model that decode as rows of one step; 0 is the widest step the device runs, 1 turns batching off |
+| `-prompt-chunk N` | 0 | prompt tokens a joining request feeds into one shared step; 0 is one device prefill chunk |
+| `-joint-steps MODE` | `auto` | `auto` times a joint step against the rows one after another, per row count, and runs the faster; `always` or `never` force it |
+
+More models can be loaded and unloaded while the server runs; see [Manage a running server](#manage-a-running-server). Requests beyond the concurrency limits queue rather than fail.
+
+## Batching
+
+Requests to a model whose every block and the output head are on one device are batched continuously. Each request becomes a row of the model's step loop, and every step runs one token of every row in one pass over the weights; each row reads its own session's history and samples with its own settings. A joining request's prompt is fed a chunk at a time inside the same steps, beside the rows already generating, so admitting it never stalls them.
+
+`-max-batch` caps how many requests share a step, `-prompt-chunk` sets how many prompt tokens a step carries for a joining request, and with `-joint-steps auto` the server times a joint step against running the rows one after another, for each row count, and keeps the faster. `jitllmd stats` shows the batch.
+
+A model on the CPU, or split between the CPU and a device, runs one request at a time: each CPU session drives its own pool of decode cores, so two at once would fight over the same physical cores. That is why `-host-concurrency` defaults to 1.
+
+## OpenAI chat completions
+
+Any OpenAI SDK works with the base URL `http://HOST:PORT/v1`. No API key is checked, but most SDKs insist on one, so pass any string.
+
+```sh
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "qwen3",
+    "messages": [
+      {"role": "system", "content": "You are terse."},
+      {"role": "user", "content": "Name three prime numbers."}
+    ],
+    "max_tokens": 64,
+    "temperature": 0.7,
+    "stream": true
+  }'
+```
+
+Supported fields: `model`, `messages`, `max_tokens` or `max_completion_tokens`, `temperature`, `top_p`, `seed`, `stop`, `stream`, `tools` and `tool_choice`. The prompt goes through the model's own chat template. A streamed response is server-sent events ending in `data: [DONE]`; `finish_reason` is `stop`, `length`, `tool_calls`, or `cancelled` when the request was cancelled.
+
+`/v1/completions` takes a raw `prompt` instead of messages, with `echo` to return the prompt too.
+
+## OpenAI embeddings
+
+An embedding model loaded on the server answers `POST /v1/embeddings`:
+
+```sh
+jitllmd serve -models ./models -load minilm.jlm -id minilm
+
+curl http://127.0.0.1:8080/v1/embeddings \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "minilm", "input": ["a sentence to embed", "and another"]}'
+```
+
+`input` is a string, a list of strings, a list of token ids or a list of lists of them. Each vector is pooled and L2-normalised the way the model was trained. `encoding_format` is `float` (the default) or `base64`, the vector's little-endian float32 bytes; `dimensions`, when given, must be the model's own width, since vectors are not truncated.
+
+## Anthropic messages
+
+```sh
+curl http://127.0.0.1:8080/v1/messages \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "qwen3",
+    "system": "You are terse.",
+    "messages": [{"role": "user", "content": "Name three prime numbers."}],
+    "max_tokens": 64,
+    "stream": true
+  }'
+```
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(base_url="http://127.0.0.1:8080", api_key="unused")
+msg = client.messages.create(
+    model="qwen3",
+    max_tokens=256,
+    messages=[{"role": "user", "content": "Why is the sky blue?"}],
+)
+print(msg.content[0].text)
+```
+
+`system` may be a string or a list of text blocks, and so may `content`. Supported sampling fields are `temperature`, `top_p`, `top_k` and `stop_sequences`. A stream is the named event sequence (`message_start`, `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop`), and `stop_reason` is `end_turn`, `max_tokens`, `stop_sequence` or `tool_use`.
+
+## Tool calls
+
+Both APIs accept tool definitions in their own shapes: OpenAI's `tools` with `function.parameters`, Anthropic's `tools` with `input_schema`. They reach the model's own chat template, so a model trained for tool use sees the prompt it was trained on: OpenAI definitions exactly as sent, Anthropic ones converted to the OpenAI shape with `input_schema` kept byte for byte.
+
+```sh
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "qwen3",
+    "messages": [{"role": "user", "content": "What is the weather in Paris?"}],
+    "tools": [{
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+      }
+    }]
+  }'
+```
+
+The model's output is parsed back into `tool_calls` (OpenAI) or `tool_use` blocks (Anthropic). While streaming, ordinary text streams as it arrives; text that is, or may be becoming, a call is held back and emitted as a call once it parses. Send the tool's result back as a `tool` message (OpenAI) or a `tool_result` block (Anthropic) and the conversation continues.
+
+`tool_choice: "none"` (Anthropic: `{"type": "none"}`) withholds the tools. `"auto"`, `"required"` and a named function are all treated as `"auto"`: the prompt offers the tools, and nothing forces the sampler to call one.
+
+Two call formats are parsed, which cover the models trained for tools: Hermes-style `<tool_call>{...}</tool_call>` blocks (Qwen2.5, Qwen3 and most fine-tunes), and a bare JSON call opening the reply (Llama 3.1 and 3.2, Mistral v0.3). Only a call to a tool you declared counts, so a model asked to answer in JSON does not have its answer taken for a call.
+
+## What jitllm adds to a response
+
+Every response carries one extra field, `jitllm`, which clients that do not know it ignore. It is in the body when not streaming, and on the final chunk (OpenAI) or the `message_delta` event (Anthropic) when streaming:
+
+```json
+"jitllm": {
+  "session_id": "s-1727614512345-1",
+  "queued_ms": 0,
+  "queue_depth_on_entry": 0,
+  "device_blocks": 36,
+  "host_blocks": 0,
+  "device_ids": ["cuda:0"],
+  "prefill_ms": 41,
+  "decode_ms": 1204,
+  "decode_tokens_per_second": 104.6,
+  "bytes_per_token": 816010912
+}
+```
+
+It says where the request ran and how long it waited, which an OpenAI response has nowhere else to put.
+
+A request may also name a session instead of a model with `"jitllm_session"` and the id `jitllmd sessions -new` printed, to run on a session you created with its own devices and KV capacity. A session named that way takes precedence over `model`.
+
+## Manage a running server
+
+`jitllmd` is also a client of a running server, through the same Connect API. Add `-addr host:port` to reach one that is not local.
+
+```sh
+jitllmd models                           # the model directory, and what is loaded
+jitllmd models -load gemma-3-4b.jlm -id gemma -devices cuda:0
+jitllmd models -unload gemma
+
+jitllmd devices                          # hardware and spendable memory
+jitllmd stats -watch                     # engine counters, streamed
+
+jitllmd sessions -new -model qwen3 -devices cuda:0 -max-seq 8192
+jitllmd sessions                         # list them
+jitllmd sessions -reset SESSION          # back to position 0
+
+jitllmd place -session SESSION           # where each block is
+jitllmd place -session SESSION -devices cuda:0 -gpu-layers 22
+jitllmd place -session SESSION -move 20:35 -to host
+jitllmd place -model qwen3 -maxmem 12G   # re-budget the pager
+
+jitllmd run -model qwen3 -chat -n 64 "Hello"            # an ephemeral session
+jitllmd run -session SESSION -chat "Hello"               # keep the session's history
+jitllmd run -session SESSION -continue "and then?"       # continue from its position
+```
+
+`SESSION` is the id `sessions -new` printed. `place -devices` must name devices the model was loaded with, and `place` with no `-devices` brings every block home to the CPU. A move waits for the session's current generation to finish, and the conversation keeps its history: the KV cache and any recurrent state move with the blocks. `jitllmd <verb> -h` lists each verb's flags; the [CLI reference](/docs/reference/cli/#jitllmd) has them all.
+
+## The Connect API
+
+Everything the client does is a Connect RPC, generated from the protobuf definitions in [`proto/jitllm/v1`](https://github.com/samyfodil/jitllm/tree/main/proto/jitllm/v1). Any Connect, gRPC or gRPC-Web client can call it, over HTTP/1.1 or cleartext HTTP/2.
+
+| Service | Methods |
+|---|---|
+| `ModelService` | ListModels, GetModel, LoadModel, UnloadModel, Convert, Tokenize, Detokenize, ApplyChatTemplate |
+| `DeviceService` | ListDevices, GetDevice, GetMemoryTopology |
+| `SessionService` | CreateSession, GetSession, ListSessions, CloseSession, ResetSession, GetDeviceQueue |
+| `PlacementService` | GetPlacement, SetPlacement, RelocateBlocks, SetRelocation, TuneSeam, GetResidency, SetPageBudget |
+| `InferenceService` | Generate (streaming), Complete, Cancel, Embed |
+| `TelemetryService` | GetStats, WatchStats (streaming), GetServerInfo |
+
+```sh
+curl http://127.0.0.1:8080/jitllm.v1.DeviceService/ListDevices \
+  -H 'Content-Type: application/json' -d '{}'
+```

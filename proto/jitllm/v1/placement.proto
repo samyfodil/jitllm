@@ -1,0 +1,214 @@
+syntax = "proto3";
+
+package jitllm.v1;
+
+import "jitllm/v1/common.proto";
+
+// PlacementService is the part of this API that exists because this engine is
+// not a chat server.
+//
+// The engine's own design brief: it should use every CPU core and every
+// accelerator on the machine, MOVE layers and pages between them to deliver
+// the best rate it can, and every one of those decisions must be forcible by
+// the caller. `PrepLayer` declines per block; `SetDeviceLayers` moves the seam;
+// the pager evicts and re-reads whole blocks. Those are the OS-analogy
+// primitives, and this service is where they become reachable from outside the
+// process.
+//
+// Placement is per SESSION, not per model, because that is where the engine
+// puts it: `model.State.SetDeviceLayers` is a method on the state. A model
+// carries a DEFAULT that new sessions inherit, and changing the default does
+// not move a running session.
+
+service PlacementService {
+  // Where every block of a session currently is, and why anything that was
+  // declined was declined.
+  rpc GetPlacement(GetPlacementRequest) returns (GetPlacementResponse) {}
+
+  // Move the seam: place at most N blocks on the named devices, the rest on
+  // the host. Safe to call while the session is serving -- it takes the
+  // device's turn like any other work.
+  rpc SetPlacement(SetPlacementRequest) returns (SetPlacementResponse) {}
+
+  // Move a specific block range between two locations. This is the RELOCATION
+  // the design brief names: host <-> device AND device <-> device, while
+  // serving. A relocated attention block carries its KV; a relocated linear
+  // block carries its recurrent summary, which cannot be rewound and so must
+  // be migrated rather than dropped.
+  rpc RelocateBlocks(RelocateBlocksRequest) returns (RelocateBlocksResponse) {}
+
+  // Turn on the engine's own gradual adoption: one block per token as memory
+  // frees, rather than one big move.
+  rpc SetRelocation(SetRelocationRequest) returns (SetRelocationResponse) {}
+
+  // Re-place by measurement. This is `seamtune`: an interleaved A/B over runs
+  // of tokens with the migrations outside the timed window. It is a
+  // MEASUREMENT and it takes real time, so it streams its rounds.
+  rpc TuneSeam(TuneSeamRequest) returns (stream TuneSeamResponse) {}
+
+  // Page budget and residency. A page is a whole block and its size is fixed
+  // at conversion, so a budget is in BYTES and residency is counted in whole
+  // blocks. A budget that lands one page short of fitting is a cliff.
+  rpc GetResidency(GetResidencyRequest) returns (GetResidencyResponse) {}
+  rpc SetPageBudget(SetPageBudgetRequest) returns (SetPageBudgetResponse) {}
+}
+
+message BlockPlacement {
+  int32 index = 1;
+  BlockKind kind = 2;
+  BlockLocation location = 3;
+  // Set when `location` is DEVICE.
+  string device_id = 4;
+  // Bytes this block's page occupies.
+  ByteSize bytes = 5;
+  // Whether the block's page is currently resident in the host pager. A block
+  // ON a device can still be non-resident on the host side.
+  bool host_resident = 6;
+}
+
+// A decline is the device saying "I cannot run this block", by name. The only
+// placement decline that should exist is "does not fit"; anything else is a
+// kernel that is owed, and naming it is how that debt stays visible.
+message PlacementDecline {
+  int32 block_index = 1;
+  string device_id = 2;
+  string reason = 3;
+  // True when the reason is capacity rather than capability.
+  bool out_of_memory = 4;
+}
+
+message Placement {
+  string session_id = 1;
+  string model_id = 2;
+  repeated BlockPlacement blocks = 3;
+  repeated PlacementDecline declines = 4;
+
+  int32 host_block_count = 5;
+  int32 device_block_count = 6;
+  // True when the output projection runs on a device.
+  bool head_on_device = 7;
+
+  // Counters the engine keeps. `demotions` is blocks a device gave back;
+  // `relocations` and `reclaims` are the adoption path's own counters.
+  int64 demotions = 8;
+  int64 relocations = 9;
+  int64 reclaims = 10;
+  bool relocating = 11;
+}
+
+message Residency {
+  string model_id = 1;
+  // Bytes of pages currently held, against the budget they are held under.
+  ByteSize resident = 2;
+  ByteSize budget = 3;
+  // Frames the pager allocated. A frame is one whole page, so
+  // frames * page_size is the ceiling on resident bytes.
+  int32 frames = 4;
+  int32 blocks = 5;
+  // Blocks whose page is currently held. When this equals `blocks` nothing is
+  // ever evicted and a token reads nothing -- which is the design working,
+  // not an optimisation.
+  int32 resident_blocks = 6;
+  bool fits = 7;
+
+  // Pager traffic since load.
+  int64 page_ins = 8;
+  int64 evictions = 9;
+  ByteSize bytes_read = 10;
+  int64 read_requests = 11;
+}
+
+message GetPlacementRequest {
+  string session_id = 1;
+}
+
+message GetPlacementResponse {
+  Placement placement = 1;
+}
+
+message SetPlacementRequest {
+  string session_id = 1;
+  // Devices to offer blocks to, in preference order. Empty moves everything
+  // back to the host.
+  repeated string device_ids = 2;
+  // At most this many blocks on a device. Unset means "as many as fit".
+  optional int32 max_device_blocks = 3;
+  // Place the output projection on a device too.
+  optional bool head_on_device = 4;
+}
+
+message SetPlacementResponse {
+  Placement placement = 1;
+  int64 millis = 2;
+}
+
+message RelocateBlocksRequest {
+  string session_id = 1;
+  // Inclusive block range. `first_block` == `last_block` moves one block.
+  int32 first_block = 2;
+  int32 last_block = 3;
+  // Where to put them. Empty `to_device_id` with `to_host` true brings them
+  // home; a non-empty id moves them to that device, including FROM another
+  // device.
+  string to_device_id = 4;
+  bool to_host = 5;
+}
+
+message RelocateBlocksResponse {
+  Placement placement = 1;
+  int32 blocks_moved = 2;
+  // Blocks the target refused, with the reason. A refusal is reported, not
+  // an error: the rest of the range may still have moved.
+  repeated PlacementDecline declined = 3;
+  int64 millis = 4;
+}
+
+message SetRelocationRequest {
+  string session_id = 1;
+  bool enabled = 2;
+}
+
+message SetRelocationResponse {
+  bool enabled = 1;
+}
+
+message TuneSeamRequest {
+  string session_id = 1;
+  // Tokens to discard before timing, tokens to time per run, and how many
+  // rounds to interleave. Zero takes the engine's schedule.
+  int32 warmup_tokens = 2;
+  int32 tokens_per_run = 3;
+  int32 rounds = 4;
+}
+
+message TuneSeamResponse {
+  int32 round = 1;
+  int32 candidate_device_blocks = 2;
+  double median_ratio = 3;
+  double iqr_over_median = 4;
+  bool accepted = 5;
+  bool done = 6;
+  Placement placement = 7;
+  string note = 8;
+}
+
+message GetResidencyRequest {
+  string model_id = 1;
+}
+
+message GetResidencyResponse {
+  Residency residency = 1;
+}
+
+message SetPageBudgetRequest {
+  string model_id = 1;
+  uint64 budget_bytes = 2;
+}
+
+message SetPageBudgetResponse {
+  Residency residency = 1;
+  // True when the new budget holds every block, so nothing will ever be
+  // evicted. The step from "one page short" to "fits" is a cliff and not a
+  // gradient, so it is reported as a boolean rather than left to arithmetic.
+  bool fits = 2;
+}

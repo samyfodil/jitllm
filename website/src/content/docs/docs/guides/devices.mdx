@@ -1,0 +1,114 @@
+---
+title: Devices and placement
+description: Choose GPUs, budget their memory, and let jitllm move blocks between the CPU and devices while it serves.
+---
+
+import Placement from '../../../../components/fig/Placement.astro'
+import Stage from '../../../../components/fig/Stage.astro'
+
+A model is a stack of repeating blocks. jitllm places each block on a device or on the CPU, runs the whole block where it is placed (attention, norms, feed-forward and expert routing together), and runs on the CPU whatever no device took. You choose the devices; it decides the rest, and every decision can be overridden.
+
+## The device grammar
+
+`-devices` takes a comma-separated list, in the same grammar everywhere: `jitllm run`, `speed`, `verify` and `batch`, `jitllmd serve`, and the `models`, `sessions` and `place` verbs. `auto` is the default for `run`, `speed` and `verify`; `batch` defaults to `gpu`, and `jitllmd serve` with no `-devices` runs on the CPU.
+
+| Entry | Meaning |
+|---|---|
+| `auto` | one device, chosen by timing a real kernel on each backend. A machine with no GPU is a CPU machine, not an error. |
+| `all` | every distinct device on the host, fastest first |
+| `cpu` | no device; the CPU runs the whole model |
+| `gpu`, `gpu:N` | any one GPU, or the Nth one `jitllm hardware` lists. No GPU is an error. |
+| `cuda[:ORD]` | a CUDA device by driver ordinal |
+| `vulkan[:SEL]` | a Vulkan device by index or a substring of its name |
+| `metal` | the system's Metal device |
+
+Any device entry can carry `=BYTES` to budget it on its own: `3G`, `3GiB`, `512M` or `800000000`.
+
+```sh
+jitllm run -devices cuda:0 models/m.jlm "Hello"
+jitllm run -devices all models/m.jlm "Hello"
+jitllm run -devices cuda:0=3G,vulkan:1=8G models/m.jlm "Hello"
+jitllm run -devices vulkan:radeon models/m.jlm "Hello"
+```
+
+A list places blocks across every device in it, in the order written. `cpu` inside a list adds nothing (the CPU always runs what no device takes); only `-devices cpu` alone changes anything.
+
+## How much memory a device gets
+
+With no budget, jitllm asks each device how much memory is free and keeps an eighth of it, at least 256 MiB, as headroom for the KV cache and scratch. `-vram SIZE` sets one weight budget for all devices; `=SIZE` on an entry sets that device's alone. Both take `3G`, `512M` or a byte count.
+
+Two things are counted once, however many ways they appear:
+
+- **Unified memory.** An integrated GPU's memory, and Apple silicon's, is system RAM. jitllm carves its share out of the host budget rather than adding it, so the same bytes are never promised twice.
+- **One card, two backends.** A GPU that answers to both CUDA and Vulkan is identified by its device UUID, not its name, and counted once. By default CUDA is preferred over Metal, and Metal over Vulkan; naming a backend explicitly still selects it.
+
+## When the model does not fit on the card
+
+A block that does not fit is declined and runs on the CPU. The first blocks go to the fastest device, and the seam between device and host sits where memory ran out. `-gpu-layers N` caps the blocks offered to devices, to leave room for something else.
+
+To have a GPU run every block even so, stream them: each streamed block's weights swap through the slots the budget leaves, and every token uploads the weights it needs.
+
+```sh
+jitllm run -devices cuda:0=2G -placement '*=cuda:0~' models/big.jlm "Hello"
+```
+
+Streaming is a per-block choice in a [placement map](#placement-maps), not a mode. It pays only when the model does not fit in host memory either: a page-in crosses PCIe at a few GB/s where the CPU reads its own memory ten times faster.
+
+For a mixture of experts there is a cheaper option: `JITLLM_GPU_STREAM=1` places the blocks without their expert banks, and each token uploads only the experts the router picked. Qwen3-Next-80B places all 48 blocks on a 4 GB laptop GPU this way.
+
+## Placement maps
+
+`-placement` says where named blocks and the output projection run. Everything it does not name is placed by the engine as usual.
+
+```sh
+jitllm run -devices cuda:0,vulkan:1 \
+  -placement '0=host,1-7=cuda:0,8=host!,9-15=vulkan:1~,head=vulkan:1' \
+  models/m.jlm "Hello"
+```
+
+| Selector | Means |
+|---|---|
+| `N` | block N |
+| `A-B` | blocks A to B, inclusive |
+| `head` | the output projection |
+| `*` | every block no other entry names |
+
+The target is `host` or a device that `-devices` names. Two suffixes change how an entry is held, in either order:
+
+| Suffix | Effect |
+|---|---|
+| `!` | **pin**: seam moves, relocation and a shrinking device budget leave the entry where it is |
+| `~` | **stream**: the block's weights swap through the device's slots each token, so a card smaller than the blocks it is given still runs them |
+
+<Placement />
+
+By default a map is best effort: a block that cannot go where it is named is placed where the engine would have put it, and the decline is reported. `-placement-strict` makes the whole map all or nothing. In Go the same map is `model.ParsePlacement` or a `model.Placement` passed through `model.WithPlacement`.
+
+## Placement that changes while serving
+
+| Flag | What it does |
+|---|---|
+| `-gpu-grow` | start on the CPU, so the first token comes at once, and move blocks onto the device one per token while serving |
+| `-relocate` | when the device cannot grow the context, hand its last block to the CPU instead of failing. On by default wherever the host is allowed. |
+| `-tune-seam` | measure whether fewer device blocks are faster, by timing runs of tokens at different seams, and move to the winner |
+| `-no-gpu-fallback` | fail instead of finishing on the CPU when a device breaks |
+
+<Stage step="relocate" />
+
+Every move carries the conversation with it. The KV cache migrates with its block, and so does the recurrent state of a hybrid model such as Qwen3-Next or Kimi-Linear. On the server, `jitllmd place` moves blocks by hand; see [Manage a running server](/docs/guides/serve/#manage-a-running-server).
+
+## More device blocks is not always faster
+
+An integrated GPU shares the CPU's memory bus. It adds no bandwidth, and on a machine with a discrete card it can slow the whole model down. On one laptop, Qwen3-30B-A3B ran 10% faster than CPU-only with 4 of 48 blocks on its RTX 3050 Ti, and 15% slower with 13 blocks on its Iris Xe. That is why `auto` picks one device by measuring, and why `-tune-seam` exists.
+
+## CPU cores
+
+On the CPU, jitllm runs one worker per physical performance core and leaves efficiency cores and hyperthread siblings alone for decode, which is bandwidth-bound: more cores only add stragglers behind every barrier. It respects the process's CPU mask, so `taskset` or `numactl` narrows it. On a multi-socket machine `jitllm` interleaves the weights across NUMA nodes and has workers read the rows held on their own node, unless you set a memory policy yourself (`numactl`) or set `JITLLM_NUMA=off`.
+
+## Check a device's answers
+
+```sh
+jitllm verify -devices cuda:0 -n 32 models/m.jlm
+```
+
+`verify` runs the same tokens on the CPU and on the device and reports every position where the logits part, with the margin. The CPU and GPU sum floats in different orders, so small differences are normal; a flipped argmax at a near-tie is expected, while a large difference is a bug worth reporting.

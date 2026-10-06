@@ -1,0 +1,188 @@
+package tier
+
+import (
+	"encoding/binary"
+	"fmt"
+
+	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/samyfodil/jitllm/jit/gpu/backend"
+	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+)
+
+// Key runs (nn.KeyRunDevice): every mask this tier runs is, per row, an
+// interval of keys, handed over once for the calls that follow.
+//
+// A full run widens a causal row's key count to the run's end -- Gemma 3's
+// image tokens see each other in both directions -- which is the per-row key
+// count the batched attention already reads, so no kernel changes. A
+// non-causal call (nn.LayerPlan.NonCausal) is one whole run by construction:
+// every row counts the call's rows. On its Windowed blocks each row's scores
+// outside its window run go to -inf before the softmax
+// (kernels.WindowMaskRows, as llama.cpp adds its window_mask): Qwen2.5-VL's
+// tower. The windows are a property of the picture, not of a block, so they
+// are handed over once per picture and every windowed block reads them.
+
+// SetKeyRuns records the runs for the Layers calls that follow on every device:
+// a run crossing a device seam is honoured on both sides.
+func (g *GPU) SetKeyRuns(full, windowed []nn.KeyRun) bool {
+	g.mu.Lock()
+	ds := g.devs
+	g.mu.Unlock()
+	for _, d := range ds {
+		d.mu.Lock()
+		d.bidir = append(d.bidir[:0], full...)
+		d.mu.Unlock()
+		if !d.setWindows(windowed) {
+			return false
+		}
+	}
+	return true
+}
+
+// SetKeyRuns forwards to the tier: the runs are the call's, not the session's
+// history.
+func (s *gpuSession) SetKeyRuns(full, windowed []nn.KeyRun) bool {
+	return s.g.SetKeyRuns(full, windowed)
+}
+
+// bidirCount is row r's key count under the runs, at position pos+r: the end
+// of its run, or 0 when it is in none.
+func bidirCount(runs []nn.KeyRun, at int) int {
+	for _, r := range runs {
+		if at >= r.Lo && at < r.Hi {
+			return r.Hi
+		}
+	}
+	return 0
+}
+
+// bidirCheck refuses a call whose rows [pos, pos+nrow) cut a run, and, on the
+// contiguous cache, one whose windowed layers would mask a run's row from the
+// wrong anchor: those window kernels place a row's window behind its key
+// COUNT, which a run moves to its end, where the reference anchors it at the
+// row's own position. The two agree while the count is inside the window,
+// which is every image in the first window's worth of context. The paged
+// cache's row descriptor carries the window's start apart from the end
+// (pagedStage), so it has no such limit.
+func bidirCheck(runs []nn.KeyRun, pos, nrow int, p *nn.LayerPlan, paged bool) string {
+	for _, r := range runs {
+		if r.Lo >= pos+nrow || r.Hi <= pos {
+			continue
+		}
+		if r.Lo < pos || r.Hi > pos+nrow {
+			return "a bidirectional run is cut by this call's rows"
+		}
+		if !paged && p.SWAWindow > 0 && r.Hi > p.SWAWindow {
+			return "a bidirectional run ends past the sliding window, where the window kernels anchor it at the run's end"
+		}
+	}
+	return ""
+}
+
+// setWindows stages runs -- [lo, hi) row pairs partitioning a non-causal
+// call's rows -- as each row's window, in the non-causal geometry's scratch
+// set, building the mask and its buffers on the first call. A device with no
+// non-causal block takes nothing; nil forgets the windows, so a windowed
+// block is refused rather than run under the last picture's.
+func (g *devTier) setWindows(runs []nn.KeyRun) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	home := g.geoCur
+	defer g.useGeom(home)
+	g.useGeom(geoNonCausal)
+	bs := g.bs
+	if bs == nil {
+		return true
+	}
+	if len(runs) == 0 {
+		bs.vwinRows = 0
+		return true
+	}
+	segs := g.winSegs[:0]
+	for _, r := range runs {
+		segs = append(segs, r.Lo, r.Hi)
+	}
+	g.winSegs = segs
+	fail := func(f string, a ...any) bool {
+		g.LastErr = fmt.Sprintf(f, a...)
+		return false
+	}
+	if len(segs)%2 != 0 || len(segs) == 0 {
+		return fail("windowed runs: %d bounds, want [lo, hi) pairs", len(segs))
+	}
+	n := segs[len(segs)-1]
+	if n > bs.rows {
+		return fail("windowed runs over %d rows on a scratch of %d", n, bs.rows)
+	}
+	// The mask runs once per attention pass, which is a query chunk of
+	// bs.arows rows when the block's score planes are too large for one
+	// (visionattn.go), so it is built for a chunk and each chunk has its rows'
+	// windows in a buffer of its own.
+	ar := bs.arows
+	if ar <= 0 {
+		ar = bs.rows
+	}
+	if bs.winMask == nil {
+		w := g.scratchWin() // the scratch's own buffers (scratch.go)
+		defer w.close()
+		k, err := kernels.WindowMaskRows(ar, bs.p.NHead, bs.sstride)
+		if err != nil {
+			return fail("windowed runs: %v", err)
+		}
+		c, err := g.dev.Compile(k)
+		if err != nil {
+			return fail("windowed runs: %s declined the mask: %v", g.dev.API(), err)
+		}
+		att, err := g.dev.Alloc(ar * bs.p.NHead * bs.sstride * 4)
+		if err != nil {
+			c.Close()
+			return fail("windowed runs: %v", err)
+		}
+		wins := make([]backend.Buf, bs.rows/ar)
+		for i := range wins {
+			if wins[i], err = g.dev.Alloc(ar * 8); err != nil {
+				c.Close()
+				att.Free()
+				for _, b := range wins[:i] {
+					b.Free()
+				}
+				return fail("windowed runs: %v", err)
+			}
+		}
+		bs.winMask, bs.attWin, bs.vwins = c, att, wins
+	}
+	// Every row's window, the scratch's padded rows past n given the whole
+	// image: they are never read, and a row with no key would softmax to NaN.
+	buf := make([]byte, bs.rows*8)
+	for r := 0; r < bs.rows; r++ {
+		binary.LittleEndian.PutUint32(buf[8*r+4:], uint32(n))
+	}
+	prev := 0
+	for i := 0; i < len(segs); i += 2 {
+		lo, hi := segs[i], segs[i+1]
+		if lo != prev || hi <= lo {
+			return fail("windowed runs: [%d, %d) after %d does not partition the rows", lo, hi, prev)
+		}
+		for r := lo; r < hi; r++ {
+			binary.LittleEndian.PutUint32(buf[8*r:], uint32(lo))
+			binary.LittleEndian.PutUint32(buf[8*r+4:], uint32(hi))
+		}
+		prev = hi
+	}
+	for i, b := range bs.vwins {
+		if err := b.Write(buf[i*ar*8 : (i+1)*ar*8]); err != nil {
+			return fail("windowed runs: %v", err)
+		}
+	}
+	bs.vwinRows = n
+	return true
+}
+
+// winOf is the windows of query chunk c for a windowed block l, nil for one
+// that is not.
+func (bs *blockScratch) winOf(l *layer, c int) backend.Buf {
+	if !l.windowed {
+		return nil
+	}
+	return bs.vwins[c]
+}

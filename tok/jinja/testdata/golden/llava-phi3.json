@@ -1,0 +1,34 @@
+{
+ "documents": {
+  "ctx": "76f9f75a5d0fe0cf",
+  "out": "<s><|user|>\nHow warm does Zürich get in July?<|end|>\n<|assistant|>\n"
+ },
+ "image": {
+  "ctx": "4eb1429e43dcb6ce",
+  "out": "<s><|user|>\n<image>\nWhat is in this picture?<|end|>\n<|assistant|>\n"
+ },
+ "multiturn-nogen": {
+  "ctx": "1934e9dd8804e366",
+  "out": "<s><|user|>\nName a prime.<|end|>\n<|assistant|>\nSeven.<|end|>\n<|user|>\nAnother,\nplease.<|end|>\n<|assistant|>\n  Eleven.  <|end|>\n"
+ },
+ "system-multiturn": {
+  "ctx": "706aa11f35bf28f9",
+  "out": "<s><|system|>\nYou are a terse assistant.<|end|>\n<|user|>\nWhat is the capital of France?<|end|>\n<|assistant|>\nParis.<|end|>\n<|user|>\nAnd of Switzerland? Answer in one word, ça va ?<|end|>\n<|assistant|>\n"
+ },
+ "tools-request": {
+  "ctx": "cb949ef743ff0e30",
+  "out": "<s><|system|>\nYou can look the weather up.<|end|>\n<|user|>\nWhat is the weather in Zürich?<|end|>\n<|assistant|>\n"
+ },
+ "tools-result": {
+  "ctx": "4d0e192c45b3adf3",
+  "out": "<s><|user|>\nWhat is the weather in Zürich for the next 3 days?<|end|>\n<|assistant|>\n<|end|>\n"
+ },
+ "user": {
+  "ctx": "6713147ee4af833f",
+  "out": "<s><|user|>\nHello!<|end|>\n<|assistant|>\n"
+ },
+ "user-nogen": {
+  "ctx": "30643a3b87228ece",
+  "out": "<s><|user|>\nHello!<|end|>\n<|assistant|>\n"
+ }
+}

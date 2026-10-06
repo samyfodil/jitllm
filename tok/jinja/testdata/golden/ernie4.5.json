@@ -1,0 +1,30 @@
+{
+ "documents": {
+  "ctx": "176132759acb2009",
+  "out": "<|begin_of_sentence|>User: How warm does Zürich get in July?\nAssistant: "
+ },
+ "multiturn-nogen": {
+  "ctx": "b36c6712d7e27b03",
+  "out": "<|begin_of_sentence|>User: Name a prime.\nAssistant: Seven.<|end_of_sentence|>User: Another,\nplease.\nAssistant:   Eleven.  <|end_of_sentence|>"
+ },
+ "system-multiturn": {
+  "ctx": "9822b569e91e2503",
+  "out": "<|begin_of_sentence|>You are a terse assistant.\nUser: What is the capital of France?\nAssistant: Paris.<|end_of_sentence|>User: And of Switzerland? Answer in one word, ça va ?\nAssistant: "
+ },
+ "tools-request": {
+  "ctx": "ec898728a6051dcb",
+  "out": "<|begin_of_sentence|>You can look the weather up.\nUser: What is the weather in Zürich?\nAssistant: "
+ },
+ "tools-result": {
+  "ctx": "14d8f33d56e0e540",
+  "out": "<|begin_of_sentence|>User: What is the weather in Zürich for the next 3 days?\nAssistant: <|end_of_sentence|>Assistant: "
+ },
+ "user": {
+  "ctx": "f4349b5821b64a48",
+  "out": "<|begin_of_sentence|>User: Hello!\nAssistant: "
+ },
+ "user-nogen": {
+  "ctx": "e63aeb8a52e4642c",
+  "out": "<|begin_of_sentence|>User: Hello!\n"
+ }
+}

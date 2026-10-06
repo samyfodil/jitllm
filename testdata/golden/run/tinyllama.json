@@ -1,0 +1,17 @@
+[
+ {
+  "prompt": "Once upon a time",
+  "n": 12,
+  "out": ", there was a young girl named Lily who lived in\n\n"
+ },
+ {
+  "prompt": "The capital of France is",
+  "n": 12,
+  "out": " Paris.\n\n2. The French language is a Rom\n\n"
+ },
+ {
+  "prompt": "One day, a little",
+  "n": 12,
+  "out": " girl named Lily was playing with her dolls in the\n\n"
+ }
+]

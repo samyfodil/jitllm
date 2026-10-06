@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package jitllm.v1;
+
+// Types shared by more than one service. Nothing here is an RPC message; every
+// message in this file appears as a field of one.
+
+// Backend is the code generator a device is driven by. CPU is a first-class
+// member: the host is a placement target exactly as a card is, which is the
+// whole point of the engine's block-placement model.
+enum Backend {
+  BACKEND_UNSPECIFIED = 0;
+  BACKEND_CPU = 1;
+  BACKEND_CUDA = 2;
+  BACKEND_VULKAN = 3;
+  BACKEND_METAL = 4;
+}
+
+// DeviceKind is what the memory behind a device IS, not how fast it is. It
+// carries the engine's standing contract about unified memory: an integrated
+// GPU's device-local heap IS system RAM, so a scheduler must SUBTRACT it from
+// the host budget rather than ADD it as a second pool.
+enum DeviceKind {
+  DEVICE_KIND_UNSPECIFIED = 0;
+  // The host's own cores. Its memory is the host budget by definition.
+  DEVICE_KIND_HOST = 1;
+  // A discrete card with its own VRAM. Its memory is a second pool.
+  // A resizable-BAR card still reports DISCRETE: a device-local host-visible
+  // heap is still VRAM.
+  DEVICE_KIND_DISCRETE = 2;
+  // An integrated GPU, or Apple Silicon. Its heap is host RAM under another
+  // name. See `Device.counts_toward_host_budget`.
+  DEVICE_KIND_INTEGRATED = 3;
+}
+
+// DeviceRef names one compute resource. `id` is the stable string form the CLI
+// already uses ("cpu", "cuda:0", "vulkan:1", "metal:0") so a caller can hand
+// the same token to the API and to `jitllm run -devices`.
+message DeviceRef {
+  string id = 1;
+  Backend backend = 2;
+  // Index within the backend. Meaningless for the host.
+  int32 index = 3;
+}
+
+// Placement of one transformer block.
+enum BlockLocation {
+  BLOCK_LOCATION_UNSPECIFIED = 0;
+  BLOCK_LOCATION_HOST = 1;
+  BLOCK_LOCATION_DEVICE = 2;
+}
+
+// BlockKind distinguishes the repeating units a hybrid model alternates
+// between. A model that is not a hybrid reports ATTENTION for every block.
+enum BlockKind {
+  BLOCK_KIND_UNSPECIFIED = 0;
+  BLOCK_KIND_ATTENTION = 1;
+  // A recurrent block that keeps a summary of the whole history instead of a
+  // KV cache. Relocating one of these has to move the summary, not a cache.
+  BLOCK_KIND_LINEAR = 2;
+  // A vision tower block. It shares the pager's block space with the text
+  // model's blocks and competes for a page exactly as a text block does.
+  BLOCK_KIND_VISION = 3;
+}
+
+// ExecutionMode reports whether work on a device can run concurrently. The
+// engine holds ONE scratch set per device, so sessions that take a device
+// alone are correct but serialised; a session wholly on one device is PARALLEL
+// instead, its generates decoding as rows of steps shared with its model's
+// other sessions. That is a property of the engine and this field exists so a
+// caller learns it from the API rather than from mysterious latency.
+enum ExecutionMode {
+  EXECUTION_MODE_UNSPECIFIED = 0;
+  EXECUTION_MODE_PARALLEL = 1;
+  EXECUTION_MODE_SERIALISED = 2;
+}
+
+// FinishReason is why a generation stopped.
+enum FinishReason {
+  FINISH_REASON_UNSPECIFIED = 0;
+  FINISH_REASON_STOP = 1;
+  FINISH_REASON_MAX_TOKENS = 2;
+  FINISH_REASON_EOS = 3;
+  FINISH_REASON_CANCELLED = 4;
+  FINISH_REASON_ERROR = 5;
+}
+
+// SamplingParams is the one sampler description every surface funnels into.
+// Both compatibility shims translate into this; there is no second sampler.
+message SamplingParams {
+  // 0 (or unset) is greedy. The engine's own default path is greedy and the
+  // board rows are all greedy, so the default here must not silently differ.
+  optional float temperature = 1;
+  optional float top_p = 2;
+  optional int32 top_k = 3;
+  optional uint64 seed = 4;
+  optional float repeat_penalty = 5;
+  optional int32 repeat_last_n = 6;
+  optional float min_p = 7;
+}
+
+// ByteSize is bytes. It exists so a field can carry a human-readable form
+// beside the number without the two ever disagreeing: `human` is derived.
+message ByteSize {
+  uint64 bytes = 1;
+  string human = 2;
+}

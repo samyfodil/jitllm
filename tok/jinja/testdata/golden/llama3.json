@@ -1,0 +1,30 @@
+{
+ "documents": {
+  "ctx": "43eb9d6ee32bf202",
+  "out": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nCutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n\n<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nHow warm does Zürich get in July?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+ },
+ "multiturn-nogen": {
+  "ctx": "4f1e04d79e13a12d",
+  "out": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nCutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n\n<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nName a prime.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nSeven.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nAnother,\nplease.<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nEleven.<|eot_id|>"
+ },
+ "system-multiturn": {
+  "ctx": "c4b783a06ea719e2",
+  "out": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nCutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n\nYou are a terse assistant.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nWhat is the capital of France?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nParis.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nAnd of Switzerland? Answer in one word, ça va ?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+ },
+ "tools-request": {
+  "ctx": "27b213cc0a34439b",
+  "out": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nEnvironment: ipython\nCutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n\nYou can look the weather up.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nGiven the following functions, please respond with a JSON for a function call with its proper arguments that best answers the given prompt.\n\nRespond in the format {\"name\": function name, \"parameters\": dictionary of argument name and its value}.Do not use variables.\n\n{\n    \"type\": \"function\",\n    \"function\": {\n        \"name\": \"get_weather\",\n        \"description\": \"Get the current weather for a city\",\n        \"parameters\": {\n            \"type\": \"object\",\n            \"properties\": {\n                \"location\": {\n                    \"type\": \"string\",\n                    \"description\": \"City name\"\n                },\n                \"unit\": {\n                    \"type\": \"string\",\n                    \"enum\": [\n                        \"celsius\",\n                        \"fahrenheit\"\n                    ]\n                },\n                \"days\": {\n                    \"type\": \"integer\",\n                    \"description\": \"Forecast length\"\n                },\n                \"radius_km\": {\n                    \"type\": \"number\",\n                    \"description\": \"Search radius\",\n                    \"default\": 5.0\n                }\n            },\n            \"required\": [\n                \"location\"\n            ]\n        }\n    }\n}\n\nWhat is the weather in Zürich?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+ },
+ "tools-result": {
+  "ctx": "390e3a012b41f58a",
+  "out": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nEnvironment: ipython\nCutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n\n<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nGiven the following functions, please respond with a JSON for a function call with its proper arguments that best answers the given prompt.\n\nRespond in the format {\"name\": function name, \"parameters\": dictionary of argument name and its value}.Do not use variables.\n\n{\n    \"type\": \"function\",\n    \"function\": {\n        \"name\": \"get_weather\",\n        \"description\": \"Get the current weather for a city\",\n        \"parameters\": {\n            \"type\": \"object\",\n            \"properties\": {\n                \"location\": {\n                    \"type\": \"string\",\n                    \"description\": \"City name\"\n                },\n                \"unit\": {\n                    \"type\": \"string\",\n                    \"enum\": [\n                        \"celsius\",\n                        \"fahrenheit\"\n                    ]\n                },\n                \"days\": {\n                    \"type\": \"integer\",\n                    \"description\": \"Forecast length\"\n                },\n                \"radius_km\": {\n                    \"type\": \"number\",\n                    \"description\": \"Search radius\",\n                    \"default\": 5.0\n                }\n            },\n            \"required\": [\n                \"location\"\n            ]\n        }\n    }\n}\n\nWhat is the weather in Zürich for the next 3 days?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{\"name\": \"get_weather\", \"parameters\": {\"location\": \"Zürich\", \"unit\": \"celsius\", \"days\": 3, \"radius_km\": 10.0}}<|eot_id|><|start_header_id|>ipython<|end_header_id|>\n\n\"{\\\"temperature\\\": 18.5, \\\"sky\\\": \\\"cloudy\\\"}\"<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+ },
+ "user": {
+  "ctx": "d0a1f1c19a0ac1b1",
+  "out": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nCutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n\n<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nHello!<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+ },
+ "user-nogen": {
+  "ctx": "4345efe938f9492f",
+  "out": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nCutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n\n<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nHello!<|eot_id|>"
+ }
+}

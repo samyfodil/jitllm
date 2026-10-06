@@ -1,0 +1,30 @@
+{
+ "documents": {
+  "ctx": "271c50dac564addb",
+  "out": "<|start_of_role|>system<|end_of_role|>You are a helpful assistant with access to the following documents. You may use one or more documents to assist with the user query.\n\nYou are given a list of documents within <documents></documents> XML tags:\n<documents>\n{\"title\": \"Zürich climate\", \"text\": \"July is the warmest month, averaging 24.0 C at its highs.\"}\n{\"title\": \"Lake Zürich\", \"text\": \"The lake reaches 22.5 C in late summer.\"}\n</documents>\n\nWrite the response to the user's input by strictly aligning with the facts in the provided documents. If the information needed to answer the question is not available in the documents, inform the user that the question cannot be answered based on the available data.<|end_of_text|>\n<|start_of_role|>user<|end_of_role|>How warm does Zürich get in July?<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>"
+ },
+ "multiturn-nogen": {
+  "ctx": "fdbb0e5dc293b26b",
+  "out": "<|start_of_role|>system<|end_of_role|>You are a helpful assistant. Please ensure responses are professional, accurate, and safe.<|end_of_text|>\n<|start_of_role|>user<|end_of_role|>Name a prime.<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>Seven.<|end_of_text|>\n<|start_of_role|>user<|end_of_role|>Another,\nplease.<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>  Eleven.  <|end_of_text|>\n"
+ },
+ "system-multiturn": {
+  "ctx": "8a5c699888bab6f9",
+  "out": "<|start_of_role|>system<|end_of_role|>You are a terse assistant.<|end_of_text|>\n<|start_of_role|>user<|end_of_role|>What is the capital of France?<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>Paris.<|end_of_text|>\n<|start_of_role|>user<|end_of_role|>And of Switzerland? Answer in one word, ça va ?<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>"
+ },
+ "tools-request": {
+  "ctx": "2f8e0a81ff7e8dfa",
+  "out": "<|start_of_role|>system<|end_of_role|>You can look the weather up.\n\nYou are a helpful assistant with access to the following tools. You may call one or more tools to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get the current weather for a city\", \"parameters\": {\"type\": \"object\", \"properties\": {\"location\": {\"type\": \"string\", \"description\": \"City name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}, \"days\": {\"type\": \"integer\", \"description\": \"Forecast length\"}, \"radius_km\": {\"type\": \"number\", \"description\": \"Search radius\", \"default\": 5.0}}, \"required\": [\"location\"]}}}\n</tools>\n\nFor each tool call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>. If a tool does not exist in the provided list of tools, notify the user that you do not have the ability to fulfill the request.<|end_of_text|>\n<|start_of_role|>user<|end_of_role|>What is the weather in Zürich?<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>"
+ },
+ "tools-result": {
+  "ctx": "02d4b2763d87e979",
+  "out": "<|start_of_role|>system<|end_of_role|>You are a helpful assistant with access to the following tools. You may call one or more tools to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get the current weather for a city\", \"parameters\": {\"type\": \"object\", \"properties\": {\"location\": {\"type\": \"string\", \"description\": \"City name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}, \"days\": {\"type\": \"integer\", \"description\": \"Forecast length\"}, \"radius_km\": {\"type\": \"number\", \"description\": \"Search radius\", \"default\": 5.0}}, \"required\": [\"location\"]}}}\n</tools>\n\nFor each tool call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>. If a tool does not exist in the provided list of tools, notify the user that you do not have the ability to fulfill the request.<|end_of_text|>\n<|start_of_role|>user<|end_of_role|>What is the weather in Zürich for the next 3 days?<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|><tool_call>\n{\"name\": \"get_weather\", \"arguments\": {\"location\": \"Zürich\", \"unit\": \"celsius\", \"days\": 3, \"radius_km\": 10.0}}\n</tool_call><|end_of_text|>\n<|start_of_role|>user<|end_of_role|>\n<tool_response>\n{\"temperature\": 18.5, \"sky\": \"cloudy\"}\n</tool_response><|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>"
+ },
+ "user": {
+  "ctx": "646a4131baa365ca",
+  "out": "<|start_of_role|>system<|end_of_role|>You are a helpful assistant. Please ensure responses are professional, accurate, and safe.<|end_of_text|>\n<|start_of_role|>user<|end_of_role|>Hello!<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>"
+ },
+ "user-nogen": {
+  "ctx": "f77cde4f89e7e401",
+  "out": "<|start_of_role|>system<|end_of_role|>You are a helpful assistant. Please ensure responses are professional, accurate, and safe.<|end_of_text|>\n<|start_of_role|>user<|end_of_role|>Hello!<|end_of_text|>\n"
+ }
+}

@@ -1,0 +1,44 @@
+[
+ {
+  "model": "sha256:e6a691bef0258fb979ff3b1feae3002ccc6bb7f5ac5c551af6bd4bd0276213a7",
+  "type": "q3_k",
+  "tensor": "token_embd.weight",
+  "elems": 65536000,
+  "crc32": 1449349358
+ },
+ {
+  "model": "sha256:e6a691bef0258fb979ff3b1feae3002ccc6bb7f5ac5c551af6bd4bd0276213a7",
+  "type": "q4_k",
+  "tensor": "blk.9.ffn_down.weight",
+  "elems": 11534336,
+  "crc32": 474505653
+ },
+ {
+  "model": "sha256:e6a691bef0258fb979ff3b1feae3002ccc6bb7f5ac5c551af6bd4bd0276213a7",
+  "type": "q5_k",
+  "tensor": "blk.1.ffn_down.weight",
+  "elems": 11534336,
+  "crc32": 3715826678
+ },
+ {
+  "model": "sha256:e6a691bef0258fb979ff3b1feae3002ccc6bb7f5ac5c551af6bd4bd0276213a7",
+  "type": "q6_k",
+  "tensor": "output.weight",
+  "elems": 65536000,
+  "crc32": 2416163021
+ },
+ {
+  "model": "sha256:c1864a5eb19305c40519da12cc543519e48a0697ecd30e15d5ac228644957d12",
+  "type": "q4_0",
+  "tensor": "blk.9.ffn_up.weight",
+  "elems": 33554432,
+  "crc32": 300538144
+ },
+ {
+  "model": "sha256:c1864a5eb19305c40519da12cc543519e48a0697ecd30e15d5ac228644957d12",
+  "type": "q8_0",
+  "tensor": "token_embd.weight",
+  "elems": 524550144,
+  "crc32": 964932262
+ }
+]

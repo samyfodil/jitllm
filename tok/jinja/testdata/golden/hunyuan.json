@@ -1,0 +1,30 @@
+{
+ "documents": {
+  "ctx": "54a38dd91229ffd4",
+  "out": "<｜hy_begin▁of▁sentence｜><｜hy_User｜>How warm does Zürich get in July?<｜hy_Assistant｜>"
+ },
+ "multiturn-nogen": {
+  "ctx": "fdbd1d910b47ed6a",
+  "out": "<｜hy_begin▁of▁sentence｜><｜hy_User｜>Name a prime.<｜hy_Assistant｜>Seven.<｜hy_place▁holder▁no▁2｜><｜hy_User｜>Another,\nplease.<｜hy_Assistant｜>  Eleven.  <｜hy_place▁holder▁no▁2｜>"
+ },
+ "system-multiturn": {
+  "ctx": "cd74ad774dcef6eb",
+  "out": "<｜hy_begin▁of▁sentence｜>You are a terse assistant.<｜hy_place▁holder▁no▁3｜><｜hy_User｜>What is the capital of France?<｜hy_Assistant｜>Paris.<｜hy_place▁holder▁no▁2｜><｜hy_User｜>And of Switzerland? Answer in one word, ça va ?<｜hy_Assistant｜>"
+ },
+ "tools-request": {
+  "ctx": "040c2d4ab476e29c",
+  "out": "<｜hy_begin▁of▁sentence｜>You can look the weather up.\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get the current weather for a city\", \"parameters\": {\"type\": \"object\", \"properties\": {\"location\": {\"type\": \"string\", \"description\": \"City name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}, \"days\": {\"type\": \"integer\", \"description\": \"Forecast length\"}, \"radius_km\": {\"type\": \"number\", \"description\": \"Search radius\", \"default\": 5.0}}, \"required\": [\"location\"]}}}\n</tools>\n\nFor function call returns, you should first print <tool_calls>For each function call, you should return object like:\n<tool_call>function_name\n```json\nfunction_arguments_in_json_format\n```</tool_call>At the end of function call returns, you should print </tool_calls><｜hy_place▁holder▁no▁3｜><｜hy_User｜>What is the weather in Zürich?<｜hy_Assistant｜>"
+ },
+ "tools-result": {
+  "ctx": "3dd45308d9305955",
+  "out": "<｜hy_begin▁of▁sentence｜># Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get the current weather for a city\", \"parameters\": {\"type\": \"object\", \"properties\": {\"location\": {\"type\": \"string\", \"description\": \"City name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}, \"days\": {\"type\": \"integer\", \"description\": \"Forecast length\"}, \"radius_km\": {\"type\": \"number\", \"description\": \"Search radius\", \"default\": 5.0}}, \"required\": [\"location\"]}}}\n</tools>\n\nFor function call returns, you should first print <tool_calls>For each function call, you should return object like:\n<tool_call>function_name\n```json\nfunction_arguments_in_json_format\n```</tool_call>At the end of function call returns, you should print </tool_calls><｜hy_place▁holder▁no▁3｜><｜hy_User｜>What is the weather in Zürich for the next 3 days?<｜hy_Assistant｜><tool_calls><tool_call>get_weather\n```json\n{\"location\": \"Zürich\", \"unit\": \"celsius\", \"days\": 3, \"radius_km\": 10.0}\n```</tool_call></tool_calls><｜hy_place▁holder▁no▁2｜><｜hy_User｜><tool_responses><tool_response>{\"temperature\": 18.5, \"sky\": \"cloudy\"}</tool_response></tool_responses><｜hy_Assistant｜>"
+ },
+ "user": {
+  "ctx": "2c1f274cae266832",
+  "out": "<｜hy_begin▁of▁sentence｜><｜hy_User｜>Hello!<｜hy_Assistant｜>"
+ },
+ "user-nogen": {
+  "ctx": "9f5e995b5ef2a08b",
+  "out": "<｜hy_begin▁of▁sentence｜><｜hy_User｜>Hello!<｜hy_Assistant｜>"
+ }
+}

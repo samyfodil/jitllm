@@ -1,0 +1,30 @@
+{
+ "documents": {
+  "ctx": "244d03376ac7fab9",
+  "out": "]~!b[]~b]system\nYou are MiniMax-M2, a helpful AI assistant built by MiniMax. Knowledge cutoff: 2025-06.[e~[\n]~b]user\nHow warm does Zürich get in July?[e~[\n]~b]ai\n<think>\n"
+ },
+ "multiturn-nogen": {
+  "ctx": "b31a3b3cfce2011e",
+  "out": "]~!b[]~b]system\nYou are MiniMax-M2, a helpful AI assistant built by MiniMax. Knowledge cutoff: 2025-06.[e~[\n]~b]user\nName a prime.[e~[\n]~b]ai\nSeven.[e~[\n]~b]user\nAnother,\nplease.[e~[\n]~b]ai\n  Eleven.  [e~[\n"
+ },
+ "system-multiturn": {
+  "ctx": "3b2fd4bc4be61877",
+  "out": "]~!b[]~b]system\nYou are a terse assistant.[e~[\n]~b]user\nWhat is the capital of France?[e~[\n]~b]ai\nParis.[e~[\n]~b]user\nAnd of Switzerland? Answer in one word, ça va ?[e~[\n]~b]ai\n<think>\n"
+ },
+ "tools-request": {
+  "ctx": "f749959f6a37a2c4",
+  "out": "]~!b[]~b]system\nYou can look the weather up.\n\n# Tools\nYou may call one or more tools to assist with the user query.\nHere are the tools available in JSONSchema format:\n\n<tools>\n<tool>{\"name\": \"get_weather\", \"description\": \"Get the current weather for a city\", \"parameters\": {\"type\": \"object\", \"properties\": {\"location\": {\"type\": \"string\", \"description\": \"City name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}, \"days\": {\"type\": \"integer\", \"description\": \"Forecast length\"}, \"radius_km\": {\"type\": \"number\", \"description\": \"Search radius\", \"default\": 5.0}}, \"required\": [\"location\"]}}</tool>\n</tools>\n\nWhen making tool calls, use XML format to invoke tools and pass parameters:\n\n<minimax:tool_call>\n<invoke name=\"tool-name-1\">\n<parameter name=\"param-key-1\">param-value-1</parameter>\n<parameter name=\"param-key-2\">param-value-2</parameter>\n...\n</invoke>\n</minimax:tool_call>[e~[\n]~b]user\nWhat is the weather in Zürich?[e~[\n]~b]ai\n<think>\n"
+ },
+ "tools-result": {
+  "ctx": "e8aaeddf5e2fed50",
+  "out": "]~!b[]~b]system\nYou are MiniMax-M2, a helpful AI assistant built by MiniMax. Knowledge cutoff: 2025-06.\n\n# Tools\nYou may call one or more tools to assist with the user query.\nHere are the tools available in JSONSchema format:\n\n<tools>\n<tool>{\"name\": \"get_weather\", \"description\": \"Get the current weather for a city\", \"parameters\": {\"type\": \"object\", \"properties\": {\"location\": {\"type\": \"string\", \"description\": \"City name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}, \"days\": {\"type\": \"integer\", \"description\": \"Forecast length\"}, \"radius_km\": {\"type\": \"number\", \"description\": \"Search radius\", \"default\": 5.0}}, \"required\": [\"location\"]}}</tool>\n</tools>\n\nWhen making tool calls, use XML format to invoke tools and pass parameters:\n\n<minimax:tool_call>\n<invoke name=\"tool-name-1\">\n<parameter name=\"param-key-1\">param-value-1</parameter>\n<parameter name=\"param-key-2\">param-value-2</parameter>\n...\n</invoke>\n</minimax:tool_call>[e~[\n]~b]user\nWhat is the weather in Zürich for the next 3 days?[e~[\n]~b]ai\n\n<minimax:tool_call>\n<invoke name=\"get_weather\">\n<parameter name=\"location\">Zürich</parameter>\n<parameter name=\"unit\">celsius</parameter>\n<parameter name=\"days\">3</parameter>\n<parameter name=\"radius_km\">10.0</parameter>\n</invoke>\n</minimax:tool_call>[e~[\n]~b]tool\n<response>{\"temperature\": 18.5, \"sky\": \"cloudy\"}</response>[e~[\n]~b]ai\n<think>\n"
+ },
+ "user": {
+  "ctx": "2180703bdadda600",
+  "out": "]~!b[]~b]system\nYou are MiniMax-M2, a helpful AI assistant built by MiniMax. Knowledge cutoff: 2025-06.[e~[\n]~b]user\nHello![e~[\n]~b]ai\n<think>\n"
+ },
+ "user-nogen": {
+  "ctx": "6f2187a303bf799a",
+  "out": "]~!b[]~b]system\nYou are MiniMax-M2, a helpful AI assistant built by MiniMax. Knowledge cutoff: 2025-06.[e~[\n]~b]user\nHello![e~[\n"
+ }
+}

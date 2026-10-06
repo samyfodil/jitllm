@@ -1,0 +1,120 @@
+syntax = "proto3";
+
+package jitllm.v1;
+
+import "jitllm/v1/common.proto";
+
+// DeviceService enumerates the hardware and reports what memory each piece
+// actually has. It is read-mostly: placing work is PlacementService's job.
+
+service DeviceService {
+  rpc ListDevices(ListDevicesRequest) returns (ListDevicesResponse) {}
+  rpc GetDevice(GetDeviceRequest) returns (GetDeviceResponse) {}
+  // MemoryTopology is the one call that answers "how many bytes can I spend",
+  // and it answers it WITHOUT summing unified heaps into the host total.
+  rpc GetMemoryTopology(GetMemoryTopologyRequest) returns (GetMemoryTopologyResponse) {}
+}
+
+message Device {
+  DeviceRef ref = 1;
+  string name = 2;
+  DeviceKind kind = 3;
+
+  // Total and free device-local memory as the backend reports it.
+  ByteSize total_memory = 4;
+  ByteSize free_memory = 5;
+
+  // True when this device's heap IS host memory. A caller that adds
+  // `total_memory` to the host budget on such a device has spent the same
+  // bytes twice and will thrash. The field is named for the action it
+  // governs rather than for the hardware, so the contract is unmissable.
+  bool counts_toward_host_budget = 6;
+
+  // How work on this device executes. SERIALISED today for every accelerator,
+  // because one scratch set is allocated per device and sessions share it.
+  ExecutionMode execution = 7;
+
+  // Free-text statement of why `execution` is what it is. Empty when PARALLEL.
+  string execution_note = 8;
+
+  // Sessions currently attached to this device, and how many of those are
+  // mid-generation. `running` never exceeds 1 while `execution` is SERIALISED.
+  int32 attached_sessions = 9;
+  int32 running_sessions = 10;
+  int32 queued_requests = 11;
+
+  // Whether the device is usable for placement right now. A backend that
+  // enumerated but failed to initialise reports available=false and a reason,
+  // rather than disappearing from the list.
+  bool available = 12;
+  string unavailable_reason = 13;
+
+  // A stable identity for the PHYSICAL device behind this entry, as the
+  // backend reports it -- "uuid:<32 hex>" from Vulkan's
+  // VkPhysicalDeviceIDProperties.deviceUUID or CUDA's cuDeviceGetUuid, which
+  // both specifications promise are the same sixteen bytes for the same
+  // device. EMPTY means the backend would not say, and an empty id matches
+  // NOTHING, not even another empty one: an unidentifiable device stays
+  // distinct rather than being guessed at.
+  string physical_id = 14;
+
+  // Set to the `ref.id` of another device in this list when the two entries
+  // are ONE piece of hardware reached through two backends -- on this box
+  // `vulkan:0` and `cuda:0` are one RTX 3050 Ti. The entry is still listed,
+  // because hiding hardware is its own bug, but its `total_memory` is NOT part
+  // of `spendable_total` and the default device set takes only one of the two
+  // (CUDA over Vulkan for an NVIDIA card, Metal over Vulkan for an Apple one).
+  string same_device_as = 15;
+}
+
+message HostMemory {
+  // The engine's own weight budget: what `sched.MemBudget` hands a loader.
+  // It is a FRACTION of the cgroup, not the cgroup, which is why a model that
+  // does not fit inside it pages while a mmap'ing engine in the same cgroup
+  // does not.
+  ByteSize weight_budget = 1;
+  // Total and available system memory.
+  ByteSize total = 2;
+  ByteSize available = 3;
+  // Cores the decode pool is built from, and the whole coreset it was
+  // intersected against.
+  int32 decode_cores = 4;
+  int32 performance_cores = 5;
+  int32 efficiency_cores = 6;
+  int32 smt_siblings = 7;
+}
+
+message MemoryTopology {
+  HostMemory host = 1;
+  repeated Device devices = 2;
+
+  // The sum a scheduler may actually spend: host.weight_budget plus the
+  // total_memory of every device whose `counts_toward_host_budget` is FALSE
+  // and whose `same_device_as` is EMPTY. Computed by the server so no client
+  // has to re-derive either rule.
+  //
+  // Two mistakes it exists to make unreachable, and they are the same mistake
+  // from opposite sides: adding an integrated GPU's heap, which IS system RAM,
+  // and adding one card twice because two backends enumerated it.
+  ByteSize spendable_total = 3;
+}
+
+message ListDevicesRequest {}
+
+message ListDevicesResponse {
+  repeated Device devices = 1;
+}
+
+message GetDeviceRequest {
+  string device_id = 1;
+}
+
+message GetDeviceResponse {
+  Device device = 1;
+}
+
+message GetMemoryTopologyRequest {}
+
+message GetMemoryTopologyResponse {
+  MemoryTopology topology = 1;
+}

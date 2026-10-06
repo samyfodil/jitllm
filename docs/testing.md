@@ -1,0 +1,240 @@
+# How tests find models
+
+Model files (GGUFs, `.jlm` containers, HuggingFace directories) are too big to
+commit, all but one: `internal/testmodels/fetch.sh` downloads the rest (see
+"Getting the models" below). Every test that needs one finds it through
+`internal/testmodels`, which reads one variable:
+
+| variable | meaning | unset |
+|---|---|---|
+| `JITLLM_MODELS` | the model directory | `models/` at the repository root |
+| `JITLLM_MODEL_FREE` | `1`: a missing model skips instead of failing (CI only, see "What CI runs") | a missing model fails |
+
+The fallback is located by walking up from the test's working directory to the
+`go.mod` that declares `github.com/samyfodil/jitllm` -- so it is the same
+directory from every package, including the nested `ui/` and `server/` modules.
+`models/` may be a symlink to a model disk; otherwise point the variable at
+the models instead of faking the link:
+
+    JITLLM_MODELS=/mnt/models/jitllm ./scripts/cap 16G -- go test ./engine/model -run TestGreedyMatchesLlamaCpp -count=1
+
+`JITLLM_MODELS` is the same variable `jitllm fetch` uses for where a download
+lands, so one setting serves both. A test binary shipped to another host has
+no `go.mod` above it, so set the variable in the remote run's environment
+(the arm64 and Xeon runs were driven by local helpers, not in the repo).
+
+## A missing model is loud
+
+A gate whose model is absent says so and names the path it looked at:
+
+    MODEL MISSING: /nonexistent/tinyllama-1.1b-q3_K_M.gguf (set JITLLM_MODELS to the model directory) -- this gate proved nothing
+
+Some gates FAIL rather than skip on a missing model (RULE 11: a missing
+artefact is a task). They say so through one function,
+`testmodels.Missing`, which fails the test -- unless `JITLLM_MODEL_FREE=1`,
+where it skips with the same message. Only CI's model-free run
+(`.github/scripts/test-model-free.sh`) sets it; a box meant to hold the
+models leaves it unset. Neither a skip nor a model-free run is a pass; read
+the skip lines of a run.
+
+A new test that needs a model reports its absence through
+`testmodels.Missing` (or skips, as `jlmOf` does), never a bare `t.Fatal`: a
+bare failure is red in the model-free run, and CI does not keep a list of
+names to excuse it.
+
+## What CI runs
+
+`.github/workflows/ci.yml` has four jobs, every one with `CGO_ENABLED=0` as
+the release builds:
+
+- **build** cross-compiles the five modules (root, server, common, ui, tui) for every release target from
+  one Linux runner.
+- **check**: gofmt, `go mod tidy`, buf lint and format, and that
+  `server/gen` is what `buf generate` writes.
+- **test**, on linux/amd64, linux/arm64, darwin/arm64 and windows/amd64:
+  `scripts/vet` over the engine and `server/`, then
+  `.github/scripts/test-model-free.sh` (the program is `scripts/modelfree`,
+  Go so that one runner serves all four hosts). On Windows it first builds
+  the five modules natively, links `jitllm.exe` and `jitllmd.exe`, and runs
+  `jitllm hardware`.
+- **ui**, on linux/amd64, darwin/arm64 and windows/amd64: builds the `ui`
+  module and the `jitllm-ui` binary, `scripts/vet ui`, and the mock-engine
+  tests, `./mock ./stage ./cmd/shots` -- `stage` plays every scenario of
+  package `mock` through the mounted window and checks each frame, offscreen,
+  with no display, GPU or model. On Linux it also starts `jitllm-ui -mock`
+  under Xvfb with Mesa's software Vulkan (lavapipe), holds that it is still
+  running after 20 seconds, and keeps a screenshot as the run's
+  `jitllm-ui-mock` artifact (`.github/scripts/ui-smoke.sh`). Under Xvfb the
+  window presents no frame -- the screenshot is black while vkcube on the same
+  display draws -- so the picture is reported, not gated.
+
+The model-free run is every package of the five modules but `./dev/bench`
+(its perf floors want a quiet box, RULE 4), `./ui/stage` (the ui job's) and,
+on macOS, `./jit/gpu/backend` (the runner's paravirtual Metal device allows
+512-thread pipelines, and the backend's gates force 1024-thread splits),
+`engine/model` and `common/engine` included, plus the SSE tier under
+`-tags jitllmtest` on amd64, Windows included. It sets `JITLLM_MODEL_FREE=1`
+and points `JITLLM_MODELS` at a fresh directory holding only the committed
+`stories260K.gguf` and the container this build converts from it, so every
+gate that runs on stories260K runs, on the CPU; everything else skips with its
+MODEL MISSING line. No model is downloaded, and the Linux and Windows runners
+have no GPU. The job summary counts each run and lists every skip with its
+reason. Run it locally the same way, with the GPUs hidden:
+
+    CUDA_VISIBLE_DEVICES= VK_DRIVER_FILES=/nonexistent.json ./scripts/cap 8G -- .github/scripts/test-model-free.sh
+
+On Windows the x86 encoding gate needs GNU objdump, which the job puts on the
+PATH from the image's MinGW or Strawberry Perl. Windows-only test code uses
+build constraints or portable calls: the cross-process GPU test lock is
+`internal/testlock` (flock on Unix, LockFileEx on Windows), and
+`GOOS=windows ./scripts/vet` type-checks every test file for Windows from a
+Linux box; `scripts/vet` allows three more `unsafe.Pointer` findings there,
+the OS addresses of VirtualAlloc and MapViewOfFile (the script argues them).
+
+## Getting the models
+
+`internal/testmodels/fetch.sh` downloads every model file a test reads into
+the model directory (`$JITLLM_MODELS`, or `models/`). Its table -- name, repo,
+file, bytes -- is the one record of where each test model comes from, and
+every entry was checked byte for byte against the copy the goldens were taken
+on:
+
+    internal/testmodels/fetch.sh --list          # the table, sizes, what is here
+    internal/testmodels/fetch.sh                 # the default set, ~40 GB
+    internal/testmodels/fetch.sh llama gemma     # only names containing a word
+    internal/testmodels/fetch.sh --large scout   # an opt-in large model
+
+A file already present at the table's size is skipped, and a partial download
+resumes. The default set is what a normal `go test ./...` reads: GGUFs and
+their vision projectors, the embedding models under `embed/`, and the
+HuggingFace directories the safetensors converter is gated on
+(`tiny-random-*`, `qwen3`, `SmolLM2-360M-Instruct`, ...). `--large` adds the
+files over ~10 GB and the ones only an override variable reaches (the 80B,
+Kimi-Linear, Moonlight, Mixtral, Llama-4-Scout, gpt-oss-20b, DeepSeek-V2-Lite,
+phi-4, falcon-7b). Two gates fail rather than skip without `--large`:
+`engine/model` `TestGPTOSSMatchesLlamaCppIntermediates` and
+`tok` `TestDecodeChatRendersHarmonyChannels` both need gpt-oss-20b.
+`HF_TOKEN` is sent to huggingface.co when set; no entry needs it.
+
+Committed rather than fetched: `testdata/models/stories260K.gguf` (1.1 MB), so
+`go test ./convert/gguf` runs on a fresh checkout with no network. The script
+copies it into the model directory, where other tests look for it.
+
+The script fetches no `.jlm`. A test that names a container reads the one
+converted from the GGUF of the same stem: the `engine/model` gates write it
+beside the GGUF on first use, or convert it yourself with
+`go run ./cmd/jitllm convert <dir>/<name>.gguf`.
+
+Made rather than fetched -- the script's header has the commands:
+
+- the `synth-*` fixtures: `scripts/hfgold.py`, `scripts/c6gold.py`,
+  `scripts/llama4gold.py` and `scripts/gptossgold.py` build them with the
+  reference's own classes, in the CPU torch/transformers venv each script's
+  header describes (`hfgold.py` starts several from the downloaded tiny-random
+  directories);
+- `tiny-qwen3moe-f32.gguf`: `scripts/tiny-moe-gguf.py`, from `tiny-qwen3moe-hf/`;
+- `split-test/`: `convert.TestSplitGGUFConvertsLikeTheWholeFile` needs
+  tinyllama split by llama.cpp's own tool, in the model directory:
+
+      llama-gguf-split --split --split-max-tensors 60 tinyllama-1.1b-q3_K_M.gguf split-test/tl
+
+## Choosing WHICH model
+
+`JITLLM_MODELS` says WHERE. The variables below say WHICH, per test. A value
+that is a bare file name is looked up in the model directory; a value with a
+`/` in it is a path and is used as written. "Substring" variables filter a
+sweep by name and are never resolved.
+
+| variable | tests | value | unset |
+|---|---|---|---|
+| `JITLLM_MODEL` | `model.TestFusionCeiling` | one model file | every model |
+| | `model.TestForwardEmbdMatchesForward`, `TestPrefillMixedMatchesPrefill` | one model file | every language model under 2 GiB |
+| | `model.TestPrefillRegionProbe` | one model file | `tinyllama-1.1b-q3_K_M.gguf` |
+| | `model.TestDeviceDecodeRate`, `TestSamplerPerf` | one model file (a container for the sampler) | test skips |
+| `JITLLM_BENCH_MODEL` | `model` gates that call `benchModel` (e.g. `TestPrefillMatchesForward`) | one model file | the smallest quantized language model in the directory |
+| | `model.TestABKQuantAccsEndToEnd` | a k-quant model file | test skips |
+| | `model.BenchmarkGemmaDecode` | one model file | `gemma-2b.gguf` |
+| `JITLLM_ROUTE_MODEL` | `model.TestRoutingLocality`, `TestHotnessIsAProbability` | a mixture-of-experts model file | test skips |
+| `JITLLM_MLA_MODEL` | `model.TestMLAPrefillMatchesDecode`, `TestMLABatchMatchesDecode` | a real MLA model (name or path) | the synth-deepseek fixtures |
+| `JITLLM_DEV_MODEL` | `jit/gpu/tier.TestContainerAgreesHostAndDevice` | one file name in the directory | first present of tinyllama, Llama-3.2-1B, Qwen3-MoE, gemma-2b, olmoe |
+| `JITLLM_LABELCOST_MODEL` | `model.TestRegionLabelCost` | file name in the directory | `tinyllama-1.1b-q3_K_M.gguf` |
+| `JITLLM_LABELRATE_MODEL` | `model.TestRegionLabelRate` | file name in the directory | `tinyllama-1.1b-q3_K_M.gguf` |
+| `JITLLM_KVPERF_MODEL` | `model.TestPagedKVCost` | file name in the directory | `tinyllama-1.1b-q3_K_M.gguf` |
+| `JITLLM_KVPREFIX_MODEL` | `model.TestPrefixCacheSpeedup` | file name in the directory | `tinyllama-1.1b-q3_K_M.gguf` |
+| `JITLLM_KVPREC_MODEL` | `model.TestKVPrecisionCost` | exact base name | every model under 2 GiB |
+| `JITLLM_GREEDY_MODEL` | `model.TestGreedyMatchesLlamaCpp` | substring | every model; over 2 GiB only with `JITLLM_SLOW=1` |
+| `JITLLM_GREEDY_PAIR` | `model.TestGreedyMatchesLlamaCpp` | `<gguf>=<container>`, each name or path | GGUFs converted by the test |
+| `JITLLM_KVSWEEP_MODEL` | `model.TestPagedKVIsTokenIdenticalOnEveryModel` | substring | every model under 2 GiB |
+| `JITLLM_AUDIT_MODEL` | `model.TestEveryModelRunsGenerated` | substring, any size | every model under 2 GiB (`JITLLM_SLOW=1`: all) in the directory, one level down, and the safetensors fixtures with an `hf` golden |
+| `JITLLM_TOKMODEL` | `model.TestTokenizerCost` | substring | its fixed list |
+| `JITLLM_ROLE_MODEL` | `convert.TestEveryTensorHasARole` | substring | every GGUF |
+| `JITLLM_ST_MODEL` | `convert.TestSafetensorsArchCoverage` | substring | every HuggingFace directory |
+| `JITLLM_C6_HF` | `convert.TestDenseSafetensorsMatchesItsGGUF` | the directory `scripts/c6gold.py` writes its HuggingFace fixtures to (its `CV_HF`) | `$JITLLM_MODELS/hf` |
+| `JITLLM_TPL_MODEL` | `jinja.TestGGUFChatTemplatesRender` | substring | every GGUF |
+| `JITLLM_SERVER_MODEL` | `server.TestEndToEndAgainstARealContainer` | a `.jlm` container | test skips |
+| `JITLLM_SERVER_BATCH_MODELS` | `server.TestBatch*` | comma-separated `.jlm` names or paths, each run beside the default | `stories15M-q8_0.jlm` only |
+| `JITLLM_STEP_MIXTURE` | `model.TestStepAcrossSessionsMixture*` | comma-separated names or paths | Qwen3-MoE-4x0.6B and olmoe; a card that cannot place every block skips |
+| `JITLLM_ALLOC_MODELS` | `model.TestDecodeDoesNotAllocate` | comma-separated names or paths, each run beside the default | Llama-3.2-1B, olmoe and Qwen3.5-0.8B only |
+| `JITLLM_SLOW` | several `model` sweeps | `1` admits models over 2 GiB | small models only |
+| `JITLLM_STEP_DEVICES` | every `model` gate that sweeps backends (the step, scheduler, MLA, C6, vision, gpt-oss, Llama 4 and hybrid device gates, and the decode allocation gate) | comma-separated device specs, e.g. `cuda:0` | `cuda:0,vulkan:0,metal`; the allocation gate takes each backend's default device |
+| `JITLLM_POSTNORM_MODELS` | `model.TestPostNormDeviceErrorIsAmplification` | comma-separated GGUF names in the directory, any model whose last block has a post-FFN norm | OLMo 2 1B and EXAONE 4.0 1.2B |
+| `JITLLM_LLAMACPP_CPU` | `model.TestPostNormDeviceErrorIsAmplification` | a directory holding a CPU-only `llama-perplexity` and its libraries (a CUDA library beside it is loaded and used) | the test skips naming it |
+
+Every other `JITLLM_*` variable a test reads is a knob or an opt-in for a
+measurement, not a model choice.
+
+## Choosing WHICH device
+
+A gate that wants exactly one device names it with a selector: `gpu:0`,
+`cuda:0`, `vulkan:1`. A bare `gpu`, `cuda` or `vulkan` is every device of that
+backend (`tier.ParseDevices`), so on a box with eight cards it opens eight, and
+on a laptop with a discrete card and an iGPU `gpu` and `vulkan` open both.
+
+`jit/gpu/backend`'s tests open their devices through `backend.Open`, which
+takes a discrete card before an integrated one -- so on a laptop with both, the
+iGPU is never tested unless it is named. The test binary (not the package,
+which reads no environment) maps these onto the `backend.Opts` `Open` uses:
+
+| variable | effect | unset |
+|---|---|---|
+| `JITLLM_VK_DEVICE` | the Vulkan device every `backend.Open` takes, by index or name substring (`1` is the Iris Xe beside the RTX here) | the default rule's pick |
+| `JITLLM_FOUR_DEVICES` | the four devices `model.TestSchedulerOnSplitPlacements*`'s four-device arms split the model over, as specs (`cuda:0,cuda:1,vulkan:2,vulkan:3`) | every CUDA device, then each Vulkan GPU that is not one of them (by UUID); fewer than four skips naming them |
+| `JITLLM_PAGED_VK` | the Vulkan devices the paged-attention gates (`TestPaged*`) sweep, by index; `none` for no Vulkan | every Vulkan GPU, a software rasteriser (llvmpipe) left out |
+| `JITLLM_VK_MAXGROUPS` | workgroups per Vulkan dispatch, below the device's own `maxComputeWorkGroupCount`; `7` sends nearly every launch in the suite through a split dispatch | the device's own |
+| `JITLLM_VK_VALIDATION` | the prefix the Khronos validation layer is installed under, for `backend.TestSplitLaunchesAreValidVulkanUsage`; `apt-get download vulkan-validationlayers && dpkg-deb -x` the `.deb` into DIR and pass `DIR/usr` | `/usr`, else the test skips |
+
+    JITLLM_VK_DEVICE=1 JITLLM_VK_MAXGROUPS=7 ./scripts/cap 8G -- go test ./jit/gpu/backend/ -count=1
+
+The `model` device gates take the same limit, as `tier.WithVulkanMaxGroups`:
+`JITLLM_VK_MAXGROUPS` reaches every tier the step gates
+(`TestStepAcrossSessions*`, whose devices `JITLLM_STEP_DEVICES` names) and the
+default-device gates open (`TestSchedulerOnDevice*`, `TestSlidingWindowRunsOnTheDevice`
+and every other caller of `swaTier`), and `JITLLM_TEST_DEVICES` names the
+default-device gates' device, as a `tier.WithDevices` spec:
+
+    JITLLM_TEST_DEVICES=vulkan:1 JITLLM_VK_MAXGROUPS=7 ./scripts/cap 8G -- go test ./engine/model -run 'TestSchedulerOnDevice' -count=1
+
+`cmd/jitllm` reads `JITLLM_VK_DEVICE` and `JITLLM_VK_MAXGROUPS` too, as
+`tier.WithVulkanDevice` and `tier.WithVulkanMaxGroups`.
+
+## Reference scripts
+
+The scripts under `scripts/` that build fixtures and record goldens
+(`*gold.py`, `*real.py`, the paging and three-way harnesses) find everything
+through environment variables, read by `scripts/refenv.py` for the Python
+ones. None has a default that names a machine; a script stops naming the
+variable it needs and did not find.
+
+| variable | what it is | read by |
+|---|---|---|
+| `JITLLM_HF_PY` | the python of a venv with CPU torch, transformers, tokenizers and safetensors (`scripts/hfgold.py` has the install lines); every `*gold.py` / `*real.py` runs under it: `$JITLLM_HF_PY scripts/c6gold.py` | how the scripts are run |
+| `JITLLM_MODELS` | the model directory: where GGUFs, fixtures and checkpoints are read and written | every script |
+| `LCPP_SRC` | a llama.cpp source checkout (`convert_hf_to_gguf.py`, `gguf-py`, `tools/mtmd/test-1.jpeg`) | the fixture builders |
+| `JITLLM_LCPP` | a llama.cpp build directory (`llama-completion`, `llama-tokenize`, `libggml-base.so`) | `gold.py`, `rungold.py`, `tokgold.py`, `embedgold.py`, `vs-llamacpp*.sh` |
+| `JITLLM_LLAMACPP_CPU` | a CPU-only llama.cpp build directory (`llama-mtmd-cli`, `llama-perplexity`) | `vlmgold.py`, `qwenvlmtmd.py`, and the post-norm gate above |
+| `CV_TOK`, `CV_HF` | the family tokenizers the fixtures copy, and where their HuggingFace directories are written | default `$JITLLM_MODELS/tok` and `$JITLLM_MODELS/hf` |
+| `BAILING_PY`, `BAILING_REF` | the python of a second venv with transformers 4.52.3, and inclusionAI's Ling 2.0 remote code | `moegold.py`'s `synth-bailingmoe2` only |
+| `L4_TOK` | the directory holding Llama 4's `tokenizer.json` | `llama4gold.py`, `llama4visiongold.py` |
+
+A script-specific override (`QVL_TOK`, `PIX_HF`, `PHI4V_TOK` and the like) is
+named in that script's docstring and defaults to a path under `$JITLLM_MODELS`.
