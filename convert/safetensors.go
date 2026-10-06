@@ -105,7 +105,23 @@ func FromShards(meta fs.FS, name string, open []*safetensors.File, dst string, f
 	if fp.Writer == "" {
 		fp.Writer = jlm.WriterID()
 	}
+	s.Origin = originOf(name, open)
 	return jlm.Write(dst, s, fp)
+}
+
+// originOf names a model's shards for a resumed write (jlm.Source.Origin). A
+// streamed shard's name carries the commit it was pinned at, which is
+// immutable; a local one is named with its size and modification time.
+func originOf(name string, open []*safetensors.File) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "safetensors %s", name)
+	for _, f := range open {
+		fmt.Fprintf(&b, "\n%s %d", f.Path, len(f.Tensors))
+		if fi, err := os.Stat(f.Path); err == nil {
+			fmt.Fprintf(&b, " %d %d", fi.Size(), fi.ModTime().UnixNano())
+		}
+	}
+	return b.String()
 }
 
 // Option changes how a model is converted.
@@ -578,7 +594,7 @@ func joined(ts []*jlm.Tensor) func() ([]byte, error) {
 	return func() ([]byte, error) {
 		bufs := make([][]byte, len(ts))
 		errs := make([]error, len(ts))
-		sem := make(chan struct{}, 4) // fixed fan-out; tune if a link wants more
+		sem := make(chan struct{}, joinFanout)
 		var wg sync.WaitGroup
 		for i, t := range ts {
 			if t.Load == nil {
@@ -608,6 +624,12 @@ func joined(ts []*jlm.Tensor) func() ([]byte, error) {
 		return out, nil
 	}
 }
+
+// joinFanout is hf.DefaultConns: a streamed expert is a few MB, one range, so a
+// bank keeps as many connections busy as loads run at once, and one carried
+// about 60 MB/s from the Hub's CDN on the V100 box. The hf client bounds the
+// connections; a local file is unaffected.
+const joinFanout = 16
 
 // bankKey names one expert bank: a role in a block.
 type bankKey struct {

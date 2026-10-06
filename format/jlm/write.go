@@ -1,9 +1,13 @@
 package jlm
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/samyfodil/jitllm/jit/gpu/kernels"
 )
@@ -17,6 +21,11 @@ type Source struct {
 	Vision  *Vision // a tower only
 	Vocab   *Vocab
 	Tensors []Tensor
+	// Origin names the bytes the tensors come from, immutably: a pinned
+	// repository commit and its files, or local files with their sizes and
+	// times. A write of a named origin can be resumed (see Write); "" is a
+	// source that cannot name its bytes, whose write always starts over.
+	Origin string
 }
 
 // Tensor is one weight on its way in. Data is the source bytes; the writer
@@ -580,91 +589,104 @@ func layoutOf(src *Source, fp Fingerprint) (*layout, error) {
 // right version and Fingerprint, and is zeros where the weights should be
 // (a full disk produces exactly that). The rename is in the same directory,
 // so it is atomic.
+//
+// The next tensor's bytes are fetched while this one is packed and written:
+// for a streamed source the fetch is the network, and the two overlap. Two
+// Loads never run at once, so a Load need not be safe against another.
+//
+// A source that names its bytes (Source.Origin) is written resumably: every
+// journalEvery bytes the part is synced and a journal beside it records how
+// many tensors are down. A failed or killed write keeps both, and the next
+// Write of the same layout from the same origin by the same build picks up
+// at the journal's count. Anything else starts over.
 func (l *layout) write(dst string, src *Source) (*Header, error) {
 	es, h, expPageSize, total := l.es, l.h, l.expPageSize, l.total
 	cfgb, visb, vocb, fpb := l.cfgb, l.visb, l.vocb, l.fpb
+	hdr := make([]byte, HeaderBytes)
+	h.encode(hdr)
+	tab := encodeTable(es)
+
 	tmp := dst + ".part"
-	out, err := os.Create(tmp)
+	jn := tmp + journalSuffix
+	journal := src.Origin != ""
+	sum := resumeDigest(src.Origin, hdr, cfgb, visb, vocb, tab, fpb)
+	start := 0
+	if journal {
+		start = resumeAt(tmp, jn, sum, total, len(es))
+	}
+	var out *os.File
+	var err error
+	if start > 0 {
+		out, err = os.OpenFile(tmp, os.O_RDWR, 0)
+	} else {
+		os.Remove(jn)
+		out, err = os.Create(tmp)
+	}
 	if err != nil {
 		return nil, err
 	}
+	// keep is set once a journal records progress: from then on a failure
+	// leaves the part for the next Write to resume.
+	keep := start > 0
 	defer func() {
 		out.Close()
-		os.Remove(tmp) // a no-op once the rename below has happened
+		if !keep {
+			os.Remove(tmp) // a no-op once the rename below has happened
+		}
 	}()
 
-	if err := out.Truncate(int64(total)); err != nil {
-		return nil, fmt.Errorf("jlm: sizing %s to %d: %w", dst, total, err)
+	if start == 0 {
+		if err := out.Truncate(int64(total)); err != nil {
+			return nil, fmt.Errorf("jlm: sizing %s to %d: %w", dst, total, err)
+		}
 	}
-	hdr := make([]byte, HeaderBytes)
-	h.encode(hdr)
 	for _, w := range []struct {
 		off uint64
 		b   []byte
 	}{{0, hdr}, {h.CfgOff, cfgb}, {h.VisOff, visb}, {h.VocOff, vocb},
-		{h.TabOff, encodeTable(es)}, {h.FPOff, fpb}} {
+		{h.TabOff, tab}, {h.FPOff, fpb}} {
 		if _, err := out.WriteAt(w.b, int64(w.off)); err != nil {
 			return nil, err
 		}
 	}
 
-	for i := range es {
+	type fetched struct {
+		b   []byte
+		err error
+	}
+	next := make(chan fetched, 1)
+	fetch := func(i int) {
+		b, err := src.Tensors[i].Bytes()
+		next <- fetched{b, err}
+	}
+	if start < len(es) {
+		go fetch(start)
+	}
+	var dirty uint64
+	for i := start; i < len(es); i++ {
 		e := &es[i]
-		raw, err := src.Tensors[i].Bytes()
+		got := <-next
+		if got.err != nil {
+			return nil, fmt.Errorf("jlm: %s (tensor %d of %d): %w", e.Name, i, len(es), got.err)
+		}
+		if i+1 < len(es) {
+			go fetch(i + 1)
+		}
+		n, err := writeTensor(out, e, got.b, expPageSize)
 		if err != nil {
-			return nil, fmt.Errorf("jlm: %s: %w", e.Name, err)
+			return nil, err
 		}
-		q, packed := packerOf(e.Type)
-		// A sheet's bytes go to its expert page when the bank is split out,
-		// and back to back inside the entry otherwise.
-		sheets, rows := sheetsOf(e.Dims, e.NDim)
-		split := expertPaged(e)
-		if !packed {
-			if !split {
-				if _, err := out.WriteAt(raw, int64(e.QSOff)); err != nil {
-					return nil, fmt.Errorf("jlm: %v: %w", e.Role, err)
-				}
-				continue
+		dirty += n
+		if journal && (dirty >= journalEvery || i+1 == len(es)) {
+			// The count is written only after the bytes it vouches for are
+			// on the disk, so a journal never claims a tensor a crash lost.
+			if err := out.Sync(); err != nil {
+				return nil, err
 			}
-			per := len(raw) / int(sheets)
-			for sh := 0; sh < int(sheets); sh++ {
-				if _, err := out.WriteAt(raw[sh*per:(sh+1)*per], int64(e.QSOff+uint64(sh)*expPageSize)); err != nil {
-					return nil, fmt.Errorf("jlm: %v: %w", e.Role, err)
-				}
+			if err := writeJournal(jn, sum, i+1); err != nil {
+				return nil, err
 			}
-			continue
-		}
-		// One sheet at a time, back to back: see sheetsOf. A dense weight is
-		// one sheet and takes the same path, so there is no second shape here.
-		srcSheet := len(raw) / int(sheets)
-		nq, nd, nsc, err := kernels.PackedWords(q, int(rows), e.K())
-		if err != nil {
-			return nil, fmt.Errorf("jlm: %v: %w", e.Role, err)
-		}
-		for sh := 0; sh < int(sheets); sh++ {
-			qs, dw, sc, err := kernels.PackWeights(q, raw[sh*srcSheet:(sh+1)*srcSheet], int(rows), e.K())
-			if err != nil {
-				return nil, fmt.Errorf("jlm: %v sheet %d: %w", e.Role, sh, err)
-			}
-			sq, sd, ssc := uint64(sh*nq*4), uint64(sh*nd*4), uint64(sh*nsc*4)
-			if split {
-				sq, sd, ssc = uint64(sh)*expPageSize, uint64(sh)*expPageSize, uint64(sh)*expPageSize
-			}
-			for _, w := range []struct {
-				off uint64
-				v   []uint32
-			}{
-				{e.QSOff + sq, qs},
-				{e.DOff + sd, dw},
-				{e.SCOff + ssc, sc},
-			} {
-				if len(w.v) == 0 {
-					continue
-				}
-				if _, err := out.WriteAt(U32Bytes(w.v), int64(w.off)); err != nil {
-					return nil, fmt.Errorf("jlm: %v: %w", e.Role, err)
-				}
-			}
+			dirty, keep = 0, true
 		}
 	}
 	if err := out.Sync(); err != nil {
@@ -676,5 +698,143 @@ func (l *layout) write(dst string, src *Source) (*Header, error) {
 	if err := os.Rename(tmp, dst); err != nil {
 		return nil, fmt.Errorf("jlm: publishing %s: %w", dst, err)
 	}
+	os.Remove(jn)
 	return h, nil
+}
+
+// writeTensor packs one tensor's source bytes into its place and reports how
+// many bytes it wrote.
+func writeTensor(out *os.File, e *Entry, raw []byte, expPageSize uint64) (uint64, error) {
+	var n uint64
+	put := func(b []byte, off uint64) error {
+		if _, err := out.WriteAt(b, int64(off)); err != nil {
+			return fmt.Errorf("jlm: %v: %w", e.Role, err)
+		}
+		n += uint64(len(b))
+		return nil
+	}
+	q, packed := packerOf(e.Type)
+	// A sheet's bytes go to its expert page when the bank is split out,
+	// and back to back inside the entry otherwise.
+	sheets, rows := sheetsOf(e.Dims, e.NDim)
+	split := expertPaged(e)
+	if !packed {
+		if !split {
+			return n, put(raw, e.QSOff)
+		}
+		per := len(raw) / int(sheets)
+		for sh := 0; sh < int(sheets); sh++ {
+			if err := put(raw[sh*per:(sh+1)*per], e.QSOff+uint64(sh)*expPageSize); err != nil {
+				return n, err
+			}
+		}
+		return n, nil
+	}
+	// One sheet at a time, back to back: see sheetsOf. A dense weight is
+	// one sheet and takes the same path, so there is no second shape here.
+	srcSheet := len(raw) / int(sheets)
+	nq, nd, nsc, err := kernels.PackedWords(q, int(rows), e.K())
+	if err != nil {
+		return n, fmt.Errorf("jlm: %v: %w", e.Role, err)
+	}
+	for sh := 0; sh < int(sheets); sh++ {
+		qs, dw, sc, err := kernels.PackWeights(q, raw[sh*srcSheet:(sh+1)*srcSheet], int(rows), e.K())
+		if err != nil {
+			return n, fmt.Errorf("jlm: %v sheet %d: %w", e.Role, sh, err)
+		}
+		sq, sd, ssc := uint64(sh*nq*4), uint64(sh*nd*4), uint64(sh*nsc*4)
+		if split {
+			sq, sd, ssc = uint64(sh)*expPageSize, uint64(sh)*expPageSize, uint64(sh)*expPageSize
+		}
+		for _, w := range []struct {
+			off uint64
+			v   []uint32
+		}{
+			{e.QSOff + sq, qs},
+			{e.DOff + sd, dw},
+			{e.SCOff + ssc, sc},
+		} {
+			if len(w.v) == 0 {
+				continue
+			}
+			if err := put(U32Bytes(w.v), w.off); err != nil {
+				return n, err
+			}
+		}
+	}
+	return n, nil
+}
+
+// journalEvery is how many bytes are written between journal points: the
+// most a resumed write does twice. A variable so a gate can journal every
+// tensor.
+var journalEvery uint64 = 1 << 30
+
+// journalSuffix follows the part's name: out.jlm.part.resume.
+const journalSuffix = ".resume"
+
+const journalMagic = "jlm resume v1"
+
+// resumeDigest names everything a resumed write must share with the one that
+// wrote the journal: where the bytes come from, the layout every offset is
+// taken from, and the build that wrote them (in the fingerprint), so a
+// changed converter never finishes another's container.
+func resumeDigest(origin string, parts ...[]byte) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "%d:%s", len(origin), origin)
+	for _, p := range parts {
+		fmt.Fprintf(h, "%d:", len(p))
+		h.Write(p)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func writeJournal(jn, sum string, done int) error {
+	tmp := jn + ".tmp"
+	if err := os.WriteFile(tmp, []byte(fmt.Sprintf("%s\n%s\n%d\n", journalMagic, sum, done)), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, jn)
+}
+
+// readJournal is a journal's digest and count; ok is false for anything that
+// is not a whole journal.
+func readJournal(jn string) (sum string, done int, ok bool) {
+	b, err := os.ReadFile(jn)
+	if err != nil || len(b) > 4096 {
+		return "", 0, false
+	}
+	f := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+	if len(f) != 3 || f[0] != journalMagic {
+		return "", 0, false
+	}
+	done, err = strconv.Atoi(f[2])
+	if err != nil || done < 0 {
+		return "", 0, false
+	}
+	return f[1], done, true
+}
+
+// resumeAt is the tensor a write resumes at: the journal's count when the
+// journal matches this write and the part is the size this layout gives it,
+// else 0.
+func resumeAt(tmp, jn, sum string, total uint64, tensors int) int {
+	got, done, ok := readJournal(jn)
+	if !ok || got != sum || done > tensors {
+		return 0
+	}
+	fi, err := os.Stat(tmp)
+	if err != nil || fi.Size() != int64(total) {
+		return 0
+	}
+	return done
+}
+
+// Resumable reports how many tensors an interrupted write of dst left on the
+// disk, by its journal. Whether the next write resumes from them is decided
+// by Write: it must be the same layout, from the same origin, by the same
+// build.
+func Resumable(dst string) (done int, ok bool) {
+	_, done, ok = readJournal(dst + ".part" + journalSuffix)
+	return done, ok
 }

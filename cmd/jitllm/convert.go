@@ -136,6 +136,10 @@ func convertCmd(args []string) error {
 		if *plan {
 			return planConvert(sm, src, dst, *q8, opts)
 		}
+		if n, ok := jlm.Resumable(dst); ok {
+			fmt.Fprintf(os.Stderr, "resume   %s.part's journal has %d tensor(s) written: the write "+
+				"continues there if the layout, the source and this build match, and starts over if not\n", dst, n)
+		}
 		if sm != nil {
 			stop := make(chan struct{})
 			go sm.report(30*time.Second, stop)
@@ -153,6 +157,8 @@ func convertCmd(args []string) error {
 	}
 	// Nothing is removed on failure: jlm.Write builds dst+".part" and renames
 	// it over dst only when complete, so dst is still the previous container.
+	// A safetensors write that journaled leaves the .part and its journal, and
+	// the same command run again resumes from them.
 	if err != nil {
 		return err
 	}

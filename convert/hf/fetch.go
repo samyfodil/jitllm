@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -27,6 +28,12 @@ type Client struct {
 	// download advances (size -1 when the Hub would not say). It runs on the
 	// downloading goroutine.
 	OnProgress func(done, total int64)
+	// Conns bounds the range requests in flight at once over every Remote
+	// this client opened; 0 is DefaultConns.
+	Conns int
+
+	connsOnce sync.Once
+	conns     chan struct{}
 }
 
 // ErrAccess is what a 401 or 403 wraps: the repository is private, gated, or
