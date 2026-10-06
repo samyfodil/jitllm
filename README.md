@@ -13,13 +13,14 @@
 
 **A Go LLM inference engine that generates kernels for your hardware and pages models through CPU and GPU memory.**
 
-- **JIT kernels:** generated at run time for the CPU or GPU in front of it.
+- **Kernels written for your machine, at run time:** every kernel is generated
+  when the model loads, for the exact CPU (AVX2, SSE, NEON) or GPU (CUDA,
+  Vulkan, Metal) in front of it, specialised to the model's shapes and weight
+  formats. Nothing is precompiled, and no operation falls back to interpreted code.
 - **Models larger than memory:** weights page from disk through RAM and VRAM;
   mixtures of experts read only the experts each token routes to.
 - **Move blocks while serving:** blocks, attention state and recurrent state
   move between the CPU and GPUs without losing the conversation.
-- **No cgo or GPU SDK:** one Go executable per platform, using installed
-  CUDA, Vulkan or Metal drivers at run time, or running on the CPU.
 - **Compatible server:** OpenAI and Anthropic APIs, with streaming and tool calling.
 
 ## Quick start
