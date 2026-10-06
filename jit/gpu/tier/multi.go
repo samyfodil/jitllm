@@ -502,6 +502,32 @@ func (g *GPU) Stream(li int, on bool) bool {
 	return len(g.devs) > 0
 }
 
+// DeclineSize refuses a block whose resident bytes exceed every device's
+// whole budget, so placement does not read gigabytes to be told so by
+// PrepLayer. A device that streams the block (Config.StreamExperts, or the
+// block marked by Stream) keeps neither the bank resident nor necessarily the
+// block, so it never refuses here; PrepLayer stays the real decision.
+func (g *GPU) DeclineSize(li int, total, bank uint64) string {
+	var widest uint64
+	for _, d := range g.devs {
+		d.mu.Lock()
+		streams := d.StreamExperts || d.stream[li]
+		lim := d.limit
+		d.mu.Unlock()
+		if streams || total <= lim {
+			return ""
+		}
+		widest = max(widest, lim)
+	}
+	if len(g.devs) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("block %d keeps %d bytes resident (%d of them its routed experts), above every "+
+		"device's whole budget (the largest %d), so it runs on the host unread by the device "+
+		"(a placement that streams it -- JITLLM_GPU_STREAM, -placement N=DEV~ -- puts it on a card)",
+		li, total, bank, widest)
+}
+
 // SetBudget retargets every device's weight budget while the model is running,
 // and reports how many blocks still have their weights on a card. It is how a
 // running model makes room for another (or hands a card back).

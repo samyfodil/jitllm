@@ -1489,6 +1489,16 @@ func (s *State) offerRange(lo, hi int) {
 				continue
 			}
 		}
+		// The same for a size no device can hold: a mixture block with its
+		// bank can be bigger than a card, and reading it to learn that cost
+		// minutes a block on a model that size.
+		if d, ok := ld.(nn.SizeDecliner); ok && !(named && place.Stream) {
+			total, bank := s.m.blockBytes(li)
+			if why := d.DeclineSize(li, total, bank); why != "" {
+				s.noteDecline(why)
+				continue
+			}
+		}
 		// A block whose experts are separate tensors has no bank to offer; say
 		// why rather than let the tier report zero-value weights. See
 		// convert.stackGGUFExperts.

@@ -1668,6 +1668,28 @@ func (m *Model) PageSize() uint64 {
 	return m.container.H.PageSize
 }
 
+// blockBytes is what block li's tensors occupy in the container's device
+// layout, and the routed expert banks' share of that, from the tensor table
+// alone: nothing is read. Zero for a model with no container.
+func (m *Model) blockBytes(li int) (total, bank uint64) {
+	if m.container == nil {
+		return 0, 0
+	}
+	es := m.container.Entries()
+	for i := range es {
+		e := &es[i]
+		if e.Block == jlm.DenseBlock || m.container.BlockOf(e) != li {
+			continue
+		}
+		q, d, sc := jlm.SpanLenOf(e)
+		total += q + d + sc
+		if jlm.ExpertBank(e.Role) {
+			bank += q + d + sc
+		}
+	}
+	return total, bank
+}
+
 // DenseBytes is what the non-block weights cost. They never page: the
 // embedding and the output projection are read by the host on every token.
 func (m *Model) DenseBytes() uint64 {

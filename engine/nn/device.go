@@ -1307,6 +1307,16 @@ type PlanDecliner interface {
 	DeclinePlan(p *LayerPlan) string
 }
 
+// SizeDecliner is an optional LayerDevice that can answer from a block's
+// size alone that no device could hold it, before the caller reads it. total
+// is every byte the block keeps resident; bank is the routed expert banks'
+// share of it, which a device that streams the bank does not keep. A
+// mixture block on a large model is gigabytes, so the read this saves is
+// the whole cost of a refusal.
+type SizeDecliner interface {
+	DeclineSize(li int, total, bank uint64) string
+}
+
 // DeviceName is a device name as a placement compares it: lower case, and the
 // API spellings (ptx, spirv, msl) under the backend ones -devices prints, so
 // "PTX:0" and "cuda:0" are one device.
