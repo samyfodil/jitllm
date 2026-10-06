@@ -377,9 +377,11 @@ type Config struct {
 	StreamPinHalf int
 	// StreamCacheSlots makes each streamed block's bank an expert cache of
 	// this many sheets, kept across tokens: a selected expert already there
-	// is neither read nor sent. 0, or anything not above the selection, is
-	// no cache, and a device without room for a block's cache gives that
-	// block the plain bank (Stats.StreamCacheShort).
+	// is neither read nor sent. 0 sizes the cache from the room each card has
+	// left after placement (GPU.sizeAutoCaches); negative, or a stated size
+	// not above the selection, is no cache; a device without room for a
+	// block's stated cache gives that block the plain bank
+	// (Stats.StreamCacheShort).
 	StreamCacheSlots int
 	// StreamPrefetch runs the cross-layer probe (StreamProbe's launches) at
 	// each streamed block's suspension and starts reading the next block's
@@ -694,6 +696,8 @@ type Stats struct {
 	// StreamCacheSize is the largest expert cache a block was given, in
 	// sheets: the check that an auto-sized cache is the size intended.
 	StreamCacheSize int
+	// AutoMeanBase is the model's mean mixture base GPU.AutoStream was told.
+	AutoMeanBase uint64
 	// StreamPrefetched counts experts the cross-layer prefetch read, and
 	// TStreamPrefetchWait the wall a fill spent joining it.
 	StreamPrefetched    int
@@ -986,6 +990,7 @@ func (s *Stats) add(o Stats) {
 	s.StreamCacheMisses += o.StreamCacheMisses
 	s.StreamCacheShort += o.StreamCacheShort
 	s.StreamCacheSize = max(s.StreamCacheSize, o.StreamCacheSize)
+	s.AutoMeanBase = max(s.AutoMeanBase, o.AutoMeanBase)
 	s.StreamPrefetched += o.StreamPrefetched
 	s.TStreamPrefetchWait += o.TStreamPrefetchWait
 	s.ProbeHits += o.ProbeHits
@@ -1215,9 +1220,9 @@ type devTier struct {
 	layerGen uint64
 	// tabPend are page-table writes waiting for flushTabs (kvpool.go).
 	tabPend []tabWrite
-	// autoStream maps a block GPU.AutoStream marked to the expert cache it
-	// gets (0: none); such a block is placed streamed whatever StreamExperts
-	// says. Under mu.
+	// autoStream holds the blocks GPU.AutoStream marked; such a block is
+	// placed streamed whatever StreamExperts says, and given its expert cache
+	// after placement (sizeAutoCaches). Under mu.
 	autoStream map[int]int
 	// sheetStage is the streamed fill's gather buffer per (matrix, plane);
 	// see streamStage.

@@ -532,67 +532,126 @@ func (g *GPU) DeclineSize(li int, total, bank uint64) string {
 }
 
 // AutoStream marks block li streamed on every device when its base -- the
-// block without its routed bank -- fits one of them, and sizes the expert
-// cache every auto-streamed block gets (autoCacheSlots) the first time it is
-// asked. It is the default for a mixture no card can hold: on Kimi-K3 over
-// eight V100s the streamed blocks, cached, prefilled 1.5x faster than the
-// host and decoded at its rate (placement.md 16c). Config.NoAutoStream turns
-// it off and leaves such blocks on the host.
-func (g *GPU) AutoStream(li int, total, bank uint64, nExpert, nUsed, blocks int) bool {
+// block without its routed bank -- fits one of them. It is the default for a
+// mixture no card can hold: on Kimi-K3 over eight V100s the streamed blocks,
+// cached, prefilled 1.5x faster than the host and decoded at its rate
+// (placement.md 16c). Config.NoAutoStream turns it off and leaves such blocks
+// on the host.
+//
+// The blocks are placed with the plain bank, so every one fits before any
+// cache takes room; sizeAutoCaches gives them their caches from what each card
+// really has left once placement ends. blocks and meanBase are kept for the
+// report.
+func (g *GPU) AutoStream(li int, total, bank uint64, nExpert, nUsed, blocks int, meanBase uint64) bool {
 	if g.NoAutoStream || len(g.devs) == 0 || bank >= total || nExpert <= nUsed || nUsed < 2 {
 		return false
 	}
 	base := total - bank
-	var sum, widest uint64
+	var widest uint64
 	for _, d := range g.devs {
 		d.mu.Lock()
-		sum += d.limit
 		widest = max(widest, d.limit)
 		d.mu.Unlock()
 	}
 	if base > widest {
 		return false
 	}
-	cache := g.StreamCacheSlots
-	if cache == 0 {
-		cache = autoCacheSlots(sum/uint64(len(g.devs)), base, bank/uint64(nExpert), blocks, len(g.devs), nUsed)
-	}
 	for _, d := range g.devs {
 		d.mu.Lock()
 		if d.autoStream == nil {
 			d.autoStream = map[int]int{}
 		}
-		d.autoStream[li] = cache
+		d.autoStream[li] = 0
+		d.AutoMeanBase = meanBase
 		d.mu.Unlock()
 	}
 	return true
 }
 
-// autoCacheSlots is the expert cache an auto-streamed block gets: what an
-// average card has left once it holds its share of the bases, split among
-// those blocks in sheets, or the selection alone (no cache) when that is all
-// there is. A base's footprint on the card is more than its tensors -- its
-// norms, its history, its share of the scratch -- so it is taken at 1.3x
-// the tensor bytes and a card is filled to 95% of its budget. On Kimi-K3
-// over eight V100s that is 18 sheets a block, the largest cache measured to
-// leave all 93 blocks on the cards (22 left 15 on the host). A block the
-// estimate leaves short still places, with the plain bank
-// (Stats.StreamCacheShort).
-func autoCacheSlots(limit, base, sheet uint64, blocks, devs, nUsed int) int {
-	if blocks <= 0 || devs <= 0 || sheet == 0 {
-		return 0
+// sizeAutoCaches gives every streamed block on its plain bank an expert
+// cache once placement has ended: on each card, the budget less what the
+// card holds now, split evenly among the card's streamed blocks in device
+// sheet bytes. Config.StreamCacheSlots states the size instead (negative:
+// no cache). Measured rather than estimated -- the scratch,
+// the head and the shared bank are whatever they came to -- and sized per
+// card, so a card that took the head gives smaller caches than one that did
+// not. The kernels need nothing new: an indexed matvec addresses a sheet by
+// slot times its stride whatever the bank's size, so the slot ids the cache
+// writes over the selection index the bigger bank as they did the compact
+// one. A cache the card cannot allocate leaves the block on its plain bank.
+func (g *GPU) sizeAutoCaches() {
+	if g.StreamCacheSlots != 0 {
+		return
 	}
-	per := uint64((blocks + devs - 1) / devs)
-	bases := per * base * 130 / 100
-	room := limit * 95 / 100
-	if room <= bases {
-		return 0
+	for _, d := range g.devs {
+		d.mu.Lock()
+		d.sizeAutoCaches()
+		d.mu.Unlock()
 	}
-	n := int((room - bases) / (per * sheet))
-	if n <= nUsed {
-		return 0
+}
+
+// sizeAutoCaches is GPU.sizeAutoCaches on one device. Callers hold g.mu.
+func (g *devTier) sizeAutoCaches() {
+	var ls []*layer
+	var sheet uint64
+	k := 0
+	for _, l := range g.layers {
+		if l == nil || l.stream == nil || l.stream.cached() || l.down == nil {
+			continue
+		}
+		var s uint64
+		for m := range l.stream.sh {
+			for pl := range l.stream.sh[m] {
+				s += uint64(l.stream.sh[m][pl])
+			}
+		}
+		sheet = max(sheet, s)
+		k = len(l.stream.sel)
+		ls = append(ls, l)
 	}
-	return n
+	// The budget already leaves the driver its headroom.
+	room := g.limit
+	if len(ls) == 0 || sheet == 0 || g.used >= room {
+		return
+	}
+	n := int((room - g.used) / (uint64(len(ls)) * sheet))
+	// The cache must hold more than a token's selection to keep anything.
+	if n <= k {
+		return
+	}
+	for _, l := range ls {
+		n := min(n, l.stream.nExpert)
+		var got [3]*resident
+		ok := true
+		for m, r := range [3]*resident{l.gate, l.up, l.down} {
+			if r == nil {
+				continue // an ungated bank has no gate
+			}
+			nr, _, rok := g.residentCompact(r.t, r.nrows/k, r.k, n)
+			if !rok {
+				ok = false
+				break
+			}
+			got[m] = nr
+		}
+		if !ok {
+			for _, r := range got {
+				if r != nil {
+					g.refund(r.bytes())
+					g.freeResident(r)
+				}
+			}
+			g.StreamCacheShort++
+			return
+		}
+		for m, dst := range [3]**resident{&l.gate, &l.up, &l.down} {
+			if got[m] != nil {
+				*dst = got[m]
+			}
+		}
+		l.stream.initCache(n, l.stream.nExpert)
+		g.StreamCacheSize = max(g.StreamCacheSize, n)
+	}
 }
 
 // SetBudget retargets every device's weight budget while the model is running,

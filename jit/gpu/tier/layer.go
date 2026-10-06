@@ -271,6 +271,9 @@ type streamBank struct {
 	tick    uint64
 	slotSel []uint32
 	bank    *resident
+	// nExpert is the bank's expert count, so a cache can be set up after
+	// placement (GPU.sizeAutoCaches).
+	nExpert int
 	// The cross-layer prefetch (prefetch): the experts it reads, whether a
 	// read is in flight, its join and its error.
 	pfWant []uint32
@@ -523,16 +526,15 @@ func (st *streamBank) forget() {
 }
 
 // cacheSlotsFor is a streamed block's bank size in sheets: the selection, or
-// want (Config.StreamCacheSlots, or GPU.AutoStream's size) when that is bigger and the device has room for
+// want (Config.StreamCacheSlots) when that is bigger and the device has room for
 // the block's own bank of that many beside what it already holds. A model
 // whose expert kernels read the selection itself (DenseMoE's per-expert
 // scale) keeps the plain bank: the cache rewrites the selection as slots.
 func (g *devTier) cacheSlotsFor(p *nn.LayerPlan, ws []nn.Weight, want, slots, bank int) int {
-	n := min(want, bank)
-	if n <= slots || p.DenseMoE {
+	if p.DenseMoE {
 		return slots
 	}
-	var need uint64
+	var sheet uint64
 	for i := 4; i <= 6; i++ {
 		x := ws[i]
 		if len(x.Data) == 0 && x.Packed == nil {
@@ -546,8 +548,13 @@ func (g *devTier) cacheSlotsFor(p *nn.LayerPlan, ws []nn.Weight, want, slots, ba
 		if err != nil {
 			return slots
 		}
-		need += uint64(pq+pd+psc) * 4 * uint64(n)
+		sheet += uint64(pq+pd+psc) * 4
 	}
+	n := min(want, bank)
+	if n <= slots {
+		return slots
+	}
+	need := sheet * uint64(n)
 	if !g.room(need) {
 		g.StreamCacheShort++
 		return slots
@@ -2314,7 +2321,7 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 	// Weight.Rows, so the charge and the refund cannot disagree. slots > 1 is a
 	// kernel constraint: at experts <= 1 mkkID returns the plain matvec, which
 	// has no pSel parameter.
-	autoCache, auto := g.autoStream[li]
+	_, auto := g.autoStream[li]
 	stream := moe && (g.StreamExperts || auto) && slots < bank && slots > 1
 	// cslots is the streamed bank's size in sheets, decided at the first bank
 	// matrix (cacheSlotsFor): slots without an expert cache, more with one.
@@ -2692,11 +2699,9 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 				// "the same answer, bit for bit" comes from. With an expert
 				// cache it is told the cache's size and indexed by slot.
 				if cslots < 0 {
-					want := g.StreamCacheSlots
-					if auto && want == 0 {
-						want = autoCache
-					}
-					cslots = g.cacheSlotsFor(p, ws, want, slots, bank)
+					// An auto-streamed block is placed on the plain bank;
+					// its cache comes after placement (sizeAutoCaches).
+					cslots = g.cacheSlotsFor(p, ws, g.StreamCacheSlots, slots, bank)
 				}
 				e = cslots
 			}
@@ -2740,6 +2745,7 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 				l.stream = &streamBank{sel: make([]uint32, slots),
 					ensure: w.Ensure, sel2: w.EnsureExperts,
 					pre: w.PrefetchExperts, w: *w}
+				l.stream.nExpert = bank
 				l.stream.initCache(cslots, bank)
 				g.StreamBlocks++
 			}

@@ -81,15 +81,26 @@ func TestStreamedExpertBankMatchesTheResidentOne(t *testing.T) {
 		direct  bool
 		overlap bool
 	}{
-		{"gathered", func(c *tier.Config) { c.StreamGroups = 1 }, false, false},
-		{"gathered, four groups", func(c *tier.Config) { c.StreamGroups = 4 }, false, true},
-		{"direct, pageable", func(c *tier.Config) { c.StreamDirectBytes = 1; c.StreamGroups = 1; c.StreamNoPin = true }, true, false},
-		{"direct", func(c *tier.Config) { c.StreamDirectBytes = 1; c.StreamGroups = 1 }, true, false},
-		{"direct, a piece a half", func(c *tier.Config) { c.StreamDirectBytes = 1; c.StreamGroups = 1; c.StreamPinHalf = 1 }, true, false},
+		{"gathered", func(c *tier.Config) { c.StreamGroups = 1; c.StreamCacheSlots = -1 }, false, false},
+		{"gathered, four groups", func(c *tier.Config) { c.StreamGroups = 4; c.StreamCacheSlots = -1 }, false, true},
+		{"direct, pageable", func(c *tier.Config) {
+			c.StreamDirectBytes = 1
+			c.StreamGroups = 1
+			c.StreamNoPin = true
+			c.StreamCacheSlots = -1
+		}, true, false},
+		{"direct", func(c *tier.Config) { c.StreamDirectBytes = 1; c.StreamGroups = 1; c.StreamCacheSlots = -1 }, true, false},
+		{"direct, a piece a half", func(c *tier.Config) {
+			c.StreamDirectBytes = 1
+			c.StreamGroups = 1
+			c.StreamPinHalf = 1
+			c.StreamCacheSlots = -1
+		}, true, false},
 		{"expert cache", func(c *tier.Config) { c.StreamCacheSlots = 13; c.StreamGroups = 1 }, true, false},
 		{"expert cache, four groups", func(c *tier.Config) { c.StreamCacheSlots = 13; c.StreamGroups = 4 }, true, true},
+		{"expert cache sized after placement", func(c *tier.Config) { c.StreamGroups = 1 }, true, false},
 		{"expert cache, prefetch", func(c *tier.Config) { c.StreamCacheSlots = 13; c.StreamGroups = 1; c.StreamPrefetch = true }, true, false},
-		{"direct, four groups", func(c *tier.Config) { c.StreamDirectBytes = 1; c.StreamGroups = 4 }, true, true},
+		{"direct, four groups", func(c *tier.Config) { c.StreamDirectBytes = 1; c.StreamGroups = 4; c.StreamCacheSlots = -1 }, true, true},
 	}
 	for _, arm := range arms {
 		t.Run(arm.name, func(t *testing.T) {
@@ -122,12 +133,15 @@ func streamedMatches(t *testing.T, run func(func(*tier.Config)) ([][]float32, ti
 	// bank.
 	var c tier.Config
 	cfg(&c)
-	if c.StreamCacheSlots > 0 && (ss.StreamCacheHits == 0 || ss.StreamCacheMisses == 0 || ss.StreamCacheShort != 0) {
+	if c.StreamCacheSlots >= 0 && (ss.StreamCacheHits == 0 || ss.StreamCacheMisses == 0 || ss.StreamCacheShort != 0) {
 		t.Fatalf("expert cache: %d hits, %d misses, %d blocks without room: the cache did not run",
 			ss.StreamCacheHits, ss.StreamCacheMisses, ss.StreamCacheShort)
 	}
-	if c.StreamCacheSlots > 0 {
-		t.Logf("expert cache: %d hits, %d misses", ss.StreamCacheHits, ss.StreamCacheMisses)
+	if c.StreamCacheSlots >= 0 {
+		t.Logf("expert cache: %d sheets, %d hits, %d misses", ss.StreamCacheSize, ss.StreamCacheHits, ss.StreamCacheMisses)
+	}
+	if c.StreamCacheSlots < 0 && ss.StreamCacheSize != 0 {
+		t.Fatalf("an arm with the cache off has a %d-sheet cache", ss.StreamCacheSize)
 	}
 	if c.StreamPrefetch && (ss.StreamPrefetched == 0 || ss.ProbeExperts == 0) {
 		t.Fatalf("the prefetch arm read %d experts ahead and scored %d: it did not run",
@@ -259,14 +273,15 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 	// mixture block is refused resident and fits streamed.
 	budget := tier.WithBudget(biggest - 1)
 	t.Logf("mixture block %d bytes, base %d; device budget %d", biggest, base, biggest-1)
-	// The cache is stated, not sized: the auto size is a model of a card
-	// this fixture is not, and both arms must hold the same blocks.
-	cache := tier.WithConfig(func(c *tier.Config) { c.StreamCacheSlots = 13 })
-	got, ss, sp := run(budget, cache)
+	// The auto arm sizes its cache after placement, so it holds the same
+	// blocks as the forced arm, which streams them with no cache at all.
+	// The fixture's scratch leaves this budget no room for a cache, so the
+	// cache's sizing is TestStreamedExpertBankMatchesTheResidentOne's.
+	got, ss, sp := run(budget)
 	// The bar is the forced streamed placement on the same budget: the same
 	// blocks on the card, so bit equality holds (a resident arm places more
 	// blocks and differs in the device-host band).
-	want, fs, fp := run(budget, cache, tier.WithConfig(func(c *tier.Config) { c.StreamExperts = true; c.NoAutoStream = true }))
+	want, fs, fp := run(budget, tier.WithConfig(func(c *tier.Config) { c.StreamExperts = true; c.NoAutoStream = true }))
 	if fp != sp || fs.StreamBlocks != ss.StreamBlocks {
 		t.Fatalf("auto placed %d blocks (%d streamed), forced streaming %d (%d)", sp, ss.StreamBlocks, fp, fs.StreamBlocks)
 	}
@@ -285,6 +300,6 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 	if ns.StreamBlocks != 0 {
 		t.Fatalf("NoAutoStream streamed %d blocks", ns.StreamBlocks)
 	}
-	t.Logf("auto: %d blocks placed, %d streamed, cache %d hits %d misses; NoAutoStream: %d streamed",
-		sp, ss.StreamBlocks, ss.StreamCacheHits, ss.StreamCacheMisses, ns.StreamBlocks)
+	t.Logf("auto: %d blocks placed, %d streamed, a %d-sheet cache, %d hits %d misses; NoAutoStream: %d streamed",
+		sp, ss.StreamBlocks, ss.StreamCacheSize, ss.StreamCacheHits, ss.StreamCacheMisses, ns.StreamBlocks)
 }

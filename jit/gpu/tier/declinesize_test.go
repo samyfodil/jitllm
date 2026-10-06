@@ -46,24 +46,6 @@ func TestDeclineSizeRefusesOnlyWhatNoDeviceHolds(t *testing.T) {
 	}
 }
 
-// TestAutoCacheSlotsOnKimiK3 holds the auto-streamed cache size to the one
-// measured on Kimi-K3 over eight V100s: 18 sheets a block kept all 93 blocks
-// on the cards (placement.md 16c). The inputs are that container's: a 0.645
-// GiB base, 17.5 MB sheets, 16 routed, a 14.46 GiB budget a card.
-func TestAutoCacheSlotsOnKimiK3(t *testing.T) {
-	const limit = 15527837696
-	if n := autoCacheSlots(limit, 16415141888-15722348544, 15722348544/896, 93, 8, 16); n != 18 {
-		t.Fatalf("Kimi-K3 on eight V100s gets %d cache sheets a block, want the measured 18", n)
-	}
-	// One card cannot hold its share of the bases with any cache beside them.
-	if n := autoCacheSlots(limit, 16415141888-15722348544, 15722348544/896, 93, 1, 16); n != 0 {
-		t.Fatalf("one card gets a %d-sheet cache it has no room for", n)
-	}
-	if n := autoCacheSlots(limit, 1, 1, 0, 8, 16); n != 0 {
-		t.Fatalf("no blocks gets a %d-sheet cache", n)
-	}
-}
-
 // TestAutoStreamMarksOnlyWhatABaseFits: a block whose base fits a card is
 // marked streamed on every device and then passes the size check; one whose
 // base fits none is not; NoAutoStream turns it off.
@@ -73,7 +55,7 @@ func TestAutoStreamMarksOnlyWhatABaseFits(t *testing.T) {
 	for range 2 {
 		g.devs = append(g.devs, &devTier{Config: g.Config, limit: 14 * gib})
 	}
-	if !g.AutoStream(5, 16*gib, 15*gib, 896, 16, 93) {
+	if !g.AutoStream(5, 16*gib, 15*gib, 896, 16, 93, 0) {
 		t.Fatal("a 1 GiB base on 14 GiB cards was not streamed")
 	}
 	for i, d := range g.devs {
@@ -84,14 +66,14 @@ func TestAutoStreamMarksOnlyWhatABaseFits(t *testing.T) {
 	if why := g.DeclineSize(5, 16*gib, 15*gib); why != "" {
 		t.Fatalf("an auto-streamed block is still refused by size: %q", why)
 	}
-	if g.AutoStream(6, 40*gib, 15*gib, 896, 16, 93) {
+	if g.AutoStream(6, 40*gib, 15*gib, 896, 16, 93, 0) {
 		t.Fatal("a 25 GiB base was streamed onto 14 GiB cards")
 	}
-	if g.AutoStream(7, 16*gib, 0, 896, 16, 93) {
+	if g.AutoStream(7, 16*gib, 0, 896, 16, 93, 0) {
 		t.Fatal("a block with no bank was streamed")
 	}
 	g.NoAutoStream = true
-	if g.AutoStream(8, 16*gib, 15*gib, 896, 16, 93) {
+	if g.AutoStream(8, 16*gib, 15*gib, 896, 16, 93, 0) {
 		t.Fatal("NoAutoStream streamed a block")
 	}
 }

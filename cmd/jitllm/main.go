@@ -951,9 +951,9 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 					ds.StreamDirect, ds.StreamPinned, ds.StreamGathered)
 			}
 			if ds.StreamCacheHits+ds.StreamCacheMisses > 0 || ds.StreamCacheShort > 0 {
-				fmt.Fprintf(os.Stderr, "expert cache: %d sheet(s) a block, %d hit(s), %d miss(es) (%.1f%% hit), %d block(s) without room for one\n",
+				fmt.Fprintf(os.Stderr, "expert cache: %d sheet(s) a block, %d hit(s), %d miss(es) (%.1f%% hit), %d block(s) without room for one (mean base %d B)\n",
 					ds.StreamCacheSize, ds.StreamCacheHits, ds.StreamCacheMisses,
-					100*float64(ds.StreamCacheHits)/max(float64(ds.StreamCacheHits+ds.StreamCacheMisses), 1), ds.StreamCacheShort)
+					100*float64(ds.StreamCacheHits)/max(float64(ds.StreamCacheHits+ds.StreamCacheMisses), 1), ds.StreamCacheShort, ds.AutoMeanBase)
 			}
 			if ds.StreamPrefetched > 0 {
 				fmt.Fprintf(os.Stderr, "cross-layer prefetch: %d expert(s) read ahead, %.2f s joining them\n",

@@ -1320,10 +1320,12 @@ type SizeDecliner interface {
 // AutoStreamer is an optional LayerDevice that, offered a mixture block no
 // device could hold resident (SizeDecliner), can take it streamed: the
 // block's base on a card and its routed experts sent per token. It answers
-// whether it will; blocks is how many blocks the model has, so the
-// device can size what streaming keeps beside the bases.
+// whether it will; blocks is how many blocks the model has and meanBase
+// their mean bytes without routed banks, so the device can size what
+// streaming keeps beside the bases from the whole model, not from whichever
+// block was offered first.
 type AutoStreamer interface {
-	AutoStream(li int, total, bank uint64, nExpert, nUsed, blocks int) bool
+	AutoStream(li int, total, bank uint64, nExpert, nUsed, blocks int, meanBase uint64) bool
 }
 
 // DeviceName is a device name as a placement compares it: lower case, and the

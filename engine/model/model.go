@@ -1690,6 +1690,25 @@ func (m *Model) blockBytes(li int) (total, bank uint64) {
 	return total, bank
 }
 
+// meanBase is the mean of the mixture blocks' bytes without their routed
+// banks, from the tensor table.
+func (m *Model) meanBase() uint64 {
+	var sum uint64
+	n := 0
+	for li := 0; li < m.Cfg.NLayer; li++ {
+		total, bank := m.blockBytes(li)
+		if bank == 0 {
+			continue // only the mixture blocks stream
+		}
+		sum += total - bank
+		n++
+	}
+	if n == 0 {
+		return 0
+	}
+	return sum / uint64(n)
+}
+
 // DenseBytes is what the non-block weights cost. They never page: the
 // embedding and the output projection are read by the host on every token.
 func (m *Model) DenseBytes() uint64 {
