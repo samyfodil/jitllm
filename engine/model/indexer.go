@@ -11,35 +11,17 @@ import (
 // DeepSeek Sparse Attention: the lightning indexer of DeepSeek V3.2
 // (transformers' DeepseekV32Indexer, llama.cpp's deepseek32.cpp).
 //
-// For a query at position p the indexer scores every cached position t <= p:
+// For a query at p the indexer scores every cached t <= p as
+// sum_h w_h * relu(q_h . k_t), and the attention reads only the IdxTopK best
+// positions -- every position at or below IdxTopK, where the block is exactly
+// deepseek2's -- through a -inf mask added after the scale and before the
+// softmax. The key is cached in the MLA row itself, after the latent and the
+// rotary key (Config.KVDim), so it pages, relocates and is prefix-cached with
+// the latent: the MLA kernels read the row's first KVLoraRank+NRot elements
+// and the indexer its last IdxHeadDim. Every step is generated code.
 //
-//	score[t] = sum_h w_h * relu(q_h . k_t)
-//
-// q_h is head h of IdxHeads, projected from the query latent (the normed q_a
-// output MLA already computes) and rotated NEOX on its first NRot dimensions;
-// k_t is one IdxHeadDim key per position, projected from the block input,
-// LayerNormed with a bias and rotated the same way; w is one weight per head
-// from the block input, times (IdxHeadDim*IdxHeads)^-1/2 (the reference's
-// softmax_scale and n_heads^-1/2 together). The attention then reads only the
-// IdxTopK highest-scoring positions. At or below IdxTopK cached positions that
-// is every position, and the block is exactly deepseek2's.
-//
-// The key is cached in the MLA row itself, after the latent and the rotary
-// key (Config.KVDim): it is per position and per layer exactly as the latent
-// is, so paging, relocation, the prefix cache and every KV migration carry it
-// with no second cache. The MLA kernels read the row's first
-// KVLoraRank+NRot elements and the indexer's its last IdxHeadDim, both at the
-// row's stride.
-//
-// The selection is applied as a mask on the attention scores: -inf for every
-// position the indexer did not keep, added after the scale and before the
-// softmax. exp(-inf) is exactly zero, so the result is the attention over the
-// kept positions alone, which is what the reference computes.
-//
-// Every operation is generated code: the scores are the attention-score kernel
-// over the row's tail (s.idxAttn), the ReLU the ungated activation kernel, the
-// head sum an axpy, the top-k the sampler's segmented ordering
-// (nn.SampleOrder), and the mask an axpy of the bias row.
+// The projections, norms and scales: docs/engineering-history/
+// model-correctness.md, "engine/model/indexer.go".
 
 // idxFault is a violation of one indexer piece, set only by a gate
 // (Config.idxFault) to show the fixture can see it.

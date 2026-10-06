@@ -5405,3 +5405,56 @@ here verbatim.
   Silicon figures (`flashTileAttn`'s 32-row blocking, `tileGemms`' 64x64 lead)
   on an M4; and the k-split's 30720 resident slots (`tier.go`, 20 SMs x 1536)
   are an RTX 3050 Ti's.
+
+## Design notes moved out of source comments
+
+Each entry below is a comment that stood in the named source file,
+verbatim. The source keeps the contract, the layout and the invariants
+and points here for the derivation, the transcript and the reasons.
+
+### jit/gpu/kernels/ropetab_const.go
+
+The rotary table's constant block and its layout: the {cos, sin} pair per
+rotary pair, formed by a kernel rather than math.Cos/math.Sin in Go.
+
+One copy of the layout for four tiers (AVX2, SSE, NEON and the device): the
+layout is the ABI between the emitters and nn. It lives here rather than in
+jit/cpu because jit/cpu already imports this package, so a device kernel
+importing jit/cpu would close a cycle; jit/cpu/ropetab_const.go re-exports
+every name.
+
+The precision lives in the constants. The angle is pos*g radians with pos up
+to 131072 -- thousands of radians, where an f32 ulp is 5e-4. So the position
+is decomposed into four 7-bit digits and each digit's contribution is folded
+mod 4 quarter-turns at setup, in float64:
+
+	pos = d0 + 128*d1 + 128^2*d2 + 128^3*d3          (d_i in [0,128))
+	v   = pos*g*2/pi = sum_i d_i * U_i   (mod 4),  U_i = fmod(g*128^i*2/pi, 4)
+
+and the kernel needs only frac(v) and floor(v) mod 4, which survive because
+the reduction mod 4 distributes over the sum.
+
+Each U_i is split so its digit product is exact. H_i is U_i rounded to a
+multiple of 2^-12, so it needs at most 15 significant bits; a digit needs 7;
+7+15 = 22 < 24, so d_i*H_i is exact in float32. The four products sum to at
+most 2032 (8323072 units of 2^-12, under 2^24), so the sum and its mod-4
+fold are exact too. The only rounded quantity is the residual plane
+L_i = U_i - H_i, whose digit product is under 0.0156, giving ~1e-9
+quarter-turns of error (~1e-7 radians at every position; see
+engine/nn/ropetable.go).
+
+The per-model block is PLANE-MAJOR -- all of H0, then all of H1, ... -- so a
+kernel reads each plane as one contiguous vector and the four digit
+broadcasts stay in registers for the whole table:
+
+	word 0*S .. 1*S-1   H0      the 2^-12 head of U_0
+	word 1*S .. 2*S-1   H1
+	word 2*S .. 3*S-1   H2
+	word 3*S .. 4*S-1   H3
+	word 4*S .. 5*S-1   L0      U_0 - H_0, the residual
+	word 5*S .. 6*S-1   L1
+	word 6*S .. 7*S-1   L2
+	word 7*S .. 8*S-1   L3
+	word 8*S            mscale  (rope.scaling.attn_factor, or 1)
+
+where S = RopeTabStride(npairs).

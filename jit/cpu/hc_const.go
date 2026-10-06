@@ -4,40 +4,20 @@ package cpu
 // compressor's pool. This file holds what every tier shares: the constant
 // block and the ABI; hc.go (AVX2), sse_hc.go and hc_a64.go are the bodies.
 //
-// The hyper-connection mixer (EmitHCMix) turns one row's (2+H)*H mixes, H = 4
-// (HCStreams), into the collapse weights, the placements and the stream mixer:
+// EmitHCMix turns one row's (2+H)*H mixes, H = HCStreams, into pre (sigma +
+// eps), post (2*sigma) and the 4 x 4 comb: a row softmax plus eps, one column
+// normalisation, then iters-1 rounds of row and column (iters 0 stops after
+// the softmax). Out the 24 outputs (8 for a head, which computes pre alone),
+// Q32 the mixes, AScale their scales, Q2 their bases, Scr HCMixConsts(eps).
+// Every tier keeps the mixer one row per 128-bit lane.
 //
-//	pre[i]  = sigma(m[i]*s[i] + b[i]) + eps                  i < 4
-//	post[i] = 2*sigma(m[4+i]*s[4+i] + b[4+i])
-//	comb    = softmax_rows(m[8:]*s[8:] + b[8:]) + eps        4 x 4, row-major
-//	comb    = comb / (column sums + eps), then iters-1 times:
-//	          comb / (row sums + eps), comb / (column sums + eps)
+// EmitColPool is the compressor's per-channel softmax over positions,
+// out[c] = sum_s softmax_s(gate[s,c]) * kv[s,c]: Out W wide, Q32 kv and Q2
+// gate (S rows of W), Scr ActConsts(), K and Rows W's whole vectors and tail
+// (ElemLanes), Cols S (at least one), RowStr 4*W.
 //
-// iters 0 stops after the softmax (a gate's violation). A head kernel computes
-// pre alone, from eight-float buffers whose last four are padding.
-//
-//	Out     the 24 outputs (8 for a head)
-//	Q32     the mixes
-//	AScale  each mix's scale (s0 on pre, s1 on post, s2 on comb)
-//	Q2      each mix's base
-//	Scr     HCMixConsts(eps)
-//
-// Every tier keeps the 4 x 4 mixer one row per 128-bit lane (AVX2: two rows a
-// YMM; SSE and NEON: one row a register), so a row's sum and maximum are
-// within-lane shuffles and a column's are adds of whole registers.
-//
-// The pool (EmitColPool) is the compressor's softmax over positions, per
-// channel:
-//
-//	out[c] = sum_s e[s,c] * kv[s*W+c] / sum_s e[s,c],  e = exp(gate[s*W+c] - max_s gate[s*W+c])
-//
-//	Out     out, W wide
-//	Q32     kv, S rows of W
-//	Q2      gate, S rows of W
-//	Scr     ActConsts()
-//	K, Rows the whole vectors and tail elements of W (ElemLanes)
-//	Cols    S, at least one
-//	RowStr  4*W, the slot stride in bytes
+// The formulas and the ABI in full: docs/engineering-history/cpu-kernels.md,
+// "jit/cpu/hc_const.go".
 
 // HCStreams is the stream count the mixer is built for: DeepSeek V4's.
 const HCStreams = 4

@@ -8753,3 +8753,379 @@ legacy instruction meets a dirty upper half. They work a pixel, four samples or
 two float64 lanes at a time. The vertical pass, which carries most of a
 resize's arithmetic, keeps its 256-bit AVX2 kernel (bytes in, a byte gather
 out). 256-bit forms of the rest are owed, the horizontal pass first.
+
+## Design notes moved out of source comments
+
+Each entry below is a comment that stood in the named source file,
+verbatim. The source keeps the contract, the layout and the invariants
+and points here for the derivation, the transcript and the reasons.
+
+### engine/model/ds4.go
+
+DeepSeek V4 (transformers' DeepseekV4ForCausalLM, llama.cpp's
+deepseek4.cpp; jlm.ArchDeepseek4).
+
+The residual is Config.HCMult streams, carried stream-major as Gemma 3n's
+are (Config.ResidW: stream k of row r at (k*rows + r)*n_embd), each a copy of
+the embedding at the start. Each sublayer is wrapped in a hyper-connection:
+
+	flat   = rmsnorm(the row's streams, concatenated)          no weight
+	m      = fn · flat                                         (2+H)*H mixes
+	pre    = sigma(m[:H]*s0 + b[:H]) + eps
+	post   = 2*sigma(m[H:2H]*s1 + b[H:2H])
+	comb   = sinkhorn(softmax_rows(m[2H:]*s2 + b[2H:]) + eps)  H x H
+	y      = sublayer(norm_w(sum_k pre_k x_k))
+	x'_k   = post_k * y + sum_j comb[j][k] x_j                 comb TRANSPOSED
+
+sinkhorn is one column normalisation, then HCIters-1 rounds of row then
+column, each dividing by (sum + eps). The head collapses the streams the same
+way with its own fn and pre alone (sigma(m*s + b) + eps), then the output
+norm and the projection.
+
+The attention is one key head that is also the value, head_dim wide, with a
+sliding window of SWAWindow over every block:
+
+	qr = rmsnorm_w(q_a · h)    q = q_b · qr, each head rmsnorm'd, no weight
+	k  = rmsnorm_w(kv · h)     the cached row's key and its value
+
+both rotated, adjacent pairs, on the LAST NRot dimensions of each head; on a
+compressed block (Config.CompKinds) at RopeBase with YaRN (the "compress"
+rotary), on a sliding block at RopeBaseSWA, plain (the "main" one). The
+attention output is rotated back at the query's position before the grouped
+projection: OGroups groups of heads, each through its own OLoraRank sheet of
+RoleAttnOutA, then RoleAttnOut over all of them. Each head has a sink.
+
+A compressed block also attends to ENTRIES, one per `rate` positions: entry
+w pools the window [w*rate, (w+1)*rate) of the compressor's two projections,
+
+	e_w = rmsnorm_w(sum_j softmax_j(gate_j + ape_{j mod rate}) * kv_j)   per channel
+
+rotated at position w*rate on the compressed rotary; a CSA block's
+projections are two heads wide and its entry pools 2*rate slots, the
+previous window's first half and this window's second (the overlap; window
+0's previous half is empty). Entry w is visible to a query at t once its
+window has closed, w < (t+1)/rate. An HCA block attends to every visible
+entry; a CSA block to the lightning indexer's IdxTopK, scored as DeepSeek
+V3.2's is (sum_h w_h relu(q_h . k), the query from the latent qr, the key
+an entry of the indexer's own compressor at IdxHeadDim).
+
+Where it lives: the cached row of a position is the key and, on a
+compressed block, the compressor's two projections of that position (the
+gate with its position bias added), so the window's own pages hold every
+input the compressor still has to fold -- the window covers the HCA rate and
+two CSA windows, which the converter checks -- and they page, relocate and
+are stored exactly as the keys are. The entries are a second paged history
+per compressed block, indexed by entry (kvCache.ent; ds4kv.go).
+
+The FFN is the mixture: sqrt(softplus) gates, the selection bias, the
+renormalised top-k, a routed scale and one shared expert, every expert's
+SwiGLU clamped (ActSwiGLUClamp); the first NHashLayers blocks select their
+experts from the token's row of a frozen table (the weights are still the
+gate's).
+
+### engine/model/delta.go
+
+The gated delta net: the other half of a hybrid's block loop.
+
+The graph is transcribed from llama.cpp's running graph; six of its steps
+are ones a from-paper reading gets wrong. `llama-eval-callback` on
+Qwen3-Next-80B-A3B-Instruct prints layer 0 as:
+
+	conv_states       GET_ROWS(cache_r_l0{24576})   -> {3, 8192}
+	qkv_mixed         MUL_MAT(attn_qkv.weight{2048,8192}, attn_norm)
+	conv_input        CONCAT(conv_states, TRANSPOSE(qkv_mixed))   -> {4, 8192}
+	conv_state_last   VIEW(conv_input)[1:]          -> CPY into cache_r_l0
+	conv_output_raw   SSM_CONV(conv_input, ssm_conv1d.weight{4,8192})
+	conv_output_silu  SILU(conv_output_raw)                        <- (1)
+	q_conv/k_conv     VIEW{128,16} -> L2_NORM -> REPEAT to {128,32} <- (2),(3)
+	v_conv            VIEW{128,32}
+	mixed_ba          MUL_MAT(ssm_ba.weight{2048,64}, attn_norm) -> {4,16}
+	a                 VIEW{2,16} -> +ssm_dt.bias -> SOFTPLUS -> *ssm_a  <- (4)
+	b                 VIEW{2,16} -> SIGMOID                             <- (5)
+	node_53           GATED_DELTA_NET(q, k, v, gate, beta, state)
+	attn_output       VIEW -> RMS_NORM -> *ssm_norm.weight
+	z                 MUL_MAT(attn_gate.weight{2048,4096}, attn_norm)
+	final_output      node_59 * SILU(z)                                 <- (6)
+	linear_attn_out   MUL_MAT(ssm_out.weight{4096,2048}, final_output)
+
+	(1) the convolution's output is passed through SiLU before it is split.
+	(2) q and k are L2-normalised, not RMS-normalised: there is no weight, and
+	    the divisor is the vector's own length rather than its root mean square.
+	(3) there are 16 key heads and 32 value heads, and the repeat is
+	    interleaved: value head h reads key head h/2, not h%16.
+	(4) the decay is softplus(a + dt_bias) * ssm_a, and ssm_a is already
+	    -exp(A_log), so the product is negative and exp() of it is in (0,1).
+	(5) beta is a plain sigmoid, no bias.
+	(6) the output gate is SiLU(z), while the full-attention layers of the same
+	    model gate with sigmoid.
+
+The state is not a KV cache: it is the same size at every position, so
+residency, paging and placement cannot treat it as KV.
+
+### engine/model/spec.go
+
+Speculative decoding with the model's own multi-token-prediction block.
+
+A model that ships prediction blocks (jlm.Config.NMTP: Qwen3.5/3.6,
+DeepSeek-V3-class, GLM-4.7-Flash) carries a one-block drafter trained beside
+it. Row q of the draft is the token at q and the trunk's normed hidden state
+at q-1 (zero at q = 0), and it predicts the token at q+1:
+
+	z   = eh_proj([enorm(embed(x_q)) ; hnorm(h_{q-1})])
+	z  -> the prediction block (an ordinary block of the architecture)
+	g   = head_norm(z), logits = head(g)
+
+which is llama.cpp's graph_mtp and vLLM's MTP layer, with llama.cpp's
+pairing: the row at position q carries x_q and h_{q-1}, so the draft's KV
+cache lines up with the trunk's positions and row 0 sees a zero hidden
+state. vLLM masks the embedding at position 0 instead; that changes one
+cached row and no output (RULE 7m: chosen, written down). A drafted token's
+row carries the draft's own g as its hidden state.
+
+A round, at trunk position P with the next token y decided and h_{P-1}:
+
+	draft    d_1 from the draft row (y, h_{P-1}); d_i from (d_{i-1}, g)
+	verify   the trunk runs [y, d_1 .. d_k] at P..P+k in ONE pass, logits and
+	         hidden state at every row
+	accept   greedy: the longest prefix where the trunk's argmax is the
+	         draft; sampled: speculative rejection sampling, so the output is
+	         distributed as the trunk's own sampler. Either way one more token
+	         comes from the trunk's own logits at the first disagreement
+	rollback the trunk forgets the rejected rows (attention by position; a
+	         recurrence by snapshot or replay, SpecRollback) and the draft
+	         re-runs the accepted rows with the trunk's hidden states, its
+	         last row proposing the next round's d_1
+
+Greedy decoding through a Speculator is greedy decoding: every emitted token
+is the argmax of the trunk's logits at its position, computed over exactly
+the tokens plain decode would have fed.
+
+### engine/model/msa.go
+
+MiniMax Sparse Attention: MiniMax-M3's block selection (transformers'
+MiniMaxM3VLIndexer, llama.cpp's minimax-m3.cpp).
+
+Every block past the dense lead carries an indexer. For each position it
+projects one key k (IdxHeadDim wide, RMSNormed, rotated like the
+attention's k), and for each query one head q_g per kv group g. The query
+at position p then scores every cached position t <= p in its group:
+
+	score_g[t] = q_g . k_t
+
+cuts the positions into blocks of IdxBlock, ranks the blocks by their best
+position (a max over the block), forces in the IdxLocal blocks ending at
+its own (p/IdxBlock - l, clamped at block 0), and keeps the IdxTopK best.
+Every query head of group g then attends to the positions of g's kept
+blocks only (and causally, t <= p). With at most IdxTopK blocks of history
+every block is kept and the block is dense.
+
+The key is cached as one more kv head of the attention row (Config.KVRowAt,
+kvlMSA): it is per position and per layer exactly as k is, so paging,
+relocation, the prefix cache and every KV migration carry it with no
+second cache. The attention kernels read heads 0..NKVHead-1 of the row and
+the indexer's scores read head NKVHead, both at the row's stride; the value
+row's extra head is zero and never read.
+
+The selection is a mask on the scores: -inf at every position outside the
+group's kept blocks, added after the scale and before the softmax, which is
+exactly the reference's additive block mask.
+
+Every operation is generated code: the scores are the attention-score
+kernel over the key head, and the ranking is the sampler's segmented
+ordering (nn.SampleOrder) over those scores. A block's rank is its best
+position's, so walking the positions best first and keeping each new
+block until IdxTopK are kept ranks the blocks by their maximum without a
+max-pool: the first position seen of a block IS its maximum.
+
+### engine/model/k3.go
+
+Kimi-K3's text model (jlm.ArchKimiK3), transcribed from Moonshot's
+modeling_kimi_linear.py (the text model KimiK3ForConditionalGeneration
+wraps), which llama.cpp's kimi-k3.cpp matches. It is Kimi-Linear's hybrid --
+KDA in the linear blocks (delta.go), MLA with no rotary in the full ones
+(mla.go) -- with five pieces of its own:
+
+	residual attention   the residual is banked every AttnResBlock blocks (the
+	                     block's RAW input, before anything mixes it), and each
+	                     sublayer reads a softmax mix of the bank and the
+	                     running residual instead of the residual itself:
+	                       score_j = sum(w * rmsnorm(v_j)),  in = sum_j p_j v_j
+	                     the scores on normed values, the sum on raw ones. On a
+	                     checkpoint block the running residual restarts from the
+	                     attention's output; the head mixes the whole bank too.
+	latent mixture       the routed experts read routed_down(h) at ExpertLatent;
+	                     their weighted sum is RMSNormed and routed_up takes it
+	                     back to n_embd; the router and the shared experts read
+	                     h itself (k3MoE)
+	situ                 4*tanh(g/4)*sigma(g) * 25*tanh(u/25) in every FFN
+	                     (nn.ActSitu)
+	MLA output gate      the attention output times sigma(g_proj(normed input))
+	                     before o_proj (mlaProject, mlaOutProject)
+	full-rank KDA gate   one matrix for the output gate (ssmGate, delta.go),
+	                     and the decay lb*sigma(exp(A_log)*(f + dt)) when
+	                     KDALowerBound is set (nn.DeltaDecayBound32JIT)
+
+The bank is per-token state that crosses a device seam inside a token, so it
+is carried as residual STREAMS, as Gemma 3n's AltUp and DeepSeek V4's
+hyper-connections are (Config.ResidW): stream 0 is the running residual and
+stream 1+j checkpoint j, stream-major (stream k of row r at
+(k*rows + r)*n_embd). Every n_embd kernel that reads the residual reads
+stream 0 untouched; a device is handed every stream and hands every stream
+back, and the head's mix runs on the host (streamHead).
+
+### engine/model/indexer.go
+
+DeepSeek Sparse Attention: the lightning indexer of DeepSeek V3.2
+(transformers' DeepseekV32Indexer, llama.cpp's deepseek32.cpp).
+
+For a query at position p the indexer scores every cached position t <= p:
+
+	score[t] = sum_h w_h * relu(q_h . k_t)
+
+q_h is head h of IdxHeads, projected from the query latent (the normed q_a
+output MLA already computes) and rotated NEOX on its first NRot dimensions;
+k_t is one IdxHeadDim key per position, projected from the block input,
+LayerNormed with a bias and rotated the same way; w is one weight per head
+from the block input, times (IdxHeadDim*IdxHeads)^-1/2 (the reference's
+softmax_scale and n_heads^-1/2 together). The attention then reads only the
+IdxTopK highest-scoring positions. At or below IdxTopK cached positions that
+is every position, and the block is exactly deepseek2's.
+
+The key is cached in the MLA row itself, after the latent and the rotary
+key (Config.KVDim): it is per position and per layer exactly as the latent
+is, so paging, relocation, the prefix cache and every KV migration carry it
+with no second cache. The MLA kernels read the row's first
+KVLoraRank+NRot elements and the indexer's its last IdxHeadDim, both at the
+row's stride.
+
+The selection is applied as a mask on the attention scores: -inf for every
+position the indexer did not keep, added after the scale and before the
+softmax. exp(-inf) is exactly zero, so the result is the attention over the
+kept positions alone, which is what the reference computes.
+
+Every operation is generated code: the scores are the attention-score kernel
+over the row's tail (s.idxAttn), the ReLU the ungated activation kernel, the
+head sum an axpy, the top-k the sampler's segmented ordering
+(nn.SampleOrder), and the mask an axpy of the bias row.
+
+### convert/flagship.go: gemma4Config
+
+gemma4Config is llama.cpp's gemma4.cpp and transformers' Gemma4ForCausalLM,
+text only:
+
+	gemma3's block: sqrt(n_embd) embedding, GELU-tanh,   -> EmbdScale, FlagGELU,
+	  per-head q/k RMSNorm, NEOX, post-attention and         FlagQKNorm, FlagRopeNeox,
+	  post-FFN norms, a final softcap                        tensors, FinalSoftcap
+	sliding layers by attention.sliding_window_pattern  -> SWAWindow, SWAPeriod
+	the global layers' head_dim, kv heads and rotary    -> HeadDim, NKVHead, NRot
+	  (key_length, head_count_kv at a global layer,
+	  rope.dimension_count) and the sliding layers'     -> HeadDimSWA, NKVHeadSWA,
+	  (key_length_swa, rope.dimension_count_swa)           NRotSWA
+	the global layers' "proportional" rotary            -> RoleRopeFreqs (1 for the
+	  (NEOX over the whole head, base^(-2i/head_dim)        rotated pairs, 1e30 for
+	  for the first quarter of the pairs, zero after)       the rest), global only
+	the sliding layers' own base                        -> RopeBaseSWA
+	a weightless RMSNorm on each head of v              -> Flag2VNorm
+	no v_proj on a global layer (attention_k_eq_v):     -> the absent RoleAttnV
+	  v is k's projection, normed without k's weight
+	an attention scale of one (self.scaling = 1.0)      -> AttnScale 1
+	layer_scalar on each block's output                 -> RoleLayerOutScale
+
+The 26B's block runs a dense MLP and a mixture in parallel (jlm.Flag2DenseMoE):
+
+	the dense MLP, ffn_norm before it, post_ffw_norm_1 after -> RoleShExpGate/Up/Down
+	                                                            (ungated), RolePostFFNNorm1
+	the experts, pre_ffw_norm_2 before, post_ffw_norm_2 after -> RoleFFNNorm2, RolePostFFNNorm2
+	the router on rmsnorm(x) * router.scale * n_embd^-1/2,     -> RoleRouterNorm, the
+	  softmax, top-k, renormalised (a literal in every            scale folded here
+	  reference), times per_expert_scale                       -> RoleExpScale
+	the two branches' sum, post_ffw_norm after                -> RolePostFFNNorm
+
+The E2B/E4B add three things:
+
+	per-layer embeddings: a second token table, NLayer x  -> Config.PLEDim, RolePLE*
+	  embedding_length_per_layer_input wide, plus a
+	  projection of the scaled embedding; each block
+	  gates its slice in after the FFN
+	the last attention.shared_kv_layers layers read the   -> Config.NKVShared; their
+	  KV of the last earlier layer of their own kind         k/v tensors are dropped
+	those layers' FFN twice as wide (use_double_wide_mlp) -> Flag2DoubleFFN
+
+### convert/flagship.go: minimaxM3Config
+
+minimaxM3Config is llama.cpp's minimax-m3.cpp and transformers'
+MiniMaxM3VLForCausalLM (the text model of MiniMaxM3SparseForCausalLM):
+
+	q and k RMSNormed per head, Gemma's (1 + w) baked  -> FlagQKNorm (llama.cpp's
+	  into the weights by llama.cpp's converter            converter adds the 1)
+	NEOX rotary on rope.dimension_count of each head   -> FlagRopeNeox, NRot
+	a dense lead, then a sigmoid router with the       -> NDenseLead, FlagExpertSigmoid,
+	  selection-only bias, renormalised, a routed         RoleExpProbsB, ExpertScale,
+	  scale and one shared expert                         NFFNShExp (the shared path)
+	gpt-oss's clamped SwiGLU (alpha 1.702, limit 7)    -> FlagSwiGLUOAI
+	  in every FFN: the dense lead, the experts and
+	  the shared expert
+	MiniMax Sparse Attention on every block past the   -> IdxHeads, IdxHeadDim,
+	  dense lead: per kv group the top attention.         IdxTopK, IdxBlock,
+	  indexer.top_k blocks of block_size positions,       IdxLocal, RoleIdxQ/
+	  each block by its best score, local_blocks          RoleIdxQNorm/RoleIdxK/
+	  ending at the query's own forced in                 RoleIdxKNorm
+
+The gate is SIGMOID and the routed weights renormalised whatever the file
+says (RULE 7m): MiniMaxM3VLTopKRouter hardcodes both, the published
+config states scoring_func "sigmoid", and llama.cpp's converter writes
+expert_weights_norm true as a literal; a file saying otherwise describes a
+model nothing runs and is refused. The swigluoai constants are literals in
+llama.cpp's builder and the published config's own (1.702, 7.0); the GGUF
+carries neither.
+
+The engine caches the indexer's key as one more kv head of the attention
+row, so its width must be the head's (128 and 128 on the published model);
+one indexer head per kv group is the reference's own contract (llama.cpp
+asserts it). A query's own block must be forced in (local_blocks >= 1, the
+published 1): every kv group then reads the same number of positions,
+which is what lets a device gather the groups' blocks into one key range a
+row. Each of these is refused by name otherwise.
+
+### convert/deepseek4.go: deepseek4Config
+
+deepseek4Config is llama.cpp's deepseek4.cpp and transformers'
+DeepseekV4ForCausalLM, text only:
+
+	hyper_connection.count/sinkhorn_iterations/      -> HCMult, HCIters, HCEps
+	  epsilon: the residual is that many streams,       (RoleHC*)
+	  collapsed into each sublayer and mixed out of it
+	q_lora_rank: q = q_b(rmsnorm_w(q_a(x))), each      -> QLoraRank (RoleAttnQA/
+	  head RMSNormed without a weight                     QANorm/QB)
+	one kv head, key_length wide, rmsnorm_w'd; the     -> NKVHead 1, RoleAttnK,
+	  rotated row is both the key and the value           RoleAttnKVANorm
+	the rotary on the LAST rope.dimension_count of     -> NRot, interleaved
+	  each head, adjacent pairs (llama.cpp's NORM)        (no FlagRopeNeox)
+	the sliding blocks at rope.freq_base, plain; the   -> RopeBaseSWA (plain),
+	  compressed ones (and their compressor and          RopeBase + the YaRN keys
+	  indexer) at compress_rope_freq_base with YaRN
+	attention.sliding_window on every block            -> SWAWindow, allLocal
+	per-head sinks                                     -> RoleAttnSinks
+	compress_ratios per block: 0 none, the CSA rate    -> CompKinds, CompRateCSA,
+	  (a block with the indexer), the HCA rate            CompRateHCA
+	the indexer: head_count, key_length, top_k         -> IdxHeads, IdxHeadDim,
+	                                                      IdxTopK (RoleIdxQB/Proj,
+	                                                      RoleIdxComp*)
+	output_group_count, output_lora_rank               -> OGroups, OLoraRank
+	sqrt(softplus) gating, the selection bias,         -> Flag2ExpertSqrtSoftplus,
+	  renormalised, a routed scale, one shared expert     RoleExpProbsB, ExpertScale
+	hash_layer_count: the first blocks select by       -> NHashLayers,
+	  ffn_gate_tid2eid[token]                             RoleHashExperts
+	swiglu_clamp_exp/shexp (10 in every block)         -> Flag2SwiGLUClamp
+
+The gate is refused unless sqrt-softplus (llama.cpp's loader refuses the
+rest; transformers would honour softmax and sigmoid through ACT2FN, which no
+published V4 states), and the renormalisation unless on: both routers
+divide by the sum unconditionally in transformers, so a file stating
+expert_weights_norm false describes a model nothing runs. The clamp is a
+literal of the architecture (ds4SwiGLULimit) and another limit is refused.
+
+The engine keeps a compressed block's pending compressor inputs in the
+window's own cached rows, so the window must cover what the compressor
+still reads: the HCA rate, and two CSA windows (the overlap). DeepSeek V4's
+own (128 against 128 and 8) does; another is refused by name.

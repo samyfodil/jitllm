@@ -11,63 +11,24 @@ import (
 // DeepSeek V4 (transformers' DeepseekV4ForCausalLM, llama.cpp's
 // deepseek4.cpp; jlm.ArchDeepseek4).
 //
-// The residual is Config.HCMult streams, carried stream-major as Gemma 3n's
-// are (Config.ResidW: stream k of row r at (k*rows + r)*n_embd), each a copy of
-// the embedding at the start. Each sublayer is wrapped in a hyper-connection:
+// The residual is Config.HCMult streams, stream-major as Gemma 3n's are
+// (Config.ResidW: stream k of row r at (k*rows + r)*n_embd). Each sublayer is
+// wrapped in a hyper-connection: `pre` collapses the streams into its input,
+// and `post` times its output plus the Sinkhorn-normalised mix of the streams
+// (comb, applied transposed) are the next streams. The attention is one key
+// head that is also the value, rotated on its last NRot dimensions and back
+// after the softmax, with a sink per head and a window of SWAWindow on every
+// block. A compressed block (Config.CompKinds) also attends to pooled
+// ENTRIES, one per `rate` positions: HCA every visible entry, CSA the
+// indexer's IdxTopK. A position's cached row holds its key and, on a
+// compressed block, the compressor's two projections, so the window's pages
+// hold every input the compressor still folds; the entries are a second
+// paged history per compressed block (kvCache.ent; ds4kv.go). The FFN is the
+// sqrt(softplus) mixture with a shared expert, a clamped SwiGLU, and
+// NHashLayers hash-routed lead blocks.
 //
-//	flat   = rmsnorm(the row's streams, concatenated)          no weight
-//	m      = fn · flat                                         (2+H)*H mixes
-//	pre    = sigma(m[:H]*s0 + b[:H]) + eps
-//	post   = 2*sigma(m[H:2H]*s1 + b[H:2H])
-//	comb   = sinkhorn(softmax_rows(m[2H:]*s2 + b[2H:]) + eps)  H x H
-//	y      = sublayer(norm_w(sum_k pre_k x_k))
-//	x'_k   = post_k * y + sum_j comb[j][k] x_j                 comb TRANSPOSED
-//
-// sinkhorn is one column normalisation, then HCIters-1 rounds of row then
-// column, each dividing by (sum + eps). The head collapses the streams the same
-// way with its own fn and pre alone (sigma(m*s + b) + eps), then the output
-// norm and the projection.
-//
-// The attention is one key head that is also the value, head_dim wide, with a
-// sliding window of SWAWindow over every block:
-//
-//	qr = rmsnorm_w(q_a · h)    q = q_b · qr, each head rmsnorm'd, no weight
-//	k  = rmsnorm_w(kv · h)     the cached row's key and its value
-//
-// both rotated, adjacent pairs, on the LAST NRot dimensions of each head; on a
-// compressed block (Config.CompKinds) at RopeBase with YaRN (the "compress"
-// rotary), on a sliding block at RopeBaseSWA, plain (the "main" one). The
-// attention output is rotated back at the query's position before the grouped
-// projection: OGroups groups of heads, each through its own OLoraRank sheet of
-// RoleAttnOutA, then RoleAttnOut over all of them. Each head has a sink.
-//
-// A compressed block also attends to ENTRIES, one per `rate` positions: entry
-// w pools the window [w*rate, (w+1)*rate) of the compressor's two projections,
-//
-//	e_w = rmsnorm_w(sum_j softmax_j(gate_j + ape_{j mod rate}) * kv_j)   per channel
-//
-// rotated at position w*rate on the compressed rotary; a CSA block's
-// projections are two heads wide and its entry pools 2*rate slots, the
-// previous window's first half and this window's second (the overlap; window
-// 0's previous half is empty). Entry w is visible to a query at t once its
-// window has closed, w < (t+1)/rate. An HCA block attends to every visible
-// entry; a CSA block to the lightning indexer's IdxTopK, scored as DeepSeek
-// V3.2's is (sum_h w_h relu(q_h . k), the query from the latent qr, the key
-// an entry of the indexer's own compressor at IdxHeadDim).
-//
-// Where it lives: the cached row of a position is the key and, on a
-// compressed block, the compressor's two projections of that position (the
-// gate with its position bias added), so the window's own pages hold every
-// input the compressor still has to fold -- the window covers the HCA rate and
-// two CSA windows, which the converter checks -- and they page, relocate and
-// are stored exactly as the keys are. The entries are a second paged history
-// per compressed block, indexed by entry (kvCache.ent; ds4kv.go).
-//
-// The FFN is the mixture: sqrt(softplus) gates, the selection bias, the
-// renormalised top-k, a routed scale and one shared expert, every expert's
-// SwiGLU clamped (ActSwiGLUClamp); the first NHashLayers blocks select their
-// experts from the token's row of a frozen table (the weights are still the
-// gate's).
+// The graph, transcribed: docs/engineering-history/model-correctness.md,
+// "engine/model/ds4.go".
 
 // ds4Fault breaks one piece of DeepSeek V4's graph, set only by a gate
 // (Config.ds4Fault) to show the fixture can see it. It is the device's type

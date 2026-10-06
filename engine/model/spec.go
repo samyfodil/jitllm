@@ -9,41 +9,22 @@ import (
 	"github.com/samyfodil/jitllm/engine/nn"
 )
 
-// Speculative decoding with the model's own multi-token-prediction block.
+// Speculative decoding with the model's own multi-token-prediction block
+// (jlm.Config.NMTP). Draft row q carries the token x_q and the trunk's normed
+// hidden state h_{q-1} (zero at q = 0) and predicts the token at q+1 through
+// eh_proj, one ordinary block of the architecture and the head; a drafted
+// token's row carries the draft's own g as its hidden state.
 //
-// A model that ships prediction blocks (jlm.Config.NMTP: Qwen3.5/3.6,
-// DeepSeek-V3-class, GLM-4.7-Flash) carries a one-block drafter trained beside
-// it. Row q of the draft is the token at q and the trunk's normed hidden state
-// at q-1 (zero at q = 0), and it predicts the token at q+1:
+// A round drafts d_1 .. d_k, verifies [y, d_1 .. d_k] in one trunk pass,
+// accepts the longest agreeing prefix (greedy) or by speculative rejection
+// sampling, takes one more token from the trunk at the first disagreement,
+// and rolls the trunk back (attention by position, a recurrence by
+// SpecRollback). Greedy decoding through a Speculator is greedy decoding:
+// every emitted token is the trunk's argmax over exactly the tokens plain
+// decode would have fed.
 //
-//	z   = eh_proj([enorm(embed(x_q)) ; hnorm(h_{q-1})])
-//	z  -> the prediction block (an ordinary block of the architecture)
-//	g   = head_norm(z), logits = head(g)
-//
-// which is llama.cpp's graph_mtp and vLLM's MTP layer, with llama.cpp's
-// pairing: the row at position q carries x_q and h_{q-1}, so the draft's KV
-// cache lines up with the trunk's positions and row 0 sees a zero hidden
-// state. vLLM masks the embedding at position 0 instead; that changes one
-// cached row and no output (RULE 7m: chosen, written down). A drafted token's
-// row carries the draft's own g as its hidden state.
-//
-// A round, at trunk position P with the next token y decided and h_{P-1}:
-//
-//	draft    d_1 from the draft row (y, h_{P-1}); d_i from (d_{i-1}, g)
-//	verify   the trunk runs [y, d_1 .. d_k] at P..P+k in ONE pass, logits and
-//	         hidden state at every row
-//	accept   greedy: the longest prefix where the trunk's argmax is the
-//	         draft; sampled: speculative rejection sampling, so the output is
-//	         distributed as the trunk's own sampler. Either way one more token
-//	         comes from the trunk's own logits at the first disagreement
-//	rollback the trunk forgets the rejected rows (attention by position; a
-//	         recurrence by snapshot or replay, SpecRollback) and the draft
-//	         re-runs the accepted rows with the trunk's hidden states, its
-//	         last row proposing the next round's d_1
-//
-// Greedy decoding through a Speculator is greedy decoding: every emitted token
-// is the argmax of the trunk's logits at its position, computed over exactly
-// the tokens plain decode would have fed.
+// The graph, the round, and the row pairing chosen against vLLM's:
+// docs/engineering-history/model-correctness.md, "engine/model/spec.go".
 
 // SpecRollback is how a rejected verification takes a hybrid's recurrent state
 // back. Attention needs no choice: its rows are forgotten by position.

@@ -75,45 +75,17 @@ func deepseek32Config(f *meta.File, c *jlm.Config) error {
 }
 
 // gemma4Config is llama.cpp's gemma4.cpp and transformers' Gemma4ForCausalLM,
-// text only:
+// text only: gemma3's block with two attention geometries (the global layers'
+// HeadDim, NKVHead and NRot, the sliding layers' *SWA), the global layers'
+// "proportional" rotary as RoleRopeFreqs, a weightless norm on v
+// (Flag2VNorm), k's projection as v on a global layer with no v_proj, an
+// attention scale of one and a per-block layer_scalar (RoleLayerOutScale).
+// The 26B runs a dense MLP beside a mixture (jlm.Flag2DenseMoE); the E2B/E4B
+// add per-layer embeddings (PLEDim), KV sharing (NKVShared) and a double-width
+// FFN on the sharing layers (Flag2DoubleFFN).
 //
-//	gemma3's block: sqrt(n_embd) embedding, GELU-tanh,   -> EmbdScale, FlagGELU,
-//	  per-head q/k RMSNorm, NEOX, post-attention and         FlagQKNorm, FlagRopeNeox,
-//	  post-FFN norms, a final softcap                        tensors, FinalSoftcap
-//	sliding layers by attention.sliding_window_pattern  -> SWAWindow, SWAPeriod
-//	the global layers' head_dim, kv heads and rotary    -> HeadDim, NKVHead, NRot
-//	  (key_length, head_count_kv at a global layer,
-//	  rope.dimension_count) and the sliding layers'     -> HeadDimSWA, NKVHeadSWA,
-//	  (key_length_swa, rope.dimension_count_swa)           NRotSWA
-//	the global layers' "proportional" rotary            -> RoleRopeFreqs (1 for the
-//	  (NEOX over the whole head, base^(-2i/head_dim)        rotated pairs, 1e30 for
-//	  for the first quarter of the pairs, zero after)       the rest), global only
-//	the sliding layers' own base                        -> RopeBaseSWA
-//	a weightless RMSNorm on each head of v              -> Flag2VNorm
-//	no v_proj on a global layer (attention_k_eq_v):     -> the absent RoleAttnV
-//	  v is k's projection, normed without k's weight
-//	an attention scale of one (self.scaling = 1.0)      -> AttnScale 1
-//	layer_scalar on each block's output                 -> RoleLayerOutScale
-//
-// The 26B's block runs a dense MLP and a mixture in parallel (jlm.Flag2DenseMoE):
-//
-//	the dense MLP, ffn_norm before it, post_ffw_norm_1 after -> RoleShExpGate/Up/Down
-//	                                                            (ungated), RolePostFFNNorm1
-//	the experts, pre_ffw_norm_2 before, post_ffw_norm_2 after -> RoleFFNNorm2, RolePostFFNNorm2
-//	the router on rmsnorm(x) * router.scale * n_embd^-1/2,     -> RoleRouterNorm, the
-//	  softmax, top-k, renormalised (a literal in every            scale folded here
-//	  reference), times per_expert_scale                       -> RoleExpScale
-//	the two branches' sum, post_ffw_norm after                -> RolePostFFNNorm
-//
-// The E2B/E4B add three things:
-//
-//	per-layer embeddings: a second token table, NLayer x  -> Config.PLEDim, RolePLE*
-//	  embedding_length_per_layer_input wide, plus a
-//	  projection of the scaled embedding; each block
-//	  gates its slice in after the FFN
-//	the last attention.shared_kv_layers layers read the   -> Config.NKVShared; their
-//	  KV of the last earlier layer of their own kind         k/v tensors are dropped
-//	those layers' FFN twice as wide (use_double_wide_mlp) -> Flag2DoubleFFN
+// The reference-to-container table: docs/engineering-history/
+// model-correctness.md, "convert/flagship.go: gemma4Config".
 func gemma4Config(f *meta.File, c *jlm.Config) error {
 	c.EmbdScale = float32(math.Sqrt(float64(c.NEmbd)))
 	c.Flags |= jlm.FlagGELU | jlm.FlagRopeNeox | jlm.FlagQKNorm
@@ -273,38 +245,20 @@ func minimaxM2Config(f *meta.File, c *jlm.Config) error {
 }
 
 // minimaxM3Config is llama.cpp's minimax-m3.cpp and transformers'
-// MiniMaxM3VLForCausalLM (the text model of MiniMaxM3SparseForCausalLM):
+// MiniMaxM3VLForCausalLM: a per-head q/k norm, NEOX rotary on part of each
+// head, a dense lead and then V3's sigmoid router with a shared expert,
+// gpt-oss's clamped SwiGLU in every FFN (FlagSwiGLUOAI), and MiniMax Sparse
+// Attention (the Idx fields) on every block past the lead.
 //
-//	q and k RMSNormed per head, Gemma's (1 + w) baked  -> FlagQKNorm (llama.cpp's
-//	  into the weights by llama.cpp's converter            converter adds the 1)
-//	NEOX rotary on rope.dimension_count of each head   -> FlagRopeNeox, NRot
-//	a dense lead, then a sigmoid router with the       -> NDenseLead, FlagExpertSigmoid,
-//	  selection-only bias, renormalised, a routed         RoleExpProbsB, ExpertScale,
-//	  scale and one shared expert                         NFFNShExp (the shared path)
-//	gpt-oss's clamped SwiGLU (alpha 1.702, limit 7)    -> FlagSwiGLUOAI
-//	  in every FFN: the dense lead, the experts and
-//	  the shared expert
-//	MiniMax Sparse Attention on every block past the   -> IdxHeads, IdxHeadDim,
-//	  dense lead: per kv group the top attention.         IdxTopK, IdxBlock,
-//	  indexer.top_k blocks of block_size positions,       IdxLocal, RoleIdxQ/
-//	  each block by its best score, local_blocks          RoleIdxQNorm/RoleIdxK/
-//	  ending at the query's own forced in                 RoleIdxKNorm
+// Refused by name: a gate that is not sigmoid or weights not renormalised
+// (MiniMaxM3VLTopKRouter hardcodes both; RULE 7m), an indexer key of another
+// width than the head (it is cached as one more kv head), other than one
+// indexer head per kv group, and no local block (every group must read the
+// same number of positions). The swigluoai constants are literals.
 //
-// The gate is SIGMOID and the routed weights renormalised whatever the file
-// says (RULE 7m): MiniMaxM3VLTopKRouter hardcodes both, the published
-// config states scoring_func "sigmoid", and llama.cpp's converter writes
-// expert_weights_norm true as a literal; a file saying otherwise describes a
-// model nothing runs and is refused. The swigluoai constants are literals in
-// llama.cpp's builder and the published config's own (1.702, 7.0); the GGUF
-// carries neither.
-//
-// The engine caches the indexer's key as one more kv head of the attention
-// row, so its width must be the head's (128 and 128 on the published model);
-// one indexer head per kv group is the reference's own contract (llama.cpp
-// asserts it). A query's own block must be forced in (local_blocks >= 1, the
-// published 1): every kv group then reads the same number of positions,
-// which is what lets a device gather the groups' blocks into one key range a
-// row. Each of these is refused by name otherwise.
+// The reference-to-container table and the reasons in full:
+// docs/engineering-history/model-correctness.md,
+// "convert/flagship.go: minimaxM3Config".
 func minimaxM3Config(f *meta.File, c *jlm.Config) error {
 	c.Flags |= jlm.FlagRopeNeox | jlm.FlagQKNorm | jlm.FlagExpertSigmoid | jlm.FlagSwiGLUOAI
 	if err := partialRotary(c); err != nil {

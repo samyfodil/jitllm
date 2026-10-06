@@ -4950,3 +4950,178 @@ device kernels XOR the planes into the full weight first and center once.
   self-control. The first version matched by giving the BATCHED path a zeroed
   per-row accumulator and one extra pass, and measured 0.9965 on prefill --
   correct, and paid for.
+
+## Design notes moved out of source comments
+
+Each entry below is a comment that stood in the named source file,
+verbatim. The source keeps the contract, the layout and the invariants
+and points here for the derivation, the transcript and the reasons.
+
+### jit/cpu/topk.go: EmitMoETopK
+
+The mixture-of-experts router's selection, renormalisation and ordering, as
+one generated kernel. This is the AVX2 tier; sse_topk.go and topk_a64.go are
+the other two, and topk_const.go holds the constant block and the scratch
+layout all three read.
+
+	Q32      p, the softmax over ALL experts   (f32, n)
+	Scr      MoETopKConsts()
+	Scratch  MoETopKScratch(k) float32s, per caller
+	ASum     sel, the ids in SELECTION order   (int32, k, written)
+	AHalfSum ord, the same ids ASCENDING       (int32, k, written)
+	Out      wt,  sel's probabilities / sum    (f32, k, written)
+	Out2     ow,  ord's probabilities / sum    (f32, k, written)
+	AScale   sum, the divisor                  (f32, 1, written)
+
+n, k and whether the architecture renormalises are baked from the
+container's config.
+
+Ties go to the lowest index, as ggml_argsort's descending order does; it
+matters when a fresh router emits identical logits for every expert.
+
+The accumulation orders are a correctness property: `sum` is accumulated in
+selection order, term for term, because Forward, Prefill and ForwardBatch
+are gated bit-identical against each other on a mixture, and `ord` is
+ascending because moeBatch visits the bank expert-major. The kernel keeps
+both.
+
+Selection is a lexicographic walk rather than masking winners to -Inf,
+which cannot express the tie rule when every probability is equal. The
+keys (p[e], -e) are totally ordered and each pass takes their maximum, so
+the unused set at pass i is exactly the keys below the previous winner's:
+
+	eligible(e) = p[e] < prevVal || (p[e] == prevVal && e > prevIdx)
+
+Pass 0's predicate is `p[e] == p[e]`, which admits everything but a NaN. A
+NaN is therefore never selected; p is a softmax in [0,1], so no real input
+reaches that case.
+
+The ragged tail runs the vector body with the lanes past the end filled
+with NaN (one VPBLENDD), which fails every branch of the predicate, so no
+second accumulator or merge is needed. A lane that has seen nothing
+eligible is tracked explicitly: the improve condition is `eligible && (p >
+max || lane empty)`, so a -Inf candidate beside NaN pads is still chosen and
+the kernel is total over every finite input and both infinities.
+
+### jit/cpu/ropetab.go: EmitRopeTable
+
+The rotary table, generated: the {cos, sin} pair every rotary pair of one
+position needs. This is the AVX2 tier; sse_ropetab.go and ropetab_a64.go are
+the other two, and ropetab_const.go holds the constant block, the position
+decomposition and the exactness argument all three depend on.
+
+	Out     cs, the table: 2*npairs float32, {cos, sin} per pair, written
+	AScale  the per-model plane block (ropetab_const.go's layout)
+	Scr     RopeTabConsts()
+	K       the position
+
+npairs is baked from the model's NRot.
+
+The kernel is a range reduction and two polynomials, exp.go's shape: the
+quadrant and two polynomials on |r| <= pi/4, no table, no branch, no call.
+
+It agrees with the float64 table to one ulp and differs on about 18.7% of
+entries. That is a floor, not a defect: a reduced argument held in one
+float32 already carries half an ulp. Neither an exact reduction, math.Sin
+in place of the polynomials, nor a two-word r with back-correction closes
+it; all three were tried, and docs/engineering-history/cpu-kernels.md has
+what each measured.
+
+Both outputs come from one reduction, so sin and cos cannot disagree about
+the quadrant at a boundary. The quadrant is three bit operations and no
+branch. With n the nearest integer quarter-turn and r what is left,
+
+	sin(th) = [ s, c, -s, -c ][n mod 4]        cos(th) = [ c, -s, -c, s ][n mod 4]
+
+so bit 0 of n swaps the two polynomials, bit 1 of n negates sin, and bit 1 of
+n+1 negates cos. The swap is one XOR of the pair masked by bit 0 broadcast
+(VPSLLD then VPSRAD), and each negation is an XOR with the sign bit. Two's
+complement makes this correct for a negative n too (sin(-pi/2 + x) = -cos(x)).
+
+Registers, fixed for the whole kernel:
+
+	RCX  cs        RDX  the plane cursor   RBX  Scr        RAX  the vector count
+	Y0..Y3   the four position digits, as floats
+	Y4  the mod-4 magic   Y5  mscale   Y6  pi/2 hi   Y7  pi/2 lo
+	Y8..Y15  the body's working set
+
+### jit/cpu/hc_const.go
+
+DeepSeek V4's two small kernels, the hyper-connection mixer and the
+compressor's pool. This file holds what every tier shares: the constant
+block and the ABI; hc.go (AVX2), sse_hc.go and hc_a64.go are the bodies.
+
+The hyper-connection mixer (EmitHCMix) turns one row's (2+H)*H mixes, H = 4
+(HCStreams), into the collapse weights, the placements and the stream mixer:
+
+	pre[i]  = sigma(m[i]*s[i] + b[i]) + eps                  i < 4
+	post[i] = 2*sigma(m[4+i]*s[4+i] + b[4+i])
+	comb    = softmax_rows(m[8:]*s[8:] + b[8:]) + eps        4 x 4, row-major
+	comb    = comb / (column sums + eps), then iters-1 times:
+	          comb / (row sums + eps), comb / (column sums + eps)
+
+iters 0 stops after the softmax (a gate's violation). A head kernel computes
+pre alone, from eight-float buffers whose last four are padding.
+
+	Out     the 24 outputs (8 for a head)
+	Q32     the mixes
+	AScale  each mix's scale (s0 on pre, s1 on post, s2 on comb)
+	Q2      each mix's base
+	Scr     HCMixConsts(eps)
+
+Every tier keeps the 4 x 4 mixer one row per 128-bit lane (AVX2: two rows a
+YMM; SSE and NEON: one row a register), so a row's sum and maximum are
+within-lane shuffles and a column's are adds of whole registers.
+
+The pool (EmitColPool) is the compressor's softmax over positions, per
+channel:
+
+	out[c] = sum_s e[s,c] * kv[s*W+c] / sum_s e[s,c],  e = exp(gate[s*W+c] - max_s gate[s*W+c])
+
+	Out     out, W wide
+	Q32     kv, S rows of W
+	Q2      gate, S rows of W
+	Scr     ActConsts()
+	K, Rows the whole vectors and tail elements of W (ElemLanes)
+	Cols    S, at least one
+	RowStr  4*W, the slot stride in bytes
+
+### jit/cpu/sample.go: EmitSampleSegMax
+
+EmitSampleSegMax generates the ordering's one primitive: the largest ELIGIBLE
+element of each of Rows consecutive segments, with the lowest id winning a
+tie.
+
+	Q32      the values                                    (f32)
+	ASum     the ids                                       (int32, idsMem only)
+	Out      the per-segment best value                    (f32, Rows, written)
+	AHalfSum the per-segment best id                       (int32, Rows, written)
+	K        the segment length in ELEMENTS
+	Rows     how many segments
+	Cols     the id of the first element                   (!idsMem only)
+	AScale   {prevVal, bitcast(prevIdx)}                   (!first only)
+	Scr      MoETopKConsts()
+
+One kernel serves all three uses. The initial pass runs it over the whole
+vocabulary with Rows segments of K (first, contiguous ids). Each extraction
+then runs it twice: once over the winner's own segment for that segment's
+next best (eligible, Cols = the segment's base), and once over the summary
+(Rows = 1, K = the segment count, ids read from memory) to find which
+segment holds the next winner.
+
+The eligibility predicate is the MoE router's (topk.go): the keys
+(value, -id) are totally ordered, so the unused set after a winner (pv, pi)
+is exactly the keys below it:
+
+	eligible(e) = v[e] < pv || (v[e] == pv && id[e] > pi)
+
+first bakes the pass with no predecessor, whose predicate `v == v` admits
+everything but a NaN.
+
+A segment with nothing eligible left reports (-Inf, INT_MAX), which loses
+every tie to a real id, so the summary sweep is total and an exhausted
+segment is chosen only once all are.
+
+The ragged tail runs the vector body with the lanes past the end filled
+with NaN, as topk.go's does; only the last segment is ragged, but K is a
+register, so every segment's code handles it.

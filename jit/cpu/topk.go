@@ -2,10 +2,10 @@
 
 package cpu
 
-// The mixture-of-experts router's selection, renormalisation and ordering, as
-// one generated kernel. This is the AVX2 tier; sse_topk.go and topk_a64.go are
-// the other two, and topk_const.go holds the constant block and the scratch
-// layout all three read.
+// EmitMoETopK generates the mixture-of-experts router's selection,
+// renormalisation and ordering as one kernel. This is the AVX2 tier;
+// sse_topk.go and topk_a64.go are the other two, and topk_const.go holds the
+// constant block and the scratch layout all three read.
 //
 //	Q32      p, the softmax over ALL experts   (f32, n)
 //	Scr      MoETopKConsts()
@@ -16,35 +16,16 @@ package cpu
 //	Out2     ow,  ord's probabilities / sum    (f32, k, written)
 //	AScale   sum, the divisor                  (f32, 1, written)
 //
-// n, k and whether the architecture renormalises are baked from the
-// container's config.
+// n, k and whether the architecture renormalises are baked. Ties go to the
+// lowest index, as ggml_argsort's descending order does. `sum` accumulates in
+// selection order and `ord` is ascending, because Forward, Prefill and
+// ForwardBatch are gated bit-identical on a mixture and moeBatch visits the
+// bank expert-major. Selection is a lexicographic walk over the keys
+// (p[e], -e), eligible(e) = p[e] < prevVal || (p[e] == prevVal && e > prevIdx),
+// and the ragged tail runs the vector body over NaN pads, which no pass takes.
 //
-// Ties go to the lowest index, as ggml_argsort's descending order does; it
-// matters when a fresh router emits identical logits for every expert.
-//
-// The accumulation orders are a correctness property: `sum` is accumulated in
-// selection order, term for term, because Forward, Prefill and ForwardBatch
-// are gated bit-identical against each other on a mixture, and `ord` is
-// ascending because moeBatch visits the bank expert-major. The kernel keeps
-// both.
-//
-// Selection is a lexicographic walk rather than masking winners to -Inf,
-// which cannot express the tie rule when every probability is equal. The
-// keys (p[e], -e) are totally ordered and each pass takes their maximum, so
-// the unused set at pass i is exactly the keys below the previous winner's:
-//
-//	eligible(e) = p[e] < prevVal || (p[e] == prevVal && e > prevIdx)
-//
-// Pass 0's predicate is `p[e] == p[e]`, which admits everything but a NaN. A
-// NaN is therefore never selected; p is a softmax in [0,1], so no real input
-// reaches that case.
-//
-// The ragged tail runs the vector body with the lanes past the end filled
-// with NaN (one VPBLENDD), which fails every branch of the predicate, so no
-// second accumulator or merge is needed. A lane that has seen nothing
-// eligible is tracked explicitly: the improve condition is `eligible && (p >
-// max || lane empty)`, so a -Inf candidate beside NaN pads is still chosen and
-// the kernel is total over every finite input and both infinities.
+// Why a walk, the NaN and -Inf cases, and the tail: docs/engineering-history/
+// cpu-kernels.md, "jit/cpu/topk.go: EmitMoETopK".
 func EmitMoETopK(n, k int, norm bool) ([]byte, error) {
 	return EmitMoERoute(n, k, MoEGate{Norm: norm})
 }

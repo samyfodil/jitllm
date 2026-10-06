@@ -2,38 +2,22 @@
 
 package cpu
 
-// The rotary table, generated: the {cos, sin} pair every rotary pair of one
-// position needs. This is the AVX2 tier; sse_ropetab.go and ropetab_a64.go are
-// the other two, and ropetab_const.go holds the constant block, the position
-// decomposition and the exactness argument all three depend on.
+// EmitRopeTable generates the rotary table: the {cos, sin} pair every rotary
+// pair of one position needs. This is the AVX2 tier; sse_ropetab.go and
+// ropetab_a64.go are the other two, and ropetab_const.go holds the constant
+// block, the position decomposition and the exactness argument all three
+// depend on.
 //
 //	Out     cs, the table: 2*npairs float32, {cos, sin} per pair, written
 //	AScale  the per-model plane block (ropetab_const.go's layout)
 //	Scr     RopeTabConsts()
 //	K       the position
 //
-// npairs is baked from the model's NRot.
-//
-// The kernel is a range reduction and two polynomials, exp.go's shape: the
-// quadrant and two polynomials on |r| <= pi/4, no table, no branch, no call.
-//
-// It agrees with the float64 table to one ulp and differs on about 18.7% of
-// entries. That is a floor, not a defect: a reduced argument held in one
-// float32 already carries half an ulp. Neither an exact reduction, math.Sin
-// in place of the polynomials, nor a two-word r with back-correction closes
-// it; all three were tried, and docs/engineering-history/cpu-kernels.md has
-// what each measured.
-//
-// Both outputs come from one reduction, so sin and cos cannot disagree about
-// the quadrant at a boundary. The quadrant is three bit operations and no
-// branch. With n the nearest integer quarter-turn and r what is left,
-//
-//	sin(th) = [ s, c, -s, -c ][n mod 4]        cos(th) = [ c, -s, -c, s ][n mod 4]
-//
-// so bit 0 of n swaps the two polynomials, bit 1 of n negates sin, and bit 1 of
-// n+1 negates cos. The swap is one XOR of the pair masked by bit 0 broadcast
-// (VPSLLD then VPSRAD), and each negation is an XOR with the sign bit. Two's
-// complement makes this correct for a negative n too (sin(-pi/2 + x) = -cos(x)).
+// npairs is baked from the model's NRot. One range reduction feeds both
+// polynomials on |r| <= pi/4 (no table, branch or call), so sin and cos agree
+// on the quadrant: with n the nearest quarter-turn, bit 0 of n swaps the two
+// polynomials, bit 1 of n negates sin and bit 1 of n+1 negates cos. The table
+// is within one ulp of the float64 one, a floor rather than a defect.
 //
 // Registers, fixed for the whole kernel:
 //
@@ -41,6 +25,9 @@ package cpu
 //	Y0..Y3   the four position digits, as floats
 //	Y4  the mod-4 magic   Y5  mscale   Y6  pi/2 hi   Y7  pi/2 lo
 //	Y8..Y15  the body's working set
+//
+// The quadrant derivation, and what was tried against the one-ulp floor:
+// docs/engineering-history/cpu-kernels.md, "jit/cpu/ropetab.go: EmitRopeTable".
 func EmitRopeTable(npairs int) ([]byte, error) {
 	const lanes = 8
 	if npairs <= 0 {

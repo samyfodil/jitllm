@@ -11,37 +11,19 @@ import (
 // MiniMax Sparse Attention: MiniMax-M3's block selection (transformers'
 // MiniMaxM3VLIndexer, llama.cpp's minimax-m3.cpp).
 //
-// Every block past the dense lead carries an indexer. For each position it
-// projects one key k (IdxHeadDim wide, RMSNormed, rotated like the
-// attention's k), and for each query one head q_g per kv group g. The query
-// at position p then scores every cached position t <= p in its group:
+// Per kv group g the query at p scores every cached t <= p by q_g . k_t, ranks
+// the blocks of IdxBlock positions by their best position, forces in the
+// IdxLocal blocks ending at its own, and keeps the IdxTopK best; the group's
+// heads attend there alone, through a -inf mask added after the scale and
+// before the softmax. The key is one more kv head of the attention row
+// (Config.KVRowAt, kvlMSA), so it pages, relocates and is prefix-cached with
+// k: the attention reads heads 0..NKVHead-1, the indexer head NKVHead, and
+// the value row's extra head is zero. The ranking is the sampler's ordering
+// over positions, keeping each block as it is first seen: the first position
+// seen of a block is its maximum.
 //
-//	score_g[t] = q_g . k_t
-//
-// cuts the positions into blocks of IdxBlock, ranks the blocks by their best
-// position (a max over the block), forces in the IdxLocal blocks ending at
-// its own (p/IdxBlock - l, clamped at block 0), and keeps the IdxTopK best.
-// Every query head of group g then attends to the positions of g's kept
-// blocks only (and causally, t <= p). With at most IdxTopK blocks of history
-// every block is kept and the block is dense.
-//
-// The key is cached as one more kv head of the attention row (Config.KVRowAt,
-// kvlMSA): it is per position and per layer exactly as k is, so paging,
-// relocation, the prefix cache and every KV migration carry it with no
-// second cache. The attention kernels read heads 0..NKVHead-1 of the row and
-// the indexer's scores read head NKVHead, both at the row's stride; the value
-// row's extra head is zero and never read.
-//
-// The selection is a mask on the scores: -inf at every position outside the
-// group's kept blocks, added after the scale and before the softmax, which is
-// exactly the reference's additive block mask.
-//
-// Every operation is generated code: the scores are the attention-score
-// kernel over the key head, and the ranking is the sampler's segmented
-// ordering (nn.SampleOrder) over those scores. A block's rank is its best
-// position's, so walking the positions best first and keeping each new
-// block until IdxTopK are kept ranks the blocks by their maximum without a
-// max-pool: the first position seen of a block IS its maximum.
+// The full description: docs/engineering-history/model-correctness.md,
+// "engine/model/msa.go".
 
 // msaFault is a violation of one block-selection piece, set only by a gate
 // (Config.msaFault) to show the fixture can see it.

@@ -10,38 +10,20 @@ import (
 )
 
 // Kimi-K3's text model (jlm.ArchKimiK3), transcribed from Moonshot's
-// modeling_kimi_linear.py (the text model KimiK3ForConditionalGeneration
-// wraps), which llama.cpp's kimi-k3.cpp matches. It is Kimi-Linear's hybrid --
-// KDA in the linear blocks (delta.go), MLA with no rotary in the full ones
-// (mla.go) -- with five pieces of its own:
+// modeling_kimi_linear.py, which llama.cpp's kimi-k3.cpp matches: Kimi-Linear's
+// hybrid (KDA in delta.go, MLA with no rotary in mla.go) plus residual
+// attention over a bank of block inputs, a latent mixture (k3MoE), situ
+// (nn.ActSitu), an MLA output gate (mlaOutProject) and a full-rank KDA gate
+// with an optional decay lower bound (nn.DeltaDecayBound32JIT).
 //
-//	residual attention   the residual is banked every AttnResBlock blocks (the
-//	                     block's RAW input, before anything mixes it), and each
-//	                     sublayer reads a softmax mix of the bank and the
-//	                     running residual instead of the residual itself:
-//	                       score_j = sum(w * rmsnorm(v_j)),  in = sum_j p_j v_j
-//	                     the scores on normed values, the sum on raw ones. On a
-//	                     checkpoint block the running residual restarts from the
-//	                     attention's output; the head mixes the whole bank too.
-//	latent mixture       the routed experts read routed_down(h) at ExpertLatent;
-//	                     their weighted sum is RMSNormed and routed_up takes it
-//	                     back to n_embd; the router and the shared experts read
-//	                     h itself (k3MoE)
-//	situ                 4*tanh(g/4)*sigma(g) * 25*tanh(u/25) in every FFN
-//	                     (nn.ActSitu)
-//	MLA output gate      the attention output times sigma(g_proj(normed input))
-//	                     before o_proj (mlaProject, mlaOutProject)
-//	full-rank KDA gate   one matrix for the output gate (ssmGate, delta.go),
-//	                     and the decay lb*sigma(exp(A_log)*(f + dt)) when
-//	                     KDALowerBound is set (nn.DeltaDecayBound32JIT)
-//
-// The bank is per-token state that crosses a device seam inside a token, so it
-// is carried as residual STREAMS, as Gemma 3n's AltUp and DeepSeek V4's
-// hyper-connections are (Config.ResidW): stream 0 is the running residual and
-// stream 1+j checkpoint j, stream-major (stream k of row r at
-// (k*rows + r)*n_embd). Every n_embd kernel that reads the residual reads
+// The bank crosses a device seam inside a token, so it is carried as residual
+// STREAMS (Config.ResidW), stream-major: stream 0 is the running residual and
+// stream 1+j checkpoint j. Every n_embd kernel that reads the residual reads
 // stream 0 untouched; a device is handed every stream and hands every stream
 // back, and the head's mix runs on the host (streamHead).
+//
+// Each piece's arithmetic: docs/engineering-history/model-correctness.md,
+// "engine/model/k3.go".
 
 // k3Fault breaks one piece of Kimi-K3's graph, for a gate's violation only.
 type k3Fault int

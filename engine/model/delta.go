@@ -8,40 +8,22 @@ import (
 
 // The gated delta net: the other half of a hybrid's block loop.
 //
-// The graph is transcribed from llama.cpp's running graph; six of its steps
-// are ones a from-paper reading gets wrong. `llama-eval-callback` on
-// Qwen3-Next-80B-A3B-Instruct prints layer 0 as:
+// The graph is llama.cpp's running graph (layer 0 of Qwen3-Next-80B-A3B under
+// `llama-eval-callback`), and six of its steps are ones a from-paper reading
+// gets wrong:
 //
-//	conv_states       GET_ROWS(cache_r_l0{24576})   -> {3, 8192}
-//	qkv_mixed         MUL_MAT(attn_qkv.weight{2048,8192}, attn_norm)
-//	conv_input        CONCAT(conv_states, TRANSPOSE(qkv_mixed))   -> {4, 8192}
-//	conv_state_last   VIEW(conv_input)[1:]          -> CPY into cache_r_l0
-//	conv_output_raw   SSM_CONV(conv_input, ssm_conv1d.weight{4,8192})
-//	conv_output_silu  SILU(conv_output_raw)                        <- (1)
-//	q_conv/k_conv     VIEW{128,16} -> L2_NORM -> REPEAT to {128,32} <- (2),(3)
-//	v_conv            VIEW{128,32}
-//	mixed_ba          MUL_MAT(ssm_ba.weight{2048,64}, attn_norm) -> {4,16}
-//	a                 VIEW{2,16} -> +ssm_dt.bias -> SOFTPLUS -> *ssm_a  <- (4)
-//	b                 VIEW{2,16} -> SIGMOID                             <- (5)
-//	node_53           GATED_DELTA_NET(q, k, v, gate, beta, state)
-//	attn_output       VIEW -> RMS_NORM -> *ssm_norm.weight
-//	z                 MUL_MAT(attn_gate.weight{2048,4096}, attn_norm)
-//	final_output      node_59 * SILU(z)                                 <- (6)
-//	linear_attn_out   MUL_MAT(ssm_out.weight{4096,2048}, final_output)
-//
-//	(1) the convolution's output is passed through SiLU before it is split.
-//	(2) q and k are L2-normalised, not RMS-normalised: there is no weight, and
-//	    the divisor is the vector's own length rather than its root mean square.
-//	(3) there are 16 key heads and 32 value heads, and the repeat is
-//	    interleaved: value head h reads key head h/2, not h%16.
-//	(4) the decay is softplus(a + dt_bias) * ssm_a, and ssm_a is already
-//	    -exp(A_log), so the product is negative and exp() of it is in (0,1).
-//	(5) beta is a plain sigmoid, no bias.
-//	(6) the output gate is SiLU(z), while the full-attention layers of the same
-//	    model gate with sigmoid.
+//	(1) SiLU on the convolution's output, before it is split
+//	(2) q and k L2-normalised: no weight, divided by the vector's own length
+//	(3) 16 key heads and 32 value heads, interleaved: value head h reads h/2
+//	(4) the decay softplus(a + dt_bias) * ssm_a, ssm_a already -exp(A_log)
+//	(5) beta a plain sigmoid, no bias
+//	(6) the output gate SiLU(z), where the full-attention layers use sigmoid
 //
 // The state is not a KV cache: it is the same size at every position, so
 // residency, paging and placement cannot treat it as KV.
+//
+// The node-by-node transcript: docs/engineering-history/model-correctness.md,
+// "engine/model/delta.go".
 
 // kdaL2Eps is the epsilon Kimi Delta Attention's q/k L2 normalisation adds to
 // the sum of squares. It is the reference helper's own default, not the

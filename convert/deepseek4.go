@@ -45,45 +45,21 @@ func init() {
 const ds4SwiGLULimit = 10
 
 // deepseek4Config is llama.cpp's deepseek4.cpp and transformers'
-// DeepseekV4ForCausalLM, text only:
+// DeepseekV4ForCausalLM, text only: the hyper-connection streams (HCMult,
+// HCIters, HCEps), a q LoRA, one kv head that is also the value, the rotary on
+// each head's last NRot dimensions in adjacent pairs at two bases (YaRN on the
+// compressed blocks), a window and sinks on every block, compressed blocks
+// (CompKinds, CompRateCSA, CompRateHCA) with the indexer, a grouped low-rank
+// output, the sqrt(softplus) mixture with hash-routed lead blocks, and a
+// SwiGLU clamped at ds4SwiGLULimit.
 //
-//	hyper_connection.count/sinkhorn_iterations/      -> HCMult, HCIters, HCEps
-//	  epsilon: the residual is that many streams,       (RoleHC*)
-//	  collapsed into each sublayer and mixed out of it
-//	q_lora_rank: q = q_b(rmsnorm_w(q_a(x))), each      -> QLoraRank (RoleAttnQA/
-//	  head RMSNormed without a weight                     QANorm/QB)
-//	one kv head, key_length wide, rmsnorm_w'd; the     -> NKVHead 1, RoleAttnK,
-//	  rotated row is both the key and the value           RoleAttnKVANorm
-//	the rotary on the LAST rope.dimension_count of     -> NRot, interleaved
-//	  each head, adjacent pairs (llama.cpp's NORM)        (no FlagRopeNeox)
-//	the sliding blocks at rope.freq_base, plain; the   -> RopeBaseSWA (plain),
-//	  compressed ones (and their compressor and          RopeBase + the YaRN keys
-//	  indexer) at compress_rope_freq_base with YaRN
-//	attention.sliding_window on every block            -> SWAWindow, allLocal
-//	per-head sinks                                     -> RoleAttnSinks
-//	compress_ratios per block: 0 none, the CSA rate    -> CompKinds, CompRateCSA,
-//	  (a block with the indexer), the HCA rate            CompRateHCA
-//	the indexer: head_count, key_length, top_k         -> IdxHeads, IdxHeadDim,
-//	                                                      IdxTopK (RoleIdxQB/Proj,
-//	                                                      RoleIdxComp*)
-//	output_group_count, output_lora_rank               -> OGroups, OLoraRank
-//	sqrt(softplus) gating, the selection bias,         -> Flag2ExpertSqrtSoftplus,
-//	  renormalised, a routed scale, one shared expert     RoleExpProbsB, ExpertScale
-//	hash_layer_count: the first blocks select by       -> NHashLayers,
-//	  ffn_gate_tid2eid[token]                             RoleHashExperts
-//	swiglu_clamp_exp/shexp (10 in every block)         -> Flag2SwiGLUClamp
+// Refused: any gate but sqrt-softplus, the renormalisation off, another
+// clamp, and a window that does not cover the HCA rate and two CSA windows
+// (the pending compressor inputs live in the window's cached rows).
 //
-// The gate is refused unless sqrt-softplus (llama.cpp's loader refuses the
-// rest; transformers would honour softmax and sigmoid through ACT2FN, which no
-// published V4 states), and the renormalisation unless on: both routers
-// divide by the sum unconditionally in transformers, so a file stating
-// expert_weights_norm false describes a model nothing runs. The clamp is a
-// literal of the architecture (ds4SwiGLULimit) and another limit is refused.
-//
-// The engine keeps a compressed block's pending compressor inputs in the
-// window's own cached rows, so the window must cover what the compressor
-// still reads: the HCA rate, and two CSA windows (the overlap). DeepSeek V4's
-// own (128 against 128 and 8) does; another is refused by name.
+// The reference-to-container table and the reasons in full:
+// docs/engineering-history/model-correctness.md,
+// "convert/deepseek4.go: deepseek4Config".
 func deepseek4Config(f *meta.File, c *jlm.Config) error {
 	c.Flags2 |= jlm.Flag2SwiGLUClamp | jlm.Flag2ExpertSqrtSoftplus
 	if c.NKVHead != 1 {

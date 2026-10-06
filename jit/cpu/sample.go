@@ -21,29 +21,15 @@ package cpu
 //	AScale   {prevVal, bitcast(prevIdx)}                   (!first only)
 //	Scr      MoETopKConsts()
 //
-// One kernel serves all three uses. The initial pass runs it over the whole
-// vocabulary with Rows segments of K (first, contiguous ids). Each extraction
-// then runs it twice: once over the winner's own segment for that segment's
-// next best (eligible, Cols = the segment's base), and once over the summary
-// (Rows = 1, K = the segment count, ids read from memory) to find which
-// segment holds the next winner.
+// One kernel serves the initial pass over the vocabulary (first, contiguous
+// ids), the rescan of a winner's segment and the sweep of the summary (ids
+// from memory). Eligibility is the MoE router's (topk.go):
+// eligible(e) = v[e] < pv || (v[e] == pv && id[e] > pi), and `first` admits
+// everything but a NaN. An exhausted segment reports (-Inf, INT_MAX); the
+// ragged tail runs the vector body over NaN pads.
 //
-// The eligibility predicate is the MoE router's (topk.go): the keys
-// (value, -id) are totally ordered, so the unused set after a winner (pv, pi)
-// is exactly the keys below it:
-//
-//	eligible(e) = v[e] < pv || (v[e] == pv && id[e] > pi)
-//
-// first bakes the pass with no predecessor, whose predicate `v == v` admits
-// everything but a NaN.
-//
-// A segment with nothing eligible left reports (-Inf, INT_MAX), which loses
-// every tie to a real id, so the summary sweep is total and an exhausted
-// segment is chosen only once all are.
-//
-// The ragged tail runs the vector body with the lanes past the end filled
-// with NaN, as topk.go's does; only the last segment is ragged, but K is a
-// register, so every segment's code handles it.
+// The three uses and the predicate in full: docs/engineering-history/
+// cpu-kernels.md, "jit/cpu/sample.go: EmitSampleSegMax".
 func EmitSampleSegMax(first, idsMem bool) ([]byte, error) {
 	return must("sample_segmax", emitSampleSegMax(first, idsMem))
 }
