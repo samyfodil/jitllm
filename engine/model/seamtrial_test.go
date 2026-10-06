@@ -36,3 +36,18 @@ func TestStreamTrialAdoptsOnlyPastTheMargin(t *testing.T) {
 		t.Fatalf("a dispersed measurement switched the placement (%s)", tu.why)
 	}
 }
+
+// TestStreamTrialTriesEveryArm: the trial's candidates are not a descent. A
+// host that loses leaves the third arm (the experts on the other side) to be
+// tried against the incumbent, and that arm, faster past the margin, wins.
+func TestStreamTrialTriesEveryArm(t *testing.T) {
+	tu := &seamTuner{on: true, trial: true, cands: []int{0, 1, 2}, best: 0, chal: 1, rounds: 3,
+		arms: []trialArm{{93, ""}, {0, ""}, {93, "card"}}}
+	rate := map[int]float64{0: 0.30, 1: 0.20, 2: 0.36}
+	for i := 0; i < 200 && !tu.settled; i++ {
+		tu.observe(nil, rate[tu.armWant()])
+	}
+	if !tu.settled || tu.best != 2 {
+		t.Fatalf("settled %v on arm %d (%s), want arm 2", tu.settled, tu.best, tu.why)
+	}
+}

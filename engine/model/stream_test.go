@@ -343,7 +343,7 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 		if !s.seam.settled {
 			t.Fatal("the stream trial did not settle in 60 tokens")
 		}
-		t.Logf("stream trial settled on %d blocks: %s", s.seam.best, s.seam.why)
+		t.Logf("stream trial settled on %s: %s", s.seam.name(s.seam.best), s.seam.why)
 		s.Close()
 		g.Close()
 	}

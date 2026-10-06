@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"github.com/samyfodil/jitllm/engine/nn"
 	"os"
 	"sort"
 	"time"
@@ -36,6 +37,10 @@ type seamTuner struct {
 	verbose bool
 	why     string // what settled it
 	trial   bool   // the stream trial (initStreamTrial), not the seam tuner
+	// arms and mode are the trial's candidates and the expert choice now in
+	// force ("" for the device's defaults).
+	arms []trialArm
+	mode string
 	// warming and warmLeft skip the tokens just after a migration.
 	warming  bool
 	warmLeft int
@@ -72,7 +77,8 @@ func (s *State) initSeamTuner() {
 }
 
 // initStreamTrial measures a placement that streamed blocks no card could
-// hold (the incumbent) against the host (the one challenger): the seam
+// hold (the incumbent) against the host, and then against the same blocks
+// with their experts on the other side of the bus: the seam
 // tuner's ABBA runs with the migration outside the clock, and the host is
 // adopted only past SeamTuneMargin, so two near-equal answers cannot flap.
 // On Kimi-K3 over eight V100s the two decoded within a few percent of each
@@ -83,12 +89,22 @@ func (s *State) initStreamTrial() {
 		return
 	}
 	full := s.gpuLayers
+	// The arms: the placement made (its experts where the device put them),
+	// the host, and the streamed blocks with their experts on the other side
+	// -- sent to the card if they ran on the host, and the other way round.
+	// Indices into arms; the incumbent is 0.
+	other := "card"
+	if s.m.opt.experts == "card" {
+		other = "host"
+	}
 	s.seam = &seamTuner{
 		on:      true,
 		trial:   true,
-		cands:   []int{full, 0},
-		best:    full,
-		chal:    0,
+		arms:    []trialArm{{blocks: full, experts: s.m.opt.experts}, {blocks: 0, experts: s.m.opt.experts}, {blocks: full, experts: other}},
+		mode:    s.m.opt.experts,
+		cands:   []int{0, 1, 2},
+		best:    0,
+		chal:    1,
 		warmup:  s.m.opt.seamWarmup,
 		perRun:  s.m.opt.seamRun,
 		rounds:  s.m.opt.seamRounds,
@@ -136,7 +152,7 @@ func (s *State) seamStep() {
 	// The clock starts after the migration: counting it would bias every arm
 	// switched to, on the same side of every switch, which ABBA cannot cancel.
 	if !t.counting && !t.warming {
-		if got := s.SetGPULayers(t.armWant()); got != t.armWant() {
+		if !t.place(s, t.armWant()) {
 			// The card would not give us this arm; drop it and settle.
 			t.finish(s, "the device refused the candidate placement")
 			return
@@ -177,7 +193,7 @@ func (t *seamTuner) observe(s *State, rate float64) {
 	q := t.turn % 4
 	t.quad[q] = rate
 	if t.verbose {
-		fmt.Fprintf(os.Stderr, "seam: %d blocks -> %.2f tok/s\n", t.armWant(), rate)
+		fmt.Fprintf(os.Stderr, "seam: %s -> %.2f tok/s\n", t.name(t.armWant()), rate)
 	}
 	t.turn++
 	if q != 3 {
@@ -199,28 +215,90 @@ func (t *seamTuner) observe(s *State, rate float64) {
 		return
 	}
 	if med <= SeamTuneMargin {
-		t.finish(s, fmt.Sprintf("%d blocks is not %.0f%% better (%.3f)", t.chal, (SeamTuneMargin-1)*100, med))
+		why := fmt.Sprintf("%s is not %.0f%% better (%.3f)", t.name(t.chal), (SeamTuneMargin-1)*100, med)
+		// The trial's candidates are not a descent: a losing one leaves the
+		// next to be tried against the same incumbent.
+		if t.trial {
+			if n := t.next(t.chal); n >= 0 {
+				t.chal = n
+				return
+			}
+		}
+		t.finish(s, why)
 		return
 	}
 	t.best = t.chal
-	for i, v := range t.cands {
-		if v == t.best && i+1 < len(t.cands) {
-			t.chal = t.cands[i+1]
-			return
-		}
+	if n := t.next(t.chal); n >= 0 {
+		t.chal = n
+		return
 	}
 	t.finish(s, "no candidate left below the winner")
+}
+
+// next is the candidate after c, skipping the incumbent, or -1.
+func (t *seamTuner) next(c int) int {
+	for i, v := range t.cands {
+		if v != c {
+			continue
+		}
+		for _, w := range t.cands[i+1:] {
+			if w != t.best {
+				return w
+			}
+		}
+	}
+	return -1
+}
+
+// name says what candidate c is: a block count for the seam tuner, an arm
+// for the trial.
+func (t *seamTuner) name(c int) string {
+	if t.trial && c >= 0 && c < len(t.arms) {
+		a := t.arms[c]
+		if a.experts == "" {
+			return fmt.Sprintf("%d blocks", a.blocks)
+		}
+		return fmt.Sprintf("%d blocks, experts on the %s", a.blocks, a.experts)
+	}
+	return fmt.Sprintf("%d blocks", c)
+}
+
+// trialArm is one of the stream trial's placements: how many blocks on the
+// device, and where a streamed block's experts run ("host", "card").
+type trialArm struct {
+	blocks  int
+	experts string
+}
+
+// place puts candidate c in force and reports whether the device gave it:
+// the seam tuner's block count, or the trial's arm -- whose expert choice
+// takes a fresh placement, since a block takes it when it is placed.
+func (t *seamTuner) place(s *State, c int) bool {
+	if !t.trial {
+		return s.SetGPULayers(c) == c
+	}
+	a := t.arms[c]
+	if a.experts != t.mode {
+		em, ok := s.ld.(nn.ExpertModer)
+		if !ok {
+			return false
+		}
+		em.SetExpertMode(a.experts)
+		t.mode = a.experts
+		s.SetGPULayers(0)
+	}
+	return s.SetGPULayers(a.blocks) == a.blocks
 }
 
 func (t *seamTuner) finish(s *State, why string) {
 	t.settled = true
 	t.why = why
 	if t.verbose {
-		fmt.Fprintf(os.Stderr, "seam: settled on %d blocks (%s)\n", t.best, why)
+		fmt.Fprintf(os.Stderr, "seam: settled on %s (%s)\n", t.name(t.best), why)
 	}
 	// nil only in the tuner's own gate, which drives observe without a model.
 	if s != nil {
-		s.SetGPULayers(t.best)
+		t.place(s, t.best)
 	}
 }
 
