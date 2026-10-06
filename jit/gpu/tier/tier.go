@@ -362,8 +362,11 @@ type Config struct {
 	// StreamGroups is how many pieces a streamed block's selection is uploaded
 	// in, so that group g's PCIe transfer overlaps group g+1's file read. 1 is
 	// serial read-then-upload, and is what a host with no PrefetchExperts gets;
-	// see streamBank.fill.
+	// 0 measures it per device (streamtune.go). See streamBank.fill.
 	StreamGroups int
+	// StreamGroupsStart is where the group tuner starts (the container's
+	// figure, format/jlm streamGroupsFor); it is not a pin.
+	StreamGroupsStart int
 	// StreamDirectBytes is the plane size from which a streamed sheet is sent
 	// straight from its host frame rather than gathered; 0 is directSheet. A
 	// field so a gate can force either path on a fixture of any size.
@@ -696,6 +699,9 @@ type Stats struct {
 	// StreamCacheSize is the largest expert cache a block was given, in
 	// sheets: the check that an auto-sized cache is the size intended.
 	StreamCacheSize int
+	// StreamGroupsTuned is the group count the fill tuner holds (0: not
+	// tuning, a stated Config.StreamGroups).
+	StreamGroupsTuned int
 	// AutoMeanBase is the model's mean mixture base GPU.AutoStream was told.
 	AutoMeanBase uint64
 	// StreamPrefetched counts experts the cross-layer prefetch read, and
@@ -990,6 +996,7 @@ func (s *Stats) add(o Stats) {
 	s.StreamCacheMisses += o.StreamCacheMisses
 	s.StreamCacheShort += o.StreamCacheShort
 	s.StreamCacheSize = max(s.StreamCacheSize, o.StreamCacheSize)
+	s.StreamGroupsTuned = max(s.StreamGroupsTuned, o.StreamGroupsTuned)
 	s.AutoMeanBase = max(s.AutoMeanBase, o.AutoMeanBase)
 	s.StreamPrefetched += o.StreamPrefetched
 	s.TStreamPrefetchWait += o.TStreamPrefetchWait
@@ -1224,6 +1231,8 @@ type devTier struct {
 	// placed streamed whatever StreamExperts says, and given its expert cache
 	// after placement (sizeAutoCaches). Under mu.
 	autoStream map[int]int
+	// gtune measures the streamed fill's group count (streamtune.go).
+	gtune *groupTuner
 	// sheetStage is the streamed fill's gather buffer per (matrix, plane);
 	// see streamStage.
 	sheetStage [9][]byte

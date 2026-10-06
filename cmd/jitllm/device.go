@@ -60,7 +60,7 @@ func openDevices(spec string, vram, hostBudget uint64, streamGroups int) (nn.Dev
 		tier.WithHostBudget(hostBudget),
 	}
 	if streamGroups > 0 {
-		base = append(base, tier.WithConfig(func(c *tier.Config) { c.StreamGroups = streamGroups }))
+		base = append(base, tier.WithConfig(func(c *tier.Config) { c.StreamGroupsStart = streamGroups }))
 	}
 	g, err := tier.OpenWith(append(base, gpuOptions()...)...)
 	if err != nil {

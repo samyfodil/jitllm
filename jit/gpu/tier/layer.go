@@ -576,18 +576,11 @@ func (st *streamBank) read(gi int, gr [2]int) {
 	st.rd[gi].err = st.pre(st.want[gr[0]:gr[1]])
 }
 
-// defaultStreamGroups is the knee measured on Qwen3-Next-80B: more groups buy
-// more overlap and cost more per-call PCIe transfers.
-const defaultStreamGroups = 3
-
 // groups splits the selection into contiguous runs so a read can overlap an
 // upload. One group is the unpipelined path and is what a host with no
 // PrefetchExperts gets.
 func (st *streamBank) groups(g *devTier, k int) [][2]int {
-	n := g.StreamGroups
-	if n == 0 {
-		n = defaultStreamGroups
-	}
+	n := g.streamGroups(g.StreamBlocks)
 	if st.pre == nil || n < 2 || k < 2 {
 		st.grp = append(st.grp[:0], [2]int{0, k})
 		return st.grp
@@ -7495,9 +7488,11 @@ func (g *devTier) layersSession(s backend.Session) {
 							}
 						}
 						if err == nil {
+							tf := time.Now()
 							if err = l.stream.fill(g, s, l, p.NExpert); err != nil && l.stream.cached() {
 								l.stream.forget()
 							}
+							g.fillDone(time.Since(tf))
 						}
 						if err == nil && l.stream.cached() {
 							err = s.WriteAt(bs.rsel, 0, u32b(l.stream.slotSel))
