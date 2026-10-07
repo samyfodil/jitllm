@@ -124,11 +124,12 @@ func (r *rec) run(si *submitInfo) error {
 	if err != nil {
 		return err
 	}
-	f := r.fence
-	if err := check(vkWaitForFences(r.c.dev, 1, up(&f), 1, math.MaxUint64), "vkWaitForFences"); err != nil {
+	// The fence's own field, not a copy: a local whose address goes to the
+	// driver escapes, and a warm decode allocated one per submission.
+	if err := check(vkWaitForFences(r.c.dev, 1, up(&r.fence), 1, math.MaxUint64), "vkWaitForFences"); err != nil {
 		return err
 	}
-	return check(vkResetFences(r.c.dev, 1, up(&f)), "vkResetFences")
+	return check(vkResetFences(r.c.dev, 1, up(&r.fence)), "vkResetFences")
 }
 
 // waitAll waits until every queue of the context is idle: what a call made
