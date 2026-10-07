@@ -1259,7 +1259,7 @@ type devTier struct {
 	autoStream map[int]expertMode
 	// hostFns is each session's host side for its hybrid blocks, by block
 	// (hostFor); a session's go when it detaches. Under mu.
-	hostFns map[uint64]map[int]func(sel []uint32, w, in, out []float32) error
+	hostFns map[uint64]map[int]hostSide
 	// ftune measures the streamed fill's knobs (streamtune.go).
 	ftune *fillTune
 	// sheetStage is the streamed fill's gather buffer per (matrix, plane);

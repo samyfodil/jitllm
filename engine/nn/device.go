@@ -252,6 +252,11 @@ type LayerWeights struct {
 	// runs the host's generated kernels over the host's pages; only in and
 	// out cross the bus. nil where the host cannot.
 	HostExperts func(sel []uint32, w, in, out []float32) error
+	// HostExpertsRows is HostExperts over rows of a chunk, expert-major: each
+	// selected expert runs once over the rows that chose it. sel has a row
+	// stride of k+1 (ExpertRank's layout), w of k, in and out of the expert
+	// width.
+	HostExpertsRows func(sel []uint32, w, in, out []float32, rows, k int) error
 }
 
 // SSMWeights are the gated delta rule's tensors.

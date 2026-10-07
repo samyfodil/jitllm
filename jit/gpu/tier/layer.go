@@ -487,6 +487,16 @@ func (st *streamBank) runHostRows(g *devTier, s backend.Session, sel, w, in, out
 			return err
 		}
 	}
+	if hr := g.hostFns[g.cur][st.li].rows; hr != nil {
+		// Expert-major: each chosen expert read once for the chunk.
+		if err := hr(st.hsel, st.hw, st.hin, st.hout, rows, k); err != nil {
+			return err
+		}
+		err := s.WriteAt(out, 0, f32b(st.hout))
+		g.THybrid += time.Since(t0)
+		g.HybridRows += rows
+		return err
+	}
 	host := g.hostFor(st)
 	if host == nil {
 		return fmt.Errorf("tier: this session offered no host side for a hybrid block")
@@ -507,7 +517,14 @@ func (st *streamBank) runHostRows(g *devTier, s backend.Session, sel, w, in, out
 // session never offered one. Never the placing session's: that State may be
 // closed, and its generated code with it. Callers hold g.mu.
 func (g *devTier) hostFor(st *streamBank) func(sel []uint32, w, in, out []float32) error {
-	return g.hostFns[g.cur][st.li]
+	return g.hostFns[g.cur][st.li].one
+}
+
+// hostSide is a session's host side for one hybrid block: a row at a time,
+// and a chunk's rows expert-major.
+type hostSide struct {
+	one  func(sel []uint32, w, in, out []float32) error
+	rows func(sel []uint32, w, in, out []float32, rows, k int) error
 }
 
 // runHost is the hybrid suspension: in (the experts' input, n wide -- the
@@ -2113,12 +2130,12 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 	if w != nil && w.HostExperts != nil {
 		g.mu.Lock()
 		if g.hostFns == nil {
-			g.hostFns = map[uint64]map[int]func(sel []uint32, w, in, out []float32) error{}
+			g.hostFns = map[uint64]map[int]hostSide{}
 		}
 		if g.hostFns[g.cur] == nil {
-			g.hostFns[g.cur] = map[int]func(sel []uint32, w, in, out []float32) error{}
+			g.hostFns[g.cur] = map[int]hostSide{}
 		}
-		g.hostFns[g.cur][li] = w.HostExperts
+		g.hostFns[g.cur][li] = hostSide{one: w.HostExperts, rows: w.HostExpertsRows}
 		g.mu.Unlock()
 	}
 	// Shapes this tier cannot express are declined first and by name (RULE 8a):

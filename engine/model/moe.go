@@ -782,6 +782,65 @@ func (s *State) hostExpertsFor(li int) func(sel []uint32, w, in, out []float32) 
 	return func(sel []uint32, w, in, out []float32) error { return s.hostExperts(li, sel, w, in, out) }
 }
 
+// hostExpertsRowsFor is block li's nn.LayerWeights.HostExpertsRows, nil where
+// hostExpertsFor is.
+func (s *State) hostExpertsRowsFor(li int) func(sel []uint32, w, in, out []float32, rows, k int) error {
+	if s.hostExpertsFor(li) == nil {
+		return nil
+	}
+	return func(sel []uint32, w, in, out []float32, rows, k int) error {
+		return s.hostExpertsRows(li, sel, w, in, out, rows, k)
+	}
+}
+
+// hostExpertsRows is moeBatch's expert-major pass with the device's
+// selections and weights: each expert the chunk chose is read once and run
+// over its rows as one batch (moeBatchExpert), summed into out in ascending
+// expert id, rows ascending -- the order the host's own batched mixture sums.
+func (s *State) hostExpertsRows(li int, sel []uint32, w, in, out []float32, rows, k int) error {
+	c := s.c
+	l := &s.m.layers[li]
+	if k != c.NExpertUsed {
+		return fmt.Errorf("model: block %d: %d routed experts a row, the model routes %d", li, k, c.NExpertUsed)
+	}
+	s.hostOnly = true
+	defer func() { s.hostOnly = false }()
+	if len(s.bsel) < rows*k {
+		s.bsel = make([]int32, rows*k)
+		s.bw = make([]float32, rows*k)
+	}
+	for i := 0; i < rows; i++ {
+		for j := 0; j < k; j++ {
+			s.bsel[i*k+j] = int32(sel[i*(k+1)+j])
+			s.bw[i*k+j] = w[i*k+j]
+		}
+	}
+	s.growMoEBatch(rows)
+	clear(out)
+	for e := 0; e < c.NExpert; e++ {
+		used := false
+		for i := 0; i < rows*k && !used; i++ {
+			used = s.bsel[i] == int32(e)
+		}
+		if !used {
+			continue
+		}
+		one := [1]int32{int32(e)}
+		err := s.m.pageInSelected(li, []uint32{uint32(e)})
+		if err == nil {
+			err = s.m.ensureExperts(li, one[:], &s.expHold)
+		}
+		if err == nil {
+			err = s.moeBatchExpert(l, e, in, out, rows)
+		}
+		s.expHold.release()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // hostExperts is hostExpertsFor's body: the selection put in ascending id
 // with its weights, as moe sums them (the batched path visits the bank in
 // that order), the pages read, and moeFFN over in into out. It is moe() from
