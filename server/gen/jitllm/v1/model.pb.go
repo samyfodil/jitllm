@@ -554,8 +554,8 @@ type LoadModelRequest struct {
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
 	// Optional stable id. Generated when empty.
 	ModelId string `protobuf:"bytes,2,opt,name=model_id,json=modelId,proto3" json:"model_id,omitempty"`
-	// Page budget in bytes. Zero takes the engine's own default, which is a
-	// fraction of the cgroup. A budget that lands one page short of fitting is
+	// Page budget in bytes, pinned. Zero takes a share of the engine's host
+	// budget, divided between the loaded models. A budget that lands one page short of fitting is
 	// a cliff and not a gradient, so this is worth setting deliberately.
 	PageBudgetBytes uint64 `protobuf:"varint,3,opt,name=page_budget_bytes,json=pageBudgetBytes,proto3" json:"page_budget_bytes,omitempty"`
 	// Devices to offer blocks to, in preference order, as DeviceRef ids.

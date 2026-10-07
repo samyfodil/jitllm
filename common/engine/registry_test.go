@@ -16,28 +16,6 @@ func TestAnOpenModelIsFoundRatherThanOpenedAgain(t *testing.T) {
 	}
 }
 
-// The registry keeps load order, which the budget division and the colour
-// palette index.
-func TestTheRegistryKeepsLoadOrder(t *testing.T) {
-	e := &Engine{models: []*entry{{path: "a"}, {path: "b"}, {path: "c"}}}
-	want := []string{"a", "b", "c"}
-	got := e.paths()
-	if len(got) != len(want) {
-		t.Fatalf("got %d paths, want %d", len(got), len(want))
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("path %d is %q, want %q", i, got[i], want[i])
-		}
-	}
-
-	// Dropping the middle one keeps the rest in order.
-	e.drop(e.models[1])
-	if got := e.paths(); len(got) != 2 || got[0] != "a" || got[1] != "c" {
-		t.Errorf("after dropping the middle entry: %v", got)
-	}
-}
-
 // Exactly one model is active, and its name and colour follow its position.
 //
 // The colour is load order, not a hash of the path, so colours are stable

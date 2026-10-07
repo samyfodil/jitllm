@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"github.com/samyfodil/jitllm/engine/model"
 	"os"
 	"strings"
 	"testing"
@@ -63,7 +64,9 @@ func TestRelocationFollowsTheDeviceChoice(t *testing.T) {
 		reply := sh.Store.AppendTurn(session.Turn{Role: session.RoleAssistant})
 		e.Send(session.ChatRequest{Prompt: "Once upon a time", Reply: reply, MaxTokens: 4})
 		pump(t, sh, 90*time.Second, "the turn", func() bool { return !sh.Store.Busy.Get() })
-		if got := e.sess.Relocating(); got != tc.want {
+		var got bool
+		e.inspect(func(st *model.State) { got = st.Relocating() })
+		if got != tc.want {
 			t.Errorf("devices %q: relocation %v after a turn, want %v", tc.spec, got, tc.want)
 		}
 	}
@@ -71,14 +74,14 @@ func TestRelocationFollowsTheDeviceChoice(t *testing.T) {
 
 // A device that cannot be opened must leave nothing that looks loaded.
 //
-// activate closes the running session before it opens the device, so a
-// failure there must not leave Loaded true under the previous header.
+// load closes the running model before it re-opens it on the new device, so
+// a failure there must not leave Loaded true under the previous header.
 func TestAMissingDeviceLeavesNothingLooksLoaded(t *testing.T) {
 	e, sh := loadFor(t, func(st *testStore) { st.DeviceSpec.Set("cpu") })
 	if !sh.Store.Loaded.Get() {
 		t.Fatal("setup: the model did not load on the CPU")
 	}
-	// Re-loading an open model re-activates it, on the device asked for.
+	// Re-loading an open model under another device choice re-opens it there.
 	sh.Store.DeviceSpec.Set("cuda:9")
 	e.Load(modelPath)
 	pump(t, sh, 90*time.Second, "the switch to fail", func() bool {
@@ -93,8 +96,10 @@ func TestAMissingDeviceLeavesNothingLooksLoaded(t *testing.T) {
 	if p := sh.Store.Problem.Get(); !strings.Contains(p.Title, "device") {
 		t.Errorf("the failure was not reported as a device problem: %+v", p)
 	}
-	if len(sh.Store.Models.Get()) != 1 || sh.Store.Active.Get() != "" {
-		t.Errorf("the opened model should be listed and inactive: %+v active %q", sh.Store.Models.Get(), sh.Store.Active.Get())
+	// The model was closed to re-open it on the new device, which failed: it
+	// must not be listed as though it were still open.
+	if len(sh.Store.Models.Get()) != 0 || sh.Store.Active.Get() != "" {
+		t.Errorf("nothing should be listed or active: %+v active %q", sh.Store.Models.Get(), sh.Store.Active.Get())
 	}
 }
 

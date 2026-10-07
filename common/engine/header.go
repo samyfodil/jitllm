@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"github.com/samyfodil/jitllm/engine/model"
 	"regexp"
 	"strings"
 
@@ -90,7 +91,7 @@ func (e *Engine) headerNow() header {
 	h := header{
 		Name:     strings.TrimSuffix(short(e.path), ".jlm"),
 		Layers:   c.NLayer,
-		OnDevice: e.sess.GPULayers(),
+		OnDevice: e.deviceBlocks(),
 		Context:  e.sessMax,
 		Asked:    e.st.MaxSeq.Get(),
 		Chat:     e.m.ChatCapable(),
@@ -112,4 +113,10 @@ func placedOn(g *tier.GPU) (string, int) {
 		}
 	}
 	return name, n
+}
+
+// deviceBlocks is how many of the chat session's blocks a device holds.
+func (e *Engine) deviceBlocks() (n int) {
+	e.inspect(func(st *model.State) { n = st.GPULayers() })
+	return n
 }

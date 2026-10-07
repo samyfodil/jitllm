@@ -253,23 +253,16 @@ func (s *PlacementService) SetPageBudget(ctx context.Context, req *connect.Reque
 	if err != nil {
 		return nil, connectErr(err)
 	}
-	lm.mu.Lock()
-	// The total is kept, not only applied: every session created afterwards
-	// re-divides it (Engine.applyPageBudget), and dividing the load's budget
-	// instead would quietly undo this call at the next generate.
-	lm.budget = req.Msg.BudgetBytes
-	// The request names a total. What the pager gets is that total less the
-	// never-paged dense region (LoadedModel.hostWeightShare) and less what a
-	// tier on the host's own memory holds (Model.SetPageBudget). Residency.budget reports what
-	// was actually applied, so the response is never a repeat of the request.
-	// Zero asks for no limit; any other total is at least one page's worth
-	// (pagerBudget), never the pager's zero.
-	budget := uint64(0)
-	if req.Msg.BudgetBytes > 0 {
-		budget = pagerBudget(lm.hostWeightShare(req.Msg.BudgetBytes))
+	// The request names a total and pins it: the other models divide what is
+	// left (Engine.Pin), and every session created afterwards re-divides it
+	// (Engine.applyPageBudget). What the pager gets is that total less the
+	// never-paged dense region and less what a tier on the host's own memory
+	// holds (Model.SetPageBudget); Residency.budget reports what was actually
+	// applied, so the response is never a repeat of the request. Zero releases
+	// the pin back to the engine's division of the host budget.
+	if err := s.E.Pin(lm.id, req.Msg.BudgetBytes); err != nil {
+		return nil, connectErr(err)
 	}
-	lm.m.SetPageBudget(budget)
-	lm.mu.Unlock()
 	res := pbResidency(lm)
 	return connect.NewResponse(&v1.SetPageBudgetResponse{Residency: res, Fits: res.Fits}), nil
 }
