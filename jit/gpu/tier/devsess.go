@@ -59,6 +59,10 @@ type devSess struct {
 	// the session's submissions take the device's Session.
 	q      backend.Queue
 	qTried bool
+	// qd is the device as a backend.Queued, asserted once with the queue:
+	// the assertion on every submission filled the runtime's type-assertion
+	// cache inside a timed decode, one allocation the first time.
+	qd backend.Queued
 	// bare is the session's view with no lane, for a call that reads no
 	// scratch (reserveKV, trimKV): such a call must not cost a clone.
 	bare *devTier
@@ -296,7 +300,7 @@ func (g *devTier) subUnlock(took bool) {
 // queue is made under g.mu by the caller (sessQueue).
 func (g *devTier) runSub(f func(backend.Session)) {
 	if g.q != nil {
-		g.dev.(backend.Queued).SessionOn(g.q, f)
+		g.qd.SessionOn(g.q, f)
 		return
 	}
 	g.dev.Session(f)
@@ -319,7 +323,7 @@ func (g *devTier) sessQueue() {
 		g.LastErr = "no queue of its own for a session: " + err.Error()
 		return
 	}
-	g.q = q
+	g.q, g.qd = q, qd
 }
 
 // closeQueue closes the session's queue. Callers hold g.mu, with no

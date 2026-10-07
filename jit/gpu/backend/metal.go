@@ -272,14 +272,38 @@ type mtlSession struct {
 	mb []*metal.Buf
 }
 
-func (s *mtlSession) Write(b Buf, p []byte) error { return b.Write(p) }
+func (s *mtlSession) Write(b Buf, p []byte) error { return s.WriteAt(b, 0, p) }
 
-func (s *mtlSession) WriteAt(b Buf, off int, p []byte) error { return b.WriteAt(off, p) }
+// WriteAt on a queued session waits for that queue's work alone: the memory
+// is shared with the device, and only this session's earlier submissions can
+// be reading its buffers. Waiting for every queue, as a write outside any
+// session must, would make one session's writes a barrier for all of them.
+func (s *mtlSession) WriteAt(b Buf, off int, p []byte) error {
+	if s.q == nil {
+		return b.WriteAt(off, p)
+	}
+	m := b.(*mtlBuf).b.Bytes()
+	if off < 0 || off+len(p) > len(m) {
+		return fmt.Errorf("metal: writing %d bytes at offset %d of a %d-byte buffer",
+			len(p), off, len(m))
+	}
+	if err := s.q.Wait(); err != nil {
+		return err
+	}
+	copy(m[off:], p)
+	return nil
+}
 
 func (s *mtlSession) Read(b Buf, p []byte) error {
 	// A read needs everything encoded so far to have run.
 	if err := s.Sync(); err != nil {
 		return err
+	}
+	if s.q != nil {
+		// Sync waited for this queue's work, which is what wrote it.
+		countRead(len(p))
+		copy(p, b.(*mtlBuf).b.Bytes())
+		return nil
 	}
 	return b.Read(p)
 }

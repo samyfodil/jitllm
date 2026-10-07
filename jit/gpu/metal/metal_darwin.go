@@ -227,7 +227,7 @@ type Ctx struct {
 	// queues (NewQueue) are others, each with its own pending list, so a
 	// session waits for its own work alone. qs is every queue not closed.
 	sub
-	qmu sync.Mutex
+	qmu sync.RWMutex
 	qs  map[*Queue]bool
 
 	// unified is -hasUnifiedMemory, read once: it is a property of the
@@ -507,9 +507,11 @@ func (c *Ctx) Residency() error {
 			"addResidencySet: -- the set would attach to nothing")
 	}
 	send1id(c.queue, sel("addResidencySet:"), set)
-	for _, q := range c.liveQueues() {
+	c.qmu.RLock()
+	for q := range c.qs {
 		send1id(q.s.queue, sel("addResidencySet:"), set)
 	}
+	c.qmu.RUnlock()
 	c.resSet = set
 	c.resDirty = true
 	return nil
@@ -640,9 +642,14 @@ func (q *sub) hold(cb ID) {
 // It is cheap when nothing is outstanding: it is on every host read's path.
 func (c *Ctx) Wait() error {
 	err := c.sub.wait()
-	for _, q := range c.liveQueues() {
+	// Read-held across the waits, not copied out: Wait is on every write's
+	// and read's path outside a session, and a snapshot was an allocation per
+	// call. Close and NewQueue wait for it.
+	c.qmu.RLock()
+	for q := range c.qs {
 		q.s.settled()
 	}
+	c.qmu.RUnlock()
 	return err
 }
 
@@ -795,10 +802,8 @@ func (c *Ctx) Copy(dst *Buf, dstOff int, src *Buf, srcOff, n int) error {
 	}
 	// The context's queue orders the blit after its own work; a session
 	// queue's runs apart, so it is waited for first.
-	if len(c.liveQueues()) > 0 {
-		if err := c.Wait(); err != nil {
-			return err
-		}
+	if err := c.Wait(); err != nil {
+		return err
 	}
 	cb := send0(c.queue, selCmdBuf)
 	if cb == 0 {
@@ -1045,15 +1050,4 @@ func (q *Queue) release() {
 		send0(q.s.queue, sel("release"))
 		q.s.queue = 0
 	}
-}
-
-// liveQueues is every queue not closed, as a snapshot.
-func (c *Ctx) liveQueues() []*Queue {
-	c.qmu.Lock()
-	defer c.qmu.Unlock()
-	out := make([]*Queue, 0, len(c.qs))
-	for q := range c.qs {
-		out = append(out, q)
-	}
-	return out
 }

@@ -253,6 +253,18 @@ func stepAllocs(t *testing.T, m *Model, g *tier.GPU, mode stepMode) {
 	for k := range warm {
 		step(k)
 	}
+	// The placement is checked again after the warm-up: a State whose
+	// history outgrew what the card had left hands its blocks home
+	// (SetRelocate), which is the answer a too-small card gives, not a
+	// failure of the step -- but it is said, with what moved.
+	if mode != stepSolo {
+		for k, r := range runs {
+			if err := r.State.StepRefusal(); err != nil && r.State.Relocations() > 0 {
+				t.Skipf("CARD TOO SMALL after the warm-up: run %d moved %d block(s) home (%v), so the "+
+					"step cannot be joint -- this arm proved nothing", k, r.State.Relocations(), err)
+			}
+		}
+	}
 	if err := prefaultExperts(m); err != nil {
 		t.Fatal(err)
 	}
@@ -281,8 +293,15 @@ func stepAllocs(t *testing.T, m *Model, g *tier.GPU, mode stepMode) {
 			w = 0
 		}
 		if got := d1[i].SessionRows - d0[i].SessionRows; got != w {
-			t.Fatalf("device %d (%d blocks) stepped %d row(s) across sessions, want %d: the arm did not run the step it names (%v)",
-				i, placed[i], got, w, runs[0].State.StepRefusal())
+			why := make([]string, len(runs))
+			for k, r := range runs {
+				why[k] = fmt.Sprint(r.State.StepRefusal())
+				if k > 0 && r.State.ldCand != runs[0].State.ldCand {
+					why[k] += " (another device candidate than run 0's)"
+				}
+			}
+			t.Fatalf("device %d (%d blocks) stepped %d row(s) across sessions, want %d: the arm did not run "+
+				"the step it names; each run's refusal: %v", i, placed[i], got, w, why)
 		}
 	}
 	// An AltUp model's head reads the streams' mean on the host (altup.go),

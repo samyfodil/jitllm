@@ -173,7 +173,7 @@ func TestSessionsStepAtOnce(t *testing.T) {
 	defer m.Close()
 	prompts := atOncePrompts(m)
 	const seq = 256
-	for _, spec := range []string{"cuda:0", "vulkan:0", "vulkan:1"} {
+	for _, spec := range []string{"cuda:0", "vulkan:0", "vulkan:1", "metal"} {
 		t.Run(spec, func(t *testing.T) {
 			g := atOnceTier(t, spec, nil)
 			var alone [2]atOnceRun
@@ -228,7 +228,7 @@ func TestSessionsPageAtOnce(t *testing.T) {
 	defer m.Close()
 	prompts := atOncePrompts(m)
 	const seq, gen = 256, 24
-	for _, spec := range []string{"cuda:0", "vulkan:0"} {
+	for _, spec := range []string{"cuda:0", "vulkan:0", "metal"} {
 		t.Run(spec, func(t *testing.T) {
 			g := atOnceTier(t, spec, nil)
 			for li := range m.Cfg.NLayer {
@@ -331,7 +331,7 @@ func TestSessionsEvictAtOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	for _, spec := range []string{"cuda:0", "vulkan:0"} {
+	for _, spec := range []string{"cuda:0", "vulkan:0", "metal"} {
 		t.Run(spec, func(t *testing.T) {
 			turns := evictAtOnce(t, m, spec, false)
 			both := evictAtOnce(t, m, spec, true)
