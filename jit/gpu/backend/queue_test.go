@@ -15,9 +15,9 @@ import (
 // on one device at the same time. Each launches the SAME kernel with its own
 // buffers and inputs, so a launch that took the other queue's arguments, or a
 // read that was not ordered after its own queue's launch, answers the other
-// queue's number. The kernel is one block of a long dependent chain, so two of
-// them fit on the device together: on queues that overlap, both take about as
-// long as one; serialised, twice as long.
+// queue's number, and the two sessions' bodies must overlap in time, which
+// one lock across them makes impossible. How much the device work overlaps is
+// a rate, not an answer: bench.TestQueuesOverlapOnTheDevice holds it (RULE 4).
 func TestQueuesRunSessionsAtOnce(t *testing.T) {
 	gpuLock(t)
 	devs := backend.Open()
@@ -144,25 +144,10 @@ func queuesAtOnce(t *testing.T, d backend.Device, qd backend.Queued) {
 		return nil
 	}
 
-	aloneRun := func() time.Duration {
-		start := time.Now()
-		for r := range rounds {
-			if err := run(0, r); err != nil {
-				t.Fatal(err)
-			}
-		}
-		return time.Since(start)
+	if err := run(0, 0); err != nil { // compile and warm
+		t.Fatal(err)
 	}
-	// Warm the clocks before anything is timed: a laptop GPU ramps for tens
-	// of milliseconds, and the first arm would carry it.
-	for range 3 {
-		aloneRun()
-	}
-	a1 := aloneRun()
-
-	// Each session body's span, to show they overlapped: serialised, no two do.
 	timing = true
-	start := time.Now()
 	var wg sync.WaitGroup
 	for k := range lanes {
 		wg.Add(1)
@@ -177,10 +162,7 @@ func queuesAtOnce(t *testing.T, d backend.Device, qd backend.Queued) {
 		}(k)
 	}
 	wg.Wait()
-	both := time.Since(start)
 	timing = false
-	alone := min(a1, aloneRun())
-	t.Logf("%d rounds on one queue %v, on two at once %v (%.2fx)", rounds, alone, both, float64(both)/float64(alone))
 
 	overlapped := 0
 	for _, a := range spans[0] {
@@ -192,18 +174,5 @@ func queuesAtOnce(t *testing.T, d backend.Device, qd backend.Queued) {
 	}
 	if overlapped == 0 {
 		t.Fatal("no session on one queue overlapped one on the other: they ran one after another")
-	}
-	// Serialised, two queues' rounds take twice one's; overlapped, about one.
-	// CUDA streams of one context run at once. Whether a Vulkan driver runs two
-	// queues' -- or two submissions' to one queue -- dispatches at once is its
-	// own: NVIDIA's does neither (2.00x both ways, the queues time-sliced),
-	// AMD's compute-only queues are its async compute. There the bar is that
-	// queues cost nothing over one after another, and the ratio is logged.
-	limit := alone * 3 / 2
-	if d.API() != "ptx" {
-		limit = alone * 11 / 5
-	}
-	if both > limit {
-		t.Fatalf("two queues took %v against one's %v: their sessions did not run at once", both, alone)
 	}
 }

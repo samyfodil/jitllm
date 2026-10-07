@@ -2,7 +2,6 @@ package model
 
 import (
 	"slices"
-	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -212,61 +211,6 @@ func TestSessionsStepAtOnce(t *testing.T) {
 					"were serialised")
 			}
 		})
-	}
-}
-
-// TestSessionsOverlapOnCUDA measures what TestSessionsStepAtOnce only
-// selects: two sessions decoding at once on CUDA take clearly less than twice
-// the wall time of one alone. stories15M's decode leaves the card mostly idle
-// between its launches, which two streams fill. The arms alternate round by
-// round in one process, and the median of the per-round ratios is what is
-// held (RULE 2); it is its own test, so a slow round fails nothing but this
-// (RULE 4).
-func TestSessionsOverlapOnCUDA(t *testing.T) {
-	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer m.Close()
-	prompts := atOncePrompts(m)
-	// stories15M's context is 128 positions, so every round places fresh
-	// States and times their decode alone.
-	const rounds, n, warm = 10, 96, 2
-	g := atOnceTier(t, "cuda:0", nil)
-	seq := max(len(prompts[0]), len(prompts[1])) + n + 2
-	var ratios []float64
-	for r := range rounds + warm {
-		a, na := atOnceState(t, m, g, seq, prompts[0])
-		var solo atOnceRun
-		t0 := time.Now()
-		if err := solo.decode(a, na, n); err != nil {
-			t.Fatal(err)
-		}
-		one := time.Since(t0)
-		a.Close()
-		a, na = atOnceState(t, m, g, seq, prompts[0])
-		b, nb := atOnceState(t, m, g, seq, prompts[1])
-		// One step untimed: the second session's lane is built at its first
-		// step beside the first, and given back when a session detaches.
-		w := atOnce(t, []*State{a, b}, []int32{na, nb}, 1)
-		na, nb = w[0].ids[0], w[1].ids[0]
-		t0 = time.Now()
-		atOnce(t, []*State{a, b}, []int32{na, nb}, n)
-		both := time.Since(t0)
-		a.Close()
-		b.Close()
-		if r >= warm {
-			ratios = append(ratios, float64(both)/float64(one))
-		}
-	}
-	sort.Float64s(ratios)
-	med := ratios[len(ratios)/2]
-	q1, q3 := ratios[len(ratios)/4], ratios[3*len(ratios)/4]
-	t.Logf("%s: %d tokens of two sessions at once against one alone, per round: median %.2fx "+
-		"(IQR %.2f-%.2f) %v", g.Name(), n, med, q1, q3, ratios)
-	// Serialised, two sessions' steps take about twice one's.
-	if med >= 1.6 {
-		t.Fatalf("two sessions at once took %.2fx one alone: their submissions did not overlap", med)
 	}
 }
 
