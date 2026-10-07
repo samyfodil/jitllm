@@ -563,7 +563,7 @@ func (g *devTier) groupedMV(m mv, bank, np int) (backend.Kernel, bool) {
 // rin is the router's input rows: bs.h, where the experts read, for every
 // mixture but Gemma 4's (nn.LayerPlan.DenseMoE), whose router has a norm of
 // its own.
-func (g *devTier) emitGroupedMoE(s backend.Session, lc *launcher, bs *blockScratch, l *layer, rows, valid int,
+func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs *blockScratch, l *layer, rows, valid int,
 	rin, ein, eout backend.Buf, errp *error) {
 	m, p := bs.mg, &bs.p
 	ew := p.ExpWidth()
@@ -620,7 +620,7 @@ func (g *devTier) emitGroupedMoE(s backend.Session, lc *launcher, bs *blockScrat
 			valid = rows
 		}
 		if *errp == nil {
-			*errp = l.stream.runHostRows(g, s, m.rsel, m.rw, ein, eout, ew, m.k, valid)
+			*errp = l.stream.runHostRows(sid, g, s, m.rsel, m.rw, ein, eout, ew, m.k, valid)
 		}
 		if *errp == nil {
 			g.HybridRuns++

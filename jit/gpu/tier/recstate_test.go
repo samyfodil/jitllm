@@ -30,10 +30,10 @@ func TestRecurrentStateIsChargedAndReturned(t *testing.T) {
 
 	l := &layer{}
 	used0, bufs0 := dt.used, d.bufs
-	if !dt.addSessionRec(l, p) {
+	if !dt.addSessionRec(0, l, p) {
 		t.Fatalf("addSessionRec declined: %s", dt.LastErr)
 	}
-	if l.recOf(dt.cur) == nil {
+	if l.recOf(0) == nil {
 		t.Fatal("no recurrent pair was recorded for the session")
 	}
 	if l.pool == nil {
@@ -85,10 +85,10 @@ func TestRecurrentStateIsChargedAndReturned(t *testing.T) {
 	// A block with no recurrence takes nothing.
 	l2 := &layer{}
 	used1 := dt.used
-	if !dt.addSessionRec(l2, pagePlan()) {
+	if !dt.addSessionRec(0, l2, pagePlan()) {
 		t.Fatalf("addSessionRec declined a dense block: %s", dt.LastErr)
 	}
-	if l2.recOf(dt.cur) != nil || dt.used != used1 {
+	if l2.recOf(0) != nil || dt.used != used1 {
 		t.Fatal("a dense block was given recurrent state")
 	}
 }
@@ -151,7 +151,7 @@ func TestRangeParityIsTheRangesOwn(t *testing.T) {
 	}
 	par := func(lo, hi int) parityMask {
 		t.Helper()
-		m, ok := dt.rangeParity(lo, hi)
+		m, ok := dt.rangeParity(0, lo, hi)
 		if !ok {
 			t.Fatalf("[%d,%d) is too long to key", lo, hi)
 		}

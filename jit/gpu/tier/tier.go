@@ -1369,10 +1369,6 @@ type devTier struct {
 	// (the run's start index, or "a linear block is placed") are wrong in one
 	// direction or the other.
 	recSteps int
-	// cur is the session whose call is running on this device. Every
-	// per-sequence lookup keys on it, and session.go sets it under busy for
-	// one call. Zero is the implicit session of a caller that never attached.
-	cur uint64
 	// busy serialises calls from different sessions on this device, because
 	// the scratch (g.bs, g.bbs and their geometry sets) is still one per device. See
 	// docs/design/device-sessions.md.
@@ -1516,17 +1512,16 @@ type devTier struct {
 	// uploaded once and never paged.
 	rawCap uint64
 	unks   map[unpackKey]backend.Kernel
-	// kvCap is the CURRENT session's position capacity: how many positions its
-	// KV buffers hold and what every kernel in g.bs bakes as its stride and
-	// score-row width. It is the session's, not the device's: a batch's
-	// nseq*maxSeq or one long conversation grows its own caches and no one
-	// else's, and switchTo swaps it, with the scratch built for it, when the
-	// device changes session.
+	// kvCap is the scratch's position capacity: what every kernel in g.bs
+	// bakes as its stride and score-row width. Every session shares the one
+	// scratch, so it grows toward the longest context any session asked for
+	// (maxSeqAsked); the histories themselves are paged and are each
+	// session's own.
 	//
 	// It starts at one KV page and doubles, so a session costs the positions
 	// it reached rather than the full context the caller asked for.
 	kvCap int
-	// maxSeqAsked is the context the current session asked for: the ceiling
+	// maxSeqAsked is the longest context any session asked for: the ceiling
 	// kvCap grows toward and never past.
 	maxSeqAsked int
 	// paged is set by the first text plan: every attention history is
@@ -1864,14 +1859,14 @@ const mvSample = 64
 
 // Callers hold g.mu: this is one more test inside the lock MatVec already takes,
 // not a second acquisition.
-func (g *devTier) mvPays(bytes int) bool {
+func (g *devTier) mvPays(sid uint64, bytes int) bool {
 	// The sample is per session, not per device: latched per device, the
 	// verdict depended on how many matvecs the device had been offered since
 	// it opened, so two States on one tier computed the same token with
 	// different kernels (model.TestHybridSecondSessionMatchesTheFirst). Per
 	// session every State samples the same weights in the same order and
 	// reaches the same verdict, and keeps it (TestMVPaysDoesNotDrift).
-	mv := g.mvFor(g.cur)
+	mv := g.mvFor(sid)
 	if mv.verdict == 0 {
 		mv.seen += uint64(bytes)
 		mv.offers++
@@ -2207,14 +2202,14 @@ const (
 	failed           // this card could not compile or could not launch
 )
 
-// MatVec implements nn.Device for one device. It returns false for anything it
-// cannot serve, and the caller then runs the CPU path unchanged. GPU.MatVec is
-// what a caller with several devices uses.
+// MatVec implements nn.Device for one device, for the zero session. It
+// returns false for anything it cannot serve, and the caller then runs the CPU
+// path unchanged. GPU.MatVec is what a caller with several devices uses.
 func (g *devTier) MatVec(out []float32, t quant.Type, w []byte, x []float32, nrows, k int) bool {
-	return g.matVec(out, t, w, x, nrows, k) == served
+	return g.matVec(0, out, t, w, x, nrows, k) == served
 }
 
-func (g *devTier) matVec(out []float32, t quant.Type, w []byte, x []float32, nrows, k int) decline {
+func (g *devTier) matVec(sid uint64, out []float32, t quant.Type, w []byte, x []float32, nrows, k int) decline {
 	q, ok := quantOf(t)
 	if !ok || k%q.Elems() != 0 || nrows <= 0 || len(w) == 0 {
 		g.mu.Lock()
@@ -2227,7 +2222,7 @@ func (g *devTier) matVec(out []float32, t quant.Type, w []byte, x []float32, nro
 	// placements slower than no device at all.
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if !g.mvPays(len(w)) {
+	if !g.mvPays(sid, len(w)) {
 		return tooSmall
 	}
 

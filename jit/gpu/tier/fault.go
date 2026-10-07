@@ -66,7 +66,7 @@ func (g *devTier) injectedFail() bool {
 //	          lanes: two subgroups on one item, where Metal runs the width
 //	          it is given
 //	"session" every row of a step across sessions reads and writes the
-//	          current session's pages, not its own session's
+//	          calling session's pages, not its own session's
 //	"passclip" a prefill pass reads every key, not its own: each key counts
 //	          once per pass
 //	"winrelease" a windowed layer releases the page its window starts in,

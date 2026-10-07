@@ -209,7 +209,12 @@ func (g *GPU) Reserve(maxRows, maxK int) bool {
 	return ok
 }
 
-// MatVec serves one matvec, asking each device in turn.
+// MatVec is matVec for the zero session: a caller that never attached.
+func (g *GPU) MatVec(out []float32, t quant.Type, w []byte, x []float32, nrows, k int) bool {
+	return g.matVec(0, out, t, w, x, nrows, k)
+}
+
+// matVec serves one matvec, asking each device in turn.
 //
 // noKernel and tooSmall are the same answer on every device (kernels.MatVec is
 // device-independent, and mvPays judges the model, not a card), so they stop
@@ -217,9 +222,9 @@ func (g *GPU) Reserve(maxRows, maxK int) bool {
 //
 // The walk is not round-robin: prepare() skips the activation upload when x is
 // unchanged, per device, and the first device that accepts a tensor keeps it.
-func (g *GPU) MatVec(out []float32, t quant.Type, w []byte, x []float32, nrows, k int) bool {
+func (g *GPU) matVec(sid uint64, out []float32, t quant.Type, w []byte, x []float32, nrows, k int) bool {
 	for _, d := range g.devs {
-		switch d.matVec(out, t, w, x, nrows, k) {
+		switch d.matVec(sid, out, t, w, x, nrows, k) {
 		case served:
 			return true
 		case noKernel, tooSmall:
@@ -254,7 +259,12 @@ func (g *GPU) next() *devTier {
 	return g.devs[g.cur]
 }
 
-// PrepLayer offers block li to each device in turn and takes the first that
+// PrepLayer is prepLayer for the zero session: a caller that never attached.
+func (g *GPU) PrepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool {
+	return g.prepLayer(0, li, p, w)
+}
+
+// prepLayer offers block li to each device in turn and takes the first that
 // accepts.
 //
 // A device's blocks form one contiguous run. The residual never returns to the
@@ -271,7 +281,7 @@ func (g *GPU) next() *devTier {
 // only when none has room, lets one of them page. The other order would have
 // the fastest card page the whole model through two slots while the next card
 // sat empty: the same tokens at a much worse rate.
-func (g *GPU) PrepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool {
+func (g *GPU) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights) bool {
 	done, ok := g.admit(p.Model, fmt.Sprintf("block %d", li))
 	if !ok {
 		return false
@@ -334,7 +344,7 @@ func (g *GPU) PrepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool {
 			d.mu.Lock()
 			before := d.used
 			d.mu.Unlock()
-			if !d.prepLayer(li, p, w, mayPage) {
+			if !d.prepLayer(sid, li, p, w, mayPage) {
 				continue
 			}
 			g.mu.Lock()
@@ -821,10 +831,15 @@ func (g *GPU) device(name string) (*devTier, error) {
 		"a placement names the devices -devices named", name, have)
 }
 
-// PrepLayerOn offers block li to the named device alone: an explicit placement
+// PrepLayerOn is prepLayerOn for the zero session: a caller that never attached.
+func (g *GPU) PrepLayerOn(name string, li int, p *nn.LayerPlan, w *nn.LayerWeights) (bool, error) {
+	return g.prepLayerOn(0, name, li, p, w)
+}
+
+// prepLayerOn offers block li to the named device alone: an explicit placement
 // rather than the router's choice. False means the device declined (its budget,
 // or a graph it does not run); an error means no such device is attached.
-func (g *GPU) PrepLayerOn(name string, li int, p *nn.LayerPlan, w *nn.LayerWeights) (bool, error) {
+func (g *GPU) prepLayerOn(sid uint64, name string, li int, p *nn.LayerPlan, w *nn.LayerWeights) (bool, error) {
 	d, err := g.device(name)
 	if err != nil {
 		return false, err
@@ -842,7 +857,7 @@ func (g *GPU) PrepLayerOn(name string, li int, p *nn.LayerPlan, w *nn.LayerWeigh
 	// device already, prepLayer only adds this session's history.)
 	if old != nil && old != d {
 		old.mu.Lock()
-		shared := old.sharedBeyond(li, old.cur)
+		shared := old.sharedBeyond(li, sid)
 		old.mu.Unlock()
 		if shared {
 			return false, fmt.Errorf("tier: block %d is on %s and another session is using it, "+
@@ -850,7 +865,7 @@ func (g *GPU) PrepLayerOn(name string, li int, p *nn.LayerPlan, w *nn.LayerWeigh
 		}
 	}
 	for _, mayPage := range [2]bool{false, true} {
-		if d.prepLayer(li, p, w, mayPage) {
+		if d.prepLayer(sid, li, p, w, mayPage) {
 			g.mu.Lock()
 			g.own[li], g.geo[li] = d, geoOf(p)
 			g.split = g.split || p.GeomSplit
@@ -1002,15 +1017,20 @@ func (g *GPU) runsInto(out []run, lo, hi int) ([]run, bool) {
 	return out, true
 }
 
-// Layers runs blocks [lo, hi) as one submission per device. The residual
+// Layers is layersFor for the zero session: a caller that never attached.
+func (g *GPU) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
+	return g.layersFor(0, lo, hi, pos, n, x, cs, csSWA, head)
+}
+
+// layersFor runs blocks [lo, hi) as one submission per device. The residual
 // crosses the host at every change of device (no peer-to-peer copies are
 // attempted); PrepLayer's contiguity rule keeps that at (devices - 1).
 //
 // The projection rides the last submission when it is on that device, which
 // is the placement PrepHead makes; elsewhere it becomes its own submission, one
 // more crossing and still worth it for the densest unit of a large model.
-func (g *GPU) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
-	ok := g.layersCall(lo, hi, pos, n, x, cs, csSWA, head)
+func (g *GPU) layersFor(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
+	ok := g.layersCall(sid, lo, hi, pos, n, x, cs, csSWA, head)
 	// A refusal before any device ran leaves the head device's promise
 	// unconsumed; it lives for one call (devTier.layersCall).
 	g.mu.Lock()
@@ -1054,7 +1074,7 @@ func (d *devTier) nonCausalAt(li int) bool {
 // Each piece's rows are their own slice of x, and a run takes its pieces in
 // order, so every piece finds the history of the pieces before it on its
 // device. The head rides the last piece through the last run.
-func (g *GPU) pipeline(rs []run, pos, n int, x, cs, csSWA []float32, tail *nn.Head) bool {
+func (g *GPU) pipeline(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32, tail *nn.Head) bool {
 	e, r := len(x)/n, len(cs)/n
 	rw := 0
 	if len(csSWA) > 0 {
@@ -1085,7 +1105,7 @@ func (g *GPU) pipeline(rs []run, pos, n int, x, cs, csSWA []float32, tail *nn.He
 						sw = csSWA[lo*rw : (lo+cnt)*rw]
 					}
 					c0, c1 := rn.tables(cs[lo*r:(lo+cnt)*r], sw)
-					ok = rn.dev.Layers(rn.lo, rn.hi, pos+lo, cnt, x[lo*e:(lo+cnt)*e], c0, c1, h)
+					ok = rn.dev.layersFor(sid, rn.lo, rn.hi, pos+lo, cnt, x[lo*e:(lo+cnt)*e], c0, c1, h)
 					if ok {
 						rn.dev.mu.Lock()
 						rn.dev.Stats.PipelinePieces++
@@ -1106,7 +1126,7 @@ func (g *GPU) pipeline(rs []run, pos, n int, x, cs, csSWA []float32, tail *nn.He
 // pieces is pipeline in order: each batchWidth piece of the chunk through
 // every run before the next piece starts, the head on the last piece of the
 // last run.
-func (g *GPU) pieces(rs []run, pos, n int, x, cs, csSWA []float32, tail *nn.Head) bool {
+func (g *GPU) pieces(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32, tail *nn.Head) bool {
 	e, r := len(x)/n, len(cs)/n
 	rw := 0
 	if len(csSWA) > 0 {
@@ -1124,7 +1144,7 @@ func (g *GPU) pieces(rs []run, pos, n int, x, cs, csSWA []float32, tail *nn.Head
 				h = tail
 			}
 			c0, c1 := rn.tables(cs[lo*r:(lo+cnt)*r], sw)
-			if !rn.dev.Layers(rn.lo, rn.hi, pos+lo, cnt, x[lo*e:(lo+cnt)*e], c0, c1, h) {
+			if !rn.dev.layersFor(sid, rn.lo, rn.hi, pos+lo, cnt, x[lo*e:(lo+cnt)*e], c0, c1, h) {
 				return false
 			}
 		}
@@ -1132,7 +1152,7 @@ func (g *GPU) pieces(rs []run, pos, n int, x, cs, csSWA []float32, tail *nn.Head
 	return true
 }
 
-func (g *GPU) layersCall(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
+func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
 	// The runs slice is g.runBuf, taken for the call so a decode token
 	// allocates none; a concurrent call finds it taken and makes its own.
 	g.mu.Lock()
@@ -1155,7 +1175,7 @@ func (g *GPU) layersCall(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.He
 		if head == nil {
 			return true
 		}
-		return hd.Layers(lo, hi, pos, n, x, cs, csSWA, head)
+		return hd.layersFor(sid, lo, hi, pos, n, x, cs, csSWA, head)
 	}
 	tail := head
 	if head != nil && (rs[len(rs)-1].dev != hd || rs[len(rs)-1].geo != 0) {
@@ -1173,20 +1193,20 @@ func (g *GPU) layersCall(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.He
 		// The pieces go one after another: two runs of one device at two
 		// geometries share that device's tier, which the pipeline would drive
 		// from two goroutines at once.
-		if !g.pieces(rs, pos, n, x, cs, csSWA, tail) {
+		if !g.pieces(sid, rs, pos, n, x, cs, csSWA, tail) {
 			return false
 		}
 		if head != nil && tail == nil {
-			return hd.Layers(hi, hi, pos, n, x, cs, nil, head)
+			return hd.layersFor(sid, hi, hi, pos, n, x, cs, nil, head)
 		}
 		return true
 	}
 	if n > batchWidth && !rs[0].dev.nonCausalAt(lo) {
-		if !g.pipeline(rs, pos, n, x, cs, csSWA, tail) {
+		if !g.pipeline(sid, rs, pos, n, x, cs, csSWA, tail) {
 			return false
 		}
 		if head != nil && tail == nil {
-			return hd.Layers(hi, hi, pos, n, x, cs, csSWA, head)
+			return hd.layersFor(sid, hi, hi, pos, n, x, cs, csSWA, head)
 		}
 		return true
 	}
@@ -1196,7 +1216,7 @@ func (g *GPU) layersCall(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.He
 			h = tail
 		}
 		c0, c1 := r.tables(cs, csSWA)
-		if !r.dev.Layers(r.lo, r.hi, pos, n, x, c0, c1, h) {
+		if !r.dev.layersFor(sid, r.lo, r.hi, pos, n, x, c0, c1, h) {
 			return false
 		}
 	}
@@ -1207,7 +1227,7 @@ func (g *GPU) layersCall(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.He
 		if g.split {
 			csSWA = nil
 		}
-		return hd.Layers(hi, hi, pos, n, x, cs, csSWA, head)
+		return hd.layersFor(sid, hi, hi, pos, n, x, cs, csSWA, head)
 	}
 	return true
 }
@@ -1334,27 +1354,37 @@ func (g *GPU) HeadResident() bool {
 	return d != nil && d.HeadResident()
 }
 
-// MigrateRec routes block li's recurrent summary to the device that holds it.
+// MigrateRec is migrateRec for the zero session: a caller that never attached.
 func (g *GPU) MigrateRec(li int, conv, state []float32, toDevice bool) bool {
-	g.mu.Lock()
-	d := g.own[li]
-	g.mu.Unlock()
-	if d == nil {
-		return false // the block is on the host; there is nothing to move
-	}
-	return d.MigrateRec(li, conv, state, toDevice)
+	return g.migrateRec(0, li, conv, state, toDevice)
 }
 
-// MigrateKV moves block li's attention history between host and device. Only
-// the device holding that block can answer.
-func (g *GPU) MigrateKV(li int, k, v []float32, pos int, toDevice bool) bool {
+// migrateRec routes block li's recurrent summary to the device that holds it.
+func (g *GPU) migrateRec(sid uint64, li int, conv, state []float32, toDevice bool) bool {
 	g.mu.Lock()
 	d := g.own[li]
 	g.mu.Unlock()
 	if d == nil {
 		return false // the block is on the host; there is nothing to move
 	}
-	return d.MigrateKV(li, k, v, pos, toDevice)
+	return d.migrateRec(sid, li, conv, state, toDevice)
+}
+
+// MigrateKV is migrateKV for the zero session: a caller that never attached.
+func (g *GPU) MigrateKV(li int, k, v []float32, pos int, toDevice bool) bool {
+	return g.migrateKV(0, li, k, v, pos, toDevice)
+}
+
+// migrateKV moves block li's attention history between host and device. Only
+// the device holding that block can answer.
+func (g *GPU) migrateKV(sid uint64, li int, k, v []float32, pos int, toDevice bool) bool {
+	g.mu.Lock()
+	d := g.own[li]
+	g.mu.Unlock()
+	if d == nil {
+		return false // the block is on the host; there is nothing to move
+	}
+	return d.migrateKV(sid, li, k, v, pos, toDevice)
 }
 
 // PerSequenceKV reports that every device holding a block pages its history
@@ -1376,26 +1406,36 @@ func (g *GPU) PerSequenceKV() bool {
 	return len(ds) > 0
 }
 
-// MigrateKVSeq routes to the device holding block li; see devTier.MigrateKVSeq.
+// MigrateKVSeq is migrateKVSeq for the zero session: a caller that never attached.
 func (g *GPU) MigrateKVSeq(li, base int, k, v []float32, pos int, toDevice bool) bool {
-	g.mu.Lock()
-	d := g.own[li]
-	g.mu.Unlock()
-	if d == nil {
-		return false
-	}
-	return d.MigrateKVSeq(li, base, k, v, pos, toDevice)
+	return g.migrateKVSeq(0, li, base, k, v, pos, toDevice)
 }
 
-// MigrateEnt forwards to the device holding block li; see devTier.MigrateEnt.
-func (g *GPU) MigrateEnt(li, base int, ent []float32, n int, toDevice bool) bool {
+// migrateKVSeq routes to the device holding block li; see devTier.MigrateKVSeq.
+func (g *GPU) migrateKVSeq(sid uint64, li, base int, k, v []float32, pos int, toDevice bool) bool {
 	g.mu.Lock()
 	d := g.own[li]
 	g.mu.Unlock()
 	if d == nil {
 		return false
 	}
-	return d.MigrateEnt(li, base, ent, n, toDevice)
+	return d.migrateKVSeq(sid, li, base, k, v, pos, toDevice)
+}
+
+// MigrateEnt is migrateEnt for the zero session: a caller that never attached.
+func (g *GPU) MigrateEnt(li, base int, ent []float32, n int, toDevice bool) bool {
+	return g.migrateEnt(0, li, base, ent, n, toDevice)
+}
+
+// migrateEnt forwards to the device holding block li; see devTier.MigrateEnt.
+func (g *GPU) migrateEnt(sid uint64, li, base int, ent []float32, n int, toDevice bool) bool {
+	g.mu.Lock()
+	d := g.own[li]
+	g.mu.Unlock()
+	if d == nil {
+		return false
+	}
+	return d.migrateEnt(sid, li, base, ent, n, toDevice)
 }
 
 // owners appends to buf every distinct device that holds a block, in block
@@ -1417,26 +1457,36 @@ func (g *GPU) owners(buf []*devTier) []*devTier {
 // allocate, fewer do not.
 const ownersStack = 16
 
-// ReserveKVSeqs asks every device holding a block; see devTier.ReserveKVSeqs.
+// ReserveKVSeqs is reserveKVSeqs for the zero session: a caller that never attached.
 func (g *GPU) ReserveKVSeqs(bases, ends []int) bool {
+	return g.reserveKVSeqs(0, bases, ends)
+}
+
+// reserveKVSeqs asks every device holding a block; see devTier.ReserveKVSeqs.
+func (g *GPU) reserveKVSeqs(sid uint64, bases, ends []int) bool {
 	var buf [ownersStack]*devTier
 	for _, d := range g.owners(buf[:0]) {
-		if !d.ReserveKVSeqs(bases, ends) {
+		if !d.reserveKVSeqs(sid, bases, ends) {
 			return false
 		}
 	}
 	return true
 }
 
-// ReserveKV makes every device that holds a block able to take `pos` positions.
+// ReserveKV is reserveKV for the zero session: a caller that never attached.
+func (g *GPU) ReserveKV(pos int) bool {
+	return g.reserveKV(0, pos)
+}
+
+// reserveKV makes every device that holds a block able to take `pos` positions.
 // It is all or nothing: the caller is about to migrate a whole prefix, and a
 // partial reservation would leave one sequence split across two tiers at two
 // different depths.
-func (g *GPU) ReserveKV(pos int) bool {
+func (g *GPU) reserveKV(sid uint64, pos int) bool {
 	var buf [ownersStack]*devTier
 	var refused *devTier
 	for _, d := range g.owners(buf[:0]) {
-		if !d.ReserveKV(pos) {
+		if !d.reserveKV(sid, pos) {
 			refused = d
 			break
 		}
@@ -1447,10 +1497,15 @@ func (g *GPU) ReserveKV(pos int) bool {
 	return refused == nil
 }
 
-// TrimKV shrinks the history on every device that holds a block to the smallest
+// TrimKV is trimKV for the zero session: a caller that never attached.
+func (g *GPU) TrimKV(pos int) bool {
+	return g.trimKV(0, pos)
+}
+
+// trimKV shrinks the history on every device that holds a block to the smallest
 // capacity that holds pos, where the caller is that device's only session. See
 // devTier.TrimKV.
-func (g *GPU) TrimKV(pos int) bool {
+func (g *GPU) trimKV(sid uint64, pos int) bool {
 	g.mu.Lock()
 	ds := map[*devTier]bool{}
 	for _, d := range g.own {
@@ -1461,7 +1516,7 @@ func (g *GPU) TrimKV(pos int) bool {
 	g.mu.Unlock()
 	trimmed := false
 	for d := range ds {
-		trimmed = d.TrimKV(pos) || trimmed
+		trimmed = d.trimKV(sid, pos) || trimmed
 	}
 	return trimmed
 }
@@ -1495,7 +1550,12 @@ func (g *GPU) Refused() []int {
 	return out
 }
 
-// ReleaseLayers hands blocks [lo, hi) back to the host for the calling
+// ReleaseLayers is releaseLayers for the zero session: a caller that never attached.
+func (g *GPU) ReleaseLayers(lo, hi int) {
+	g.releaseLayers(0, lo, hi)
+}
+
+// releaseLayers hands blocks [lo, hi) back to the host for the calling
 // session. A block another session still has history on stays where it is,
 // with its route: only this session's history goes (devTier.leaveLayers).
 //
@@ -1503,7 +1563,7 @@ func (g *GPU) Refused() []int {
 // release drops the captured recording and an untouched device would pay a
 // re-capture for nothing. The cursor goes back to the device holding the
 // highest remaining block (or the fastest), since the release freed room.
-func (g *GPU) ReleaseLayers(lo, hi int) {
+func (g *GPU) releaseLayers(sid uint64, lo, hi int) {
 	g.mu.Lock()
 	if g.spillFrom != nil && g.spillLi >= lo && g.spillLi < hi {
 		g.spillFrom = nil
@@ -1517,7 +1577,7 @@ func (g *GPU) ReleaseLayers(lo, hi int) {
 	g.mu.Unlock()
 	var gone []int
 	for d := range touched {
-		gone = append(gone, d.leaveLayers(lo, hi)...)
+		gone = append(gone, d.leaveLayers(sid, lo, hi)...)
 	}
 	g.mu.Lock()
 	for _, li := range gone {

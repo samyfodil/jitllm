@@ -239,7 +239,7 @@ func (g *devTier) allocLayerPool(geom kvGeom, p, n int) (k, v backend.Buf, err e
 // old buffers -- and refuses with ErrKVCapacity when the budget or the
 // backend's limit stops it. The new ids are appended to s's run in the layer's
 // table arena. Callers hold g.mu, outside any submission.
-func (g *devTier) allocPages(kp *kvPool, l *kvLayerPool, s seqID, count int) error {
+func (g *devTier) allocPages(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, count int) error {
 	if count <= 0 {
 		return nil
 	}
@@ -247,7 +247,7 @@ func (g *devTier) allocPages(kp *kvPool, l *kvLayerPool, s seqID, count int) err
 		// Growth first -- a page-out of streamed weights or more pool -- and
 		// when nothing can grow, cold history goes home (kvevict.go). A
 		// driver's refusal inside the budget is no room either.
-		if err := g.growKVLayer(kp, l, l.n+count-len(l.free)); err != nil && !g.evictForRoom(kp, l, count) {
+		if err := g.growKVLayer(kp, l, l.n+count-len(l.free)); err != nil && !g.evictForRoom(sid, kp, l, count) {
 			return err
 		}
 	}

@@ -265,7 +265,7 @@ func (g *devTier) recZero(l *layer, base, rows int) error {
 	return nil
 }
 
-// growSeat gives the current session a seat of at least rows slots: a batch
+// growSeat gives session sid a seat of at least rows slots: a batch
 // keeps one state per sequence, and its seat grows to the highest sequence a
 // step names -- a scheduler admits sequences into rows as they free, so the
 // first steps need not name them all. The slots the seat had keep their
@@ -273,8 +273,8 @@ func (g *devTier) recZero(l *layer, base, rows int) error {
 // session's seat is kept. When the pools' two halves do not fit at the new size
 // (or Config.SharedRec asks), every pool takes the shared form. Callers hold
 // g.mu, outside a session.
-func (g *devTier) growSeat(rows int) bool {
-	old, had := g.recSeats[g.cur]
+func (g *devTier) growSeat(sid uint64, rows int) bool {
+	old, had := g.recSeats[sid]
 	if had && old.rows >= rows {
 		return true
 	}
@@ -293,13 +293,13 @@ func (g *devTier) growSeat(rows int) bool {
 		}
 		defer kept.free()
 	}
-	delete(g.recSeats, g.cur)
+	delete(g.recSeats, sid)
 	restore := func() {
 		if had {
-			g.recSeats[g.cur] = old
+			g.recSeats[sid] = old
 		}
 	}
-	base := g.seatPlace(g.cur, rows)
+	base := g.seatPlace(sid, rows)
 	slots := max(g.recSlots, base+rows)
 	pools := uint64(len(g.recPools()))
 	cost := func(shared bool) uint64 {
@@ -343,13 +343,13 @@ func (g *devTier) growSeat(rows int) bool {
 		restore()
 		return false
 	}
-	g.recSeats[g.cur] = recSeat{base, rows}
+	g.recSeats[sid] = recSeat{base, rows}
 	if err := g.recZero(nil, base, rows); err != nil {
 		g.LastErr = "rows: " + err.Error()
 		return false
 	}
 	if had && !recFaulted("resize") {
-		if err := g.writeSeat(kept, base, old.rows, wasShared); err != nil {
+		if err := g.writeSeat(sid, kept, base, old.rows, wasShared); err != nil {
 			g.LastErr = "rows: " + err.Error()
 			return false
 		}
@@ -418,13 +418,13 @@ func (kept seatStates) free() {
 // device. A pool that went from two halves to the shared form takes, as its
 // one state, the half the session reads next, as recResize does for every
 // other seat. Callers hold g.mu, outside a session.
-func (g *devTier) writeSeat(kept seatStates, base, rows int, wasShared bool) error {
+func (g *devTier) writeSeat(sid uint64, kept seatStates, base, rows int, wasShared bool) error {
 	for l, v := range kept {
 		if l.pool == nil {
 			continue
 		}
 		cur := 0
-		if rp := l.recOf(g.cur); rp != nil {
+		if rp := l.recOf(sid); rp != nil {
 			cur = rp.cur
 		}
 		for k, b := range [2]struct {
@@ -493,11 +493,10 @@ func (g *devTier) recTidy() {
 	}
 }
 
-// stepPar is the half of l's pool the running step reads: the current
-// session's, or on a step across sessions the rows' common one (alignRec made
+// stepPar is the half of l's pool the running step reads: session sid's,
+// or on a step across sessions the rows' common one (alignRec made
 // them agree). Callers hold g.mu.
-func (g *devTier) stepPar(l *layer) (int, bool) {
-	sid := g.cur
+func (g *devTier) stepPar(sid uint64, l *layer) (int, bool) {
 	if g.rag != nil && g.rag.sid != nil {
 		sid = g.rag.sid[0]
 	}
@@ -511,7 +510,7 @@ func (g *devTier) stepPar(l *layer) (int, bool) {
 // stepFlip moves every session of the running step to the half its step
 // wrote, once a session however many of its rows the step carried. Callers
 // hold g.mu.
-func (g *devTier) stepFlip(l *layer) {
+func (g *devTier) stepFlip(sid uint64, l *layer) {
 	if g.rag != nil && g.rag.sid != nil {
 		for _, sid := range g.rag.sess {
 			if rp := l.recOf(sid); rp != nil {
@@ -521,7 +520,7 @@ func (g *devTier) stepFlip(l *layer) {
 		}
 		return
 	}
-	if rp := l.recOf(g.cur); rp != nil {
+	if rp := l.recOf(sid); rp != nil {
 		rp.cur = 1 - rp.cur
 		rp.steps++
 	}
@@ -537,12 +536,12 @@ func (g *devTier) stepFlip(l *layer) {
 // positions must be consecutive: a gap would step the state past a token no
 // row ran, a repeat would step it twice. Either is refused. It also fills
 // rs.sess, the step's distinct sessions.
-func (g *devTier) groupRuns(rs *ragStep) error {
+func (g *devTier) groupRuns(sid uint64, rs *ragStep) error {
 	rs.runs, rs.runSid, rs.runSeat, rs.sess = rs.runs[:0], rs.runSid[:0], rs.runSeat[:0], rs.sess[:0]
 	keys := rs.keys[:0]
 	defer func() { rs.keys = keys[:0] }()
 	for r := range rs.pos {
-		k := runKey{g.cur, rs.slot[r] - rs.pos[r]}
+		k := runKey{sid, rs.slot[r] - rs.pos[r]}
 		if rs.sid != nil {
 			k.sid = rs.sid[r]
 		}
@@ -597,26 +596,36 @@ func (g *devTier) groupRuns(rs *ragStep) error {
 	return nil
 }
 
-// RecMark records the half each of the current session's linear blocks reads
-// (nn.RecRewinder).
+// RecMark is recMark for the zero session: a caller that never attached.
 func (g *devTier) RecMark() {
+	g.recMark(0)
+}
+
+// recMark records the half each of session sid's linear blocks reads
+// (nn.RecRewinder).
+func (g *devTier) recMark(sid uint64) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	for _, l := range g.layers {
-		if rp := l.recOf(g.cur); l != nil && l.linear && rp != nil {
+		if rp := l.recOf(sid); l != nil && l.linear && rp != nil {
 			rp.mark, rp.markSteps, rp.marked = rp.cur, rp.steps, true
 		}
 	}
 }
 
-// RecRewind takes the current session's linear blocks back to the state
+// RecRewind is recRewind for the zero session: a caller that never attached.
+func (g *devTier) RecRewind() bool {
+	return g.recRewind(0)
+}
+
+// recRewind takes session sid's linear blocks back to the state
 // RecMark saw. A step reads one half of the pool and writes the other, so
 // after exactly one step the marked state is still there, untouched, and the
 // rewind is a flip back. After more than one, or in the shared form (one copy
 // of the delta state, written in place through recNext), it is gone: false,
 // with nothing changed. Every block is checked before any is flipped.
-func (g *devTier) RecRewind() bool {
-	back, ok := g.rewindable()
+func (g *devTier) recRewind(sid uint64) bool {
+	back, ok := g.rewindable(sid)
 	if !ok {
 		return false
 	}
@@ -632,12 +641,12 @@ func (g *devTier) RecRewind() bool {
 
 // rewindable is RecRewind's check alone: the blocks a rewind would flip, or
 // false when the marked state is gone from any of them.
-func (g *devTier) rewindable() ([]*recPair, bool) {
+func (g *devTier) rewindable(sid uint64) ([]*recPair, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	var back []*recPair
 	for _, l := range g.layers {
-		rp := l.recOf(g.cur)
+		rp := l.recOf(sid)
 		if l == nil || !l.linear || rp == nil {
 			continue
 		}
@@ -665,12 +674,12 @@ type runKey struct {
 }
 
 // recDesc is the recurrent descriptor the running call stages: for a chunk or
-// a decode, the real row count and the current session's one slot pair
+// a decode, the real row count and session sid's one slot pair
 // (kernels.RecDescWords); for a ragged step, the run descriptor
 // (kernels.RunDescWords) over the step's runs (groupRuns), each run's slots
 // being its sequence's seat row of its session's seat. In the shared form a
 // run's out slot is its place in recNext. Callers hold g.mu.
-func (g *devTier) recDesc(nrow int) []byte {
+func (g *devTier) recDesc(sid uint64, nrow int) []byte {
 	rag := g.rag
 	slots := func(sid uint64, seat, j int) (uint32, uint32) {
 		if recFaulted("slot") && rag != nil && rag.sid != nil {
@@ -692,7 +701,7 @@ func (g *devTier) recDesc(nrow int) []byte {
 		return w
 	}
 	if rag == nil || len(rag.runs) == 0 {
-		in, out := slots(g.cur, 0, 0)
+		in, out := slots(sid, 0, 0)
 		w := words(3)
 		w[0], w[1], w[2] = uint32(nrow), in, out
 		return u32view(w)
@@ -761,13 +770,13 @@ func (g *devTier) linearIn(lo, hi int) bool {
 // (growSeat keeps the states it had). A step across sessions takes each
 // session's one state where it is, after bringing the sessions to one half of
 // every pool. Callers hold g.mu.
-func (g *devTier) prepRecRows(lo, hi int, rs *ragStep) bool {
+func (g *devTier) prepRecRows(sid uint64, lo, hi int, rs *ragStep) bool {
 	if rs.sid == nil {
 		seats := 0
 		for _, q := range rs.runSeat {
 			seats = max(seats, q+1)
 		}
-		if !g.growSeat(seats) {
+		if !g.growSeat(sid, seats) {
 			return false
 		}
 	} else {

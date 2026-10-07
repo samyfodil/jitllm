@@ -46,7 +46,7 @@ func TestDeclineReasonReachesLastErr(t *testing.T) {
 				"block reached allocation instead of being refused before it", r)
 		}
 	}()
-	if g.prepLayer(0, p, &nn.LayerWeights{}, false) {
+	if g.prepLayer(0, 0, p, &nn.LayerWeights{}, false) {
 		t.Fatal("prepLayer accepted a vision block with a gated activation")
 	}
 	if g.LastErr == "" || !strings.Contains(g.LastErr, "swiglu-oai") {

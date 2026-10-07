@@ -75,7 +75,7 @@ func TestKVPoolPages(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		for _, s := range []seqID{a, b} {
 			for _, li := range []int{0, 1} {
-				if err := d.allocPages(kp, kp.layers[li], s, 1); err != nil {
+				if err := d.allocPages(0, kp, kp.layers[li], s, 1); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -96,7 +96,7 @@ func TestKVPoolPages(t *testing.T) {
 	l0 := kp.layers[0]
 	aPages := slices.Clone(l0.owned[a])
 	l0.releasePages(a)
-	if err := d.allocPages(kp, l0, c, len(aPages)); err != nil {
+	if err := d.allocPages(0, kp, l0, c, len(aPages)); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range l0.owned[c] {
@@ -119,7 +119,7 @@ func TestKVPoolPages(t *testing.T) {
 	// The backend's limit: nothing changes when the layer cannot grow.
 	n, free, owned := l0.n, slices.Clone(l0.free), len(l0.owned)
 	kp.maxBytes = uint64(l0.n * p * 16 * 4)
-	err = d.allocPages(kp, l0, a, len(l0.free)+1)
+	err = d.allocPages(0, kp, l0, a, len(l0.free)+1)
 	if !errors.Is(err, ErrKVCapacity) || l0.n != n || !slices.Equal(l0.free, free) || len(l0.owned) != owned {
 		t.Fatalf("a layer at the backend's limit: err %v, pages %d -> %d, free %d -> %d",
 			err, n, l0.n, len(free), len(l0.free))
@@ -127,7 +127,7 @@ func TestKVPoolPages(t *testing.T) {
 	kp.maxBytes = 0
 	// The budget: likewise.
 	d.limit = d.used + 1
-	err = d.allocPages(kp, l0, a, len(l0.free)+1)
+	err = d.allocPages(0, kp, l0, a, len(l0.free)+1)
 	if !errors.Is(err, ErrKVCapacity) || l0.n != n || !slices.Equal(l0.free, free) {
 		t.Fatalf("a layer over the budget: err %v, pages %d -> %d", err, n, l0.n)
 	}
@@ -207,7 +207,7 @@ func TestKVPoolKeepsPagesAcrossAResize(t *testing.T) {
 			for i := 0; i < 4; i++ {
 				for _, s := range []seqID{a, c, b} {
 					for li := range geoms {
-						if err := d.allocPages(kp, kp.layers[li], s, 1); err != nil {
+						if err := d.allocPages(0, kp, kp.layers[li], s, 1); err != nil {
 							t.Fatal(err)
 						}
 					}
@@ -285,7 +285,7 @@ func TestKVPoolKeepsPagesAcrossAResize(t *testing.T) {
 			check("written")
 			n := kp.layers[0].n
 			for li := range geoms {
-				if err := d.allocPages(kp, kp.layers[li], c, n+8); err != nil {
+				if err := d.allocPages(0, kp, kp.layers[li], c, n+8); err != nil {
 					t.Fatal(err)
 				}
 			}

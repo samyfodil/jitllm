@@ -161,8 +161,9 @@ were still the device's:
 Both are the session's now. The capacity is gone rather than moved: the
 history is paged (docs/design/device-kv-paging.md), so no kernel bakes a
 length, a session's growth takes pages for its own sequences alone, and a trim
-gives only its own back. `devTier.switchTo` changes whose pages a call reads and
-drops the graph; every session shares one scratch, whose bound only grows to
+gives only its own back. Which session's pages a call reads is an argument of
+the call (its session id), and the captured graphs are keyed by it; every
+session shares one scratch, whose bound only grows to
 the longest context any session asked for. (Before paging, each capacity had
 its own scratch, parked while nobody was current at it.)
 

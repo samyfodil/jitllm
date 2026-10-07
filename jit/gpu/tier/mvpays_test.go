@@ -32,7 +32,7 @@ func TestMVPaysIsPerModel(t *testing.T) {
 		var served, declined int
 		// Two full tokens' worth of offers, which is well past mvSample.
 		for i := 0; i < 4*mvSample; i++ {
-			if g.mvPays(c.layer[i%len(c.layer)]) {
+			if g.mvPays(0, c.layer[i%len(c.layer)]) {
 				served++
 			} else {
 				declined++
@@ -57,13 +57,13 @@ func TestMVPaysIsPerModel(t *testing.T) {
 func TestMVPaysDoesNotDrift(t *testing.T) {
 	g := &devTier{Config: &Config{mvMin: 3300 << 10}}
 	for i := 0; i < mvSample; i++ {
-		g.mvPays(1 << 10)
+		g.mvPays(0, 1<<10)
 	}
-	if v := g.mvFor(g.cur).verdict; v >= 0 {
+	if v := g.mvFor(0).verdict; v >= 0 {
 		t.Fatalf("verdict %d, want negative after a sample of 1 KiB matvecs", v)
 	}
 	for i := 0; i < 100; i++ {
-		if g.mvPays(512 << 20) {
+		if g.mvPays(0, 512<<20) {
 			t.Fatalf("a 512 MiB matvec reopened a settled verdict at offer %d", i)
 		}
 	}
@@ -74,7 +74,7 @@ func TestMVPaysDoesNotDrift(t *testing.T) {
 func TestMVPaysZeroServesEverything(t *testing.T) {
 	g := &devTier{Config: &Config{mvMin: 0}}
 	for i := 0; i < 4*mvSample; i++ {
-		if !g.mvPays(1) {
+		if !g.mvPays(0, 1) {
 			t.Fatalf("declined a 1-byte matvec at mvMin 0, offer %d", i)
 		}
 	}

@@ -56,9 +56,8 @@ func TestRecurrentPoolReturnsEveryByte(t *testing.T) {
 
 	attach := func(sid uint64) {
 		t.Helper()
-		dt.cur = sid
 		for _, l := range []*layer{l0, l1} {
-			if !dt.addSessionRec(l, p) {
+			if !dt.addSessionRec(sid, l, p) {
 				t.Fatalf("session %d declined: %s", sid, dt.LastErr)
 			}
 		}
@@ -117,9 +116,8 @@ func TestRecurrentPoolReturnsEveryByte(t *testing.T) {
 	attach(4)
 	check("a seat reused", 2, map[uint64]int{2: 1, 4: 0})
 	// A batch of three grows its seat into a run of its own.
-	dt.cur = 4
 	w0 = d.writeBytes
-	if !dt.growSeat(3) {
+	if !dt.growSeat(4, 3) {
 		t.Fatalf("growSeat: %s", dt.LastErr)
 	}
 	if st := dt.recSeats[4]; st.rows != 3 || st.base != 2 || dt.recSlots != 5 {
@@ -214,19 +212,17 @@ func migrateRecCase(t *testing.T, dt *devTier, shared bool) {
 	}
 	const sessions = 3
 	for sid := uint64(1); sid <= sessions; sid++ {
-		dt.cur = sid
-		if !dt.addSessionRec(l, p) {
+		if !dt.addSessionRec(sid, l, p) {
 			t.Fatalf("session %d declined: %s", sid, dt.LastErr)
 		}
-		if !dt.MigrateRec(0, mine(sid, C, 1), mine(sid, S, 2), true) {
+		if !dt.migrateRec(sid, 0, mine(sid, C, 1), mine(sid, S, 2), true) {
 			t.Fatalf("session %d: sending its state up: %s", sid, dt.LastErr)
 		}
 	}
 	for sid := uint64(1); sid <= sessions; sid++ {
-		dt.cur = sid
 		conv, state := make([]float32, C), make([]float32, S)
 		_, b0 := backend.HostReads()
-		if !dt.MigrateRec(0, conv, state, false) {
+		if !dt.migrateRec(sid, 0, conv, state, false) {
 			t.Fatalf("session %d: bringing its state home: %s", sid, dt.LastErr)
 		}
 		_, b1 := backend.HostReads()

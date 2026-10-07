@@ -604,9 +604,9 @@ func seqEnds(dst []seqEnd, rows []pagedRow) []seqEnd {
 	return dst
 }
 
-// heldLayers calls f for every pool layer the current session holds history
+// heldLayers calls f for every pool layer session sid holds history
 // on: a session takes pages only where it runs.
-func (g *devTier) heldLayers(f func(li int, l *kvLayerPool) error) error {
+func (g *devTier) heldLayers(sid uint64, f func(li int, l *kvLayerPool) error) error {
 	if g.kvp == nil {
 		return nil
 	}
@@ -617,7 +617,7 @@ func (g *devTier) heldLayers(f func(li int, l *kvLayerPool) error) error {
 			bi = l.of
 		}
 		if bl := g.layers[bi]; bl != nil {
-			if kvp := bl.kv[g.cur]; kvp != nil && kvp.paged {
+			if kvp := bl.kv[sid]; kvp != nil && kvp.paged {
 				if err := f(li, l); err != nil {
 					return err
 				}
@@ -633,18 +633,18 @@ func (g *devTier) heldLayers(f func(li int, l *kvLayerPool) error) error {
 // can happen once blocks are paged in for a submission. A layer that cannot
 // grow refuses with ErrKVCapacity, and what was already taken stays taken.
 // Callers hold g.mu.
-func (g *devTier) pagedAppend(seqs []seqEnd) error {
+func (g *devTier) pagedAppend(sid uint64, seqs []seqEnd) error {
 	kp := g.kvPages()
-	err := g.heldLayers(func(li int, l *kvLayerPool) error {
+	err := g.heldLayers(sid, func(li int, l *kvLayerPool) error {
 		for _, se := range seqs {
 			need := (l.positions(se.end) + kp.p - 1) / kp.p
 			if have := len(l.owned[se.s]); need > have {
-				if err := g.allocPages(kp, l, se.s, need-have); err != nil {
+				if err := g.allocPages(sid, kp, l, se.s, need-have); err != nil {
 					return err
 				}
 			}
 			if l.win > 0 && se.start >= 0 && !g.KVKeepWindow {
-				if err := g.windowPages(kp, li, l, se); err != nil {
+				if err := g.windowPages(sid, kp, li, l, se); err != nil {
 					return err
 				}
 			}
@@ -652,7 +652,7 @@ func (g *devTier) pagedAppend(seqs []seqEnd) error {
 		return nil
 	})
 	if err == nil {
-		err = g.streamRoom()
+		err = g.streamRoom(sid)
 	}
 	if ferr := g.flushTabs(); err == nil {
 		err = ferr
@@ -666,13 +666,13 @@ func (g *devTier) pagedAppend(seqs []seqEnd) error {
 // its history is gone -- and every page behind the window of
 // se.start-nn.KVWindowSlack is released, so the layer holds the window and
 // not the context. Callers hold g.mu, between submissions.
-func (g *devTier) windowPages(kp *kvPool, li int, l *kvLayerPool, se seqEnd) error {
+func (g *devTier) windowPages(sid uint64, kp *kvPool, li int, l *kvLayerPool, se seqEnd) error {
 	s, P := se.s, kp.p
 	need := (se.end + P - 1) / P
 	ev := kp.evicted[s]
 	for j := se.start / P; j < need; j++ {
 		if l.owned[s][j] == 0 && j >= ev {
-			if err := g.allocAt(kp, l, s, j); err != nil {
+			if err := g.allocAt(sid, kp, l, s, j); err != nil {
 				return err
 			}
 		}
@@ -711,9 +711,9 @@ func (g *devTier) windowPages(kp *kvPool, li int, l *kvLayerPool, se seqEnd) err
 // allocAt gives sequence s a fresh id for its page j in layer l, which holds
 // none (it was released behind a window). Callers hold g.mu, outside any
 // submission.
-func (g *devTier) allocAt(kp *kvPool, l *kvLayerPool, s seqID, j int) error {
+func (g *devTier) allocAt(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, j int) error {
 	if len(l.free) < 1 {
-		if err := g.growKVLayer(kp, l, l.n+1-len(l.free)); err != nil && !g.evictForRoom(kp, l, 1) {
+		if err := g.growKVLayer(kp, l, l.n+1-len(l.free)); err != nil && !g.evictForRoom(sid, kp, l, 1) {
 			return err
 		}
 	}
@@ -728,14 +728,14 @@ func (g *devTier) allocAt(kp *kvPool, l *kvLayerPool, s seqID, j int) error {
 }
 
 // pagedAppendRows is pagedAppend for a call's rows, from outside g.mu.
-func (g *devTier) pagedAppendRows(rows []pagedRow) bool {
+func (g *devTier) pagedAppendRows(sid uint64, rows []pagedRow) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !g.paged {
 		return true
 	}
 	g.pgSeqs = seqEnds(g.pgSeqs, rows)
-	if err := g.pagedAppend(g.pgSeqs); err != nil {
+	if err := g.pagedAppend(sid, g.pgSeqs); err != nil {
 		g.LastErr = err.Error()
 		return false
 	}
@@ -746,11 +746,11 @@ func (g *devTier) pagedAppendRows(rows []pagedRow) bool {
 // keys, and a check that every row's page is there (pagedAppend took them).
 // Compiling and allocating are driver calls, so it runs before the
 // submission's session. Callers hold g.mu.
-func (g *devTier) pagedPrep(bs *blockScratch, rows []pagedRow) error {
+func (g *devTier) pagedPrep(sid uint64, bs *blockScratch, rows []pagedRow) error {
 	kp, pg := g.kvPages(), bs.pkv
 	held := false
 	g.pgSeqs = seqEnds(g.pgSeqs, rows)
-	err := g.heldLayers(func(li int, l *kvLayerPool) error {
+	err := g.heldLayers(sid, func(li int, l *kvLayerPool) error {
 		held = true
 		for _, se := range g.pgSeqs {
 			if (l.positions(se.end)-1)/kp.p >= len(l.owned[se.s]) {
@@ -821,7 +821,7 @@ func (g *devTier) pagedStage(pg *pagedScratch, p *nn.LayerPlan, rows []pagedRow)
 // pagedRows fills dst with a call's rows: one sequence's positions pos.. for a
 // decode or a prefill chunk, or a LayersRows step's sequences, with R-nrow
 // padding rows. dst is reused, so a token allocates nothing.
-func (g *devTier) pagedRows(dst []pagedRow, R, nrow, pos int, rag *ragStep) []pagedRow {
+func (g *devTier) pagedRows(sid uint64, dst []pagedRow, R, nrow, pos int, rag *ragStep) []pagedRow {
 	rows := slices.Grow(dst[:0], R)[:R]
 	for r := range rows {
 		switch {
@@ -830,13 +830,13 @@ func (g *devTier) pagedRows(dst []pagedRow, R, nrow, pos int, rag *ragStep) []pa
 			if pagedFaulted("alias") {
 				base = rag.slot[0] - rag.pos[0]
 			}
-			sid := g.cur
+			s := sid
 			if rag.sid != nil && !pagedFaulted("session") {
-				sid = rag.sid[r]
+				s = rag.sid[r]
 			}
-			rows[r] = pagedRow{s: seqID{sid, base}, pos: rag.pos[r]}
+			rows[r] = pagedRow{s: seqID{s, base}, pos: rag.pos[r]}
 		case rag == nil && r < nrow:
-			rows[r] = pagedRow{s: seqID{g.cur, 0}, pos: pos + r}
+			rows[r] = pagedRow{s: seqID{sid, 0}, pos: pos + r}
 		default:
 			rows[r] = pagedRow{pad: true}
 		}
@@ -855,18 +855,18 @@ func pagedKeys(rows []pagedRow) int {
 	return n
 }
 
-// pagedLayer gives block li its place in the pool, and the current session its
+// pagedLayer gives block li its place in the pool, and session sid its
 // seat there: the layer's buffers and table arena, and its working set -- the
 // dummy and one page per attached session, since a session with no page
 // cannot run a token. That is a first frame, not a reservation of context:
 // past it the layer grows as sequences write, and a growth that does not fit
 // pages weights out or refuses (ErrKVCapacity). The session's history on the
 // block is the marker kvPair{paged: true}. Callers hold g.mu.
-func (g *devTier) pagedLayer(l *layer, li int, p *nn.LayerPlan) error {
+func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) error {
 	kp := g.kvPages()
 	seats := 1
-	for sid, kvp := range l.kv {
-		if kvp.paged && sid != g.cur {
+	for o, kvp := range l.kv {
+		if kvp.paged && o != sid {
 			seats++
 		}
 	}
@@ -890,15 +890,15 @@ func (g *devTier) pagedLayer(l *layer, li int, p *nn.LayerPlan) error {
 	if l.kv == nil {
 		l.kv = map[uint64]*kvPair{}
 	}
-	fresh := l.kv[g.cur] == nil
-	l.kv[g.cur] = &kvPair{paged: true}
+	fresh := l.kv[sid] == nil
+	l.kv[sid] = &kvPair{paged: true}
 	for _, k := range []int{li, entKey(li)} {
 		if _, ok := kp.layers[k]; !ok {
 			continue
 		}
 		if err := g.pagedSeat(kp, k, l); err != nil {
 			if fresh {
-				delete(l.kv, g.cur)
+				delete(l.kv, sid)
 			}
 			return err
 		}
@@ -1056,18 +1056,18 @@ func (kp *kvPool) trimSeq(s seqID, pos int) bool {
 	return trimmed
 }
 
-// pagedMigrate moves layer li's history for the current session's sequence
+// pagedMigrate moves layer li's history for session sid's sequence
 // between host and device: k and v are [pos][kvRow] float32 on the host. To
 // the device each page is laid out on the host in the layer's layout and
 // written at its offset; from the device the sequence's pages are gathered
 // into one buffer by a generated kernel and read home. Callers hold g.mu.
-func (g *devTier) pagedMigrate(li, base int, k, v []float32, pos int, toDevice bool) error {
+func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int, toDevice bool) error {
 	kp := g.kvPages()
 	pl, ok := kp.layers[li]
 	if !ok {
 		return fmt.Errorf("block %d has no pages on this device", li)
 	}
-	s := seqID{g.cur, base}
+	s := seqID{sid, base}
 	kvRow, P := pl.geom.kvRow, kp.p
 	if pos*kvRow > len(k) || pos*kvRow > len(v) {
 		return fmt.Errorf("%d positions of %d floats do not fit the host's %d/%d", pos, kvRow, len(k), len(v))
@@ -1087,7 +1087,7 @@ func (g *devTier) pagedMigrate(li, base int, k, v []float32, pos int, toDevice b
 	}
 	if toDevice {
 		if have := len(pl.owned[s]); npages > have {
-			if err := g.allocPages(kp, pl, s, npages-have); err != nil {
+			if err := g.allocPages(sid, kp, pl, s, npages-have); err != nil {
 				return err
 			}
 		}
@@ -1217,9 +1217,14 @@ func (g *devTier) PerSequenceKV() bool {
 	return g.paged
 }
 
-// MigrateKVSeq moves layer li's history for the current session's sequence at
-// base between host and device (nn.SeqKVDevice).
+// MigrateKVSeq is migrateKVSeq for the zero session: a caller that never attached.
 func (g *devTier) MigrateKVSeq(li, base int, k, v []float32, pos int, toDevice bool) bool {
+	return g.migrateKVSeq(0, li, base, k, v, pos, toDevice)
+}
+
+// migrateKVSeq moves layer li's history for session sid's sequence at
+// base between host and device (nn.SeqKVDevice).
+func (g *devTier) migrateKVSeq(sid uint64, li, base int, k, v []float32, pos int, toDevice bool) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !g.paged {
@@ -1231,17 +1236,22 @@ func (g *devTier) MigrateKVSeq(li, base int, k, v []float32, pos int, toDevice b
 	if l := g.layers[li]; pos <= 0 || l != nil && l.kvSrc != li {
 		return true
 	}
-	if err := g.pagedMigrate(li, base, k, v, pos, toDevice); err != nil {
+	if err := g.pagedMigrate(sid, li, base, k, v, pos, toDevice); err != nil {
 		g.LastErr = fmt.Sprintf("MigrateKVSeq: block %d, sequence at %d: %v", li, base, err)
 		return false
 	}
 	return true
 }
 
-// MigrateEnt moves DeepSeek V4 block li's entries for the current session's
+// MigrateEnt is migrateEnt for the zero session: a caller that never attached.
+func (g *devTier) MigrateEnt(li, base int, ent []float32, n int, toDevice bool) bool {
+	return g.migrateEnt(0, li, base, ent, n, toDevice)
+}
+
+// migrateEnt moves DeepSeek V4 block li's entries for session sid's
 // sequence at base between host and device (nn.EntDevice): n entries of the
 // block's entry row, [n][row] float32.
-func (g *devTier) MigrateEnt(li, base int, ent []float32, n int, toDevice bool) bool {
+func (g *devTier) migrateEnt(sid uint64, li, base int, ent []float32, n int, toDevice bool) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !g.paged {
@@ -1251,16 +1261,21 @@ func (g *devTier) MigrateEnt(li, base int, ent []float32, n int, toDevice bool) 
 	if n <= 0 {
 		return true
 	}
-	if err := g.pagedMigrate(entKey(li), base, ent, ent, n, toDevice); err != nil {
+	if err := g.pagedMigrate(sid, entKey(li), base, ent, ent, n, toDevice); err != nil {
 		g.LastErr = fmt.Sprintf("MigrateEnt: block %d, sequence at %d: %v", li, base, err)
 		return false
 	}
 	return true
 }
 
-// ReserveKVSeqs takes the pages the current session's sequences at bases need
-// for positions up to ends (nn.SeqKVDevice).
+// ReserveKVSeqs is reserveKVSeqs for the zero session: a caller that never attached.
 func (g *devTier) ReserveKVSeqs(bases, ends []int) bool {
+	return g.reserveKVSeqs(0, bases, ends)
+}
+
+// reserveKVSeqs takes the pages session sid's sequences at bases need
+// for positions up to ends (nn.SeqKVDevice).
+func (g *devTier) reserveKVSeqs(sid uint64, bases, ends []int) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !g.paged {
@@ -1269,9 +1284,9 @@ func (g *devTier) ReserveKVSeqs(bases, ends []int) bool {
 	}
 	g.pgSeqs = g.pgSeqs[:0]
 	for i, b := range bases {
-		g.pgSeqs = append(g.pgSeqs, seqEnd{seqID{g.cur, b}, ends[i], -1})
+		g.pgSeqs = append(g.pgSeqs, seqEnd{seqID{sid, b}, ends[i], -1})
 	}
-	if err := g.pagedAppend(g.pgSeqs); err != nil {
+	if err := g.pagedAppend(sid, g.pgSeqs); err != nil {
 		g.LastErr = err.Error()
 		return false
 	}
@@ -1295,15 +1310,15 @@ func unpackF16(dst, words []float32) {
 	}
 }
 
-// pagedHold gives the current session's sequence the pages pos positions of
+// pagedHold gives session sid's sequence the pages pos positions of
 // its history need, in every layer it holds, growing a layer that is short.
 // It takes them rather than counting free ones as room: every caller reserves
 // positions it is about to write, and a free page is exactly what kvCompact
 // gives back when another layer grows -- counted and not taken, it was gone by
 // the time the token asked for it. Callers hold g.mu.
-func (g *devTier) pagedHold(pos int) error {
-	g.pgSeqs = append(g.pgSeqs[:0], seqEnd{seqID{g.cur, 0}, pos, -1})
-	return g.pagedAppend(g.pgSeqs)
+func (g *devTier) pagedHold(sid uint64, pos int) error {
+	g.pgSeqs = append(g.pgSeqs[:0], seqEnd{seqID{sid, 0}, pos, -1})
+	return g.pagedAppend(sid, g.pgSeqs)
 }
 
 // kvPoolBytes is what the pool holds against the budget: every layer's

@@ -57,7 +57,7 @@ func (kp *kvPool) evictable(l *kvLayerPool, s seqID) int {
 // Only a session of one sequence gives pages up: a batch's rows run together
 // and one row cannot stream while the others read their pages in place.
 // ok is false when nothing can leave.
-func (g *devTier) evictVictim(kp *kvPool) (seqID, bool) {
+func (g *devTier) evictVictim(sid uint64, kp *kvPool) (seqID, bool) {
 	perSess := map[uint64]int{}
 	for s := range kp.ranges {
 		perSess[s.sid]++
@@ -82,7 +82,7 @@ func (g *devTier) evictVictim(kp *kvPool) (seqID, bool) {
 		if !held || !spare {
 			continue
 		}
-		cur := s.sid == g.cur
+		cur := s.sid == sid
 		// Deterministic across map order: other sessions first, then the
 		// lowest session id.
 		if !found || bestCur && !cur || cur == bestCur && s.sid < best.sid {
@@ -178,7 +178,7 @@ func (g *devTier) evictPage(kp *kvPool, s seqID) error {
 // sends nothing home, since pages at home with no room left to stream them
 // back would refuse every later call rather than this one.
 // Callers hold g.mu, between submissions.
-func (g *devTier) evictForRoom(kp *kvPool, l *kvLayerPool, want int) bool {
+func (g *devTier) evictForRoom(sid uint64, kp *kvPool, l *kvLayerPool, want int) bool {
 	short := want + 1 - len(l.free)
 	if short <= 0 {
 		return true
@@ -187,7 +187,7 @@ func (g *devTier) evictForRoom(kp *kvPool, l *kvLayerPool, want int) bool {
 		return false
 	}
 	for len(l.free) < want+1 {
-		s, ok := g.evictVictim(kp)
+		s, ok := g.evictVictim(sid, kp)
 		if !ok {
 			return false
 		}
@@ -201,13 +201,13 @@ func (g *devTier) evictForRoom(kp *kvPool, l *kvLayerPool, want int) bool {
 
 // streamRoom makes sure every layer the session holds keeps a free id once a
 // call's pages are taken, when anything is at home: streaming needs one.
-func (g *devTier) streamRoom() error {
+func (g *devTier) streamRoom(sid uint64) error {
 	kp := g.kvPages()
 	if len(kp.evicted) == 0 {
 		return nil
 	}
-	return g.heldLayers(func(li int, l *kvLayerPool) error {
-		if len(l.free) == 0 && !g.evictForRoom(kp, l, 0) {
+	return g.heldLayers(sid, func(li int, l *kvLayerPool) error {
+		if len(l.free) == 0 && !g.evictForRoom(sid, kp, l, 0) {
 			return fmt.Errorf("%w: block %d has no free page to stream evicted history through", ErrKVCapacity, li)
 		}
 		return nil

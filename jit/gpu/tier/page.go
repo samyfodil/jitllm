@@ -511,10 +511,10 @@ func (g *devTier) pageIn(li, lo, hi int) bool {
 // next block is not resident, since a submission names its blocks' buffers:
 // under the MRU policy that is one submission for the pinned prefix and one
 // per streamed block, each one host/device crossing.
-func (g *devTier) submit(bs *blockScratch, lo, hi, pos int, x, cs, csSWA []float32, head *nn.Head) bool {
+func (g *devTier) submit(sid uint64, bs *blockScratch, lo, hi, pos int, x, cs, csSWA []float32, head *nn.Head) bool {
 	if lo >= hi {
 		// An empty range, with or without a head: layersOnce owns that rule.
-		return g.layersOnce(bs, lo, hi, pos, x, cs, csSWA, head)
+		return g.layersOnce(sid, bs, lo, hi, pos, x, cs, csSWA, head)
 	}
 	rows := 1
 	if w := bs.p.ResidW(); w > 0 && len(x) > w {
@@ -545,7 +545,7 @@ func (g *devTier) submit(bs *blockScratch, lo, hi, pos int, x, cs, csSWA []float
 		// should be in flight during layersOnce, as an early EnsurePage into
 		// the frame pool (jlm reads, it does not map).
 		t0 := time.Now()
-		if !g.layersOnce(bs, li, end, pos, x, cs, csSWA, h) {
+		if !g.layersOnce(sid, bs, li, end, pos, x, cs, csSWA, h) {
 			return false
 		}
 		g.mu.Lock()
