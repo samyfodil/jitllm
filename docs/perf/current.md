@@ -825,6 +825,32 @@ dispersion fails RULE 2's gate (the hybrid arm's runs spread 0.55-0.92 tok/s
 against the host's 0.37-0.41), so this is **not** a RULE 2 ratio. With 8-token
 runs the A/A read 0.993 at 0.118.
 
+### Kimi-K3: kimi-k3-in-c on the same box
+
+kimi-k3-in-c (github.com/FareedKhan-dev/kimi-k3-in-c at 81bb6c2, built on the
+box with `make -j`, `make test`: "ENGINE MATCHES THE REFERENCE EXACTLY") on the
+release's safetensors at the revision jitllm's container was converted from
+(moonshotai/Kimi-K3@f831ab66, 96 shards, 1,560,998,661,367 B, every file's size
+checked against the Hub), its trunk packed per its README (108.8 GB). Same box
+and RAID as every row above; the jitllm container was deleted to make the room
+and reconverted afterwards. Command, run twice back to back under one cgroup
+ceiling (`systemd-run --user --scope -p MemoryMax=420G -p MemorySwapMax=0`),
+all 56 threads (its default physical-core count), no numactl:
+
+    ./bin/k3 model --trunk trunk --trunk-gb 112 --cache-gb 260 --tok model \
+        --prompt "The capital of France is" --gen 64 --incremental
+
+| run | first token (step 0) | decode s/token (steps 1-63) | tok/s | read | peak RSS |
+|---|---|---|---|---|---|
+| kimi-k3-in-c, run 1 | 153.9 s | 9.55 | 0.105 | 539 GB in the run (430 GB experts, 109 GB trunk) | 376.7 GB |
+| kimi-k3-in-c, run 2 | 74.9 s | 8.83 | 0.113 | 544 GB | 376.7 GB |
+
+Its tokens: `17374 20829 10 427 414 1008 606 142957 37092 387 7081 306 ...` --
+"Paris.", then a quoted list of sentences about Paris, identical in both runs
+and identical to jitllm's device runs of this prompt (the streamed rows above);
+jitllm's host run parts from it at the second token (`13` against `20829`),
+within RULE 11c's band of two f32 reduction orders.
+
 ## ★ THE V100 BOARD (sweep5, one pass, main at c07936d + fixes)
 
 Host: the 8x V100 server, 2x Xeon E5-2680 v4, 8x Tesla V100-SXM2-16GB (sm_70), CUDA.
