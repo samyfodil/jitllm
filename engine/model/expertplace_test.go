@@ -69,9 +69,9 @@ func TestExpertPlacementIsHonoured(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			g, err := tier.OpenWith(tier.WithDevices("cuda:0"), tier.WithDeviceTune(tier.TuneOff))
+			g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
 			if err != nil || g == nil {
-				noDevice(t, "cuda:0", err)
+				noDevice(t, "gpu:0", err)
 			}
 			defer g.Close()
 			got := runExperts(t, m, g, ids)
@@ -120,9 +120,9 @@ func TestOffCardExpertsRelocate(t *testing.T) {
 			}
 			defer m.Close()
 			open := func() *tier.GPU {
-				g, err := tier.OpenWith(tier.WithDevices("cuda:0"), tier.WithDeviceTune(tier.TuneOff))
+				g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
 				if err != nil || g == nil {
-					noDevice(t, "cuda:0", err)
+					noDevice(t, "gpu:0", err)
 				}
 				return g
 			}
@@ -228,9 +228,9 @@ func TestHybridPrefillMatchesTheHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	g, err := tier.OpenWith(tier.WithDevices("cuda:0"), tier.WithDeviceTune(tier.TuneOff))
+	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || g == nil {
-		noDevice(t, "cuda:0", err)
+		noDevice(t, "gpu:0", err)
 	}
 	defer g.Close()
 	got := prefill(m, g)

@@ -566,9 +566,9 @@ func TestOffCardDecodeDoesNotAllocate(t *testing.T) {
 						t.Fatal(err)
 					}
 					defer m.Close()
-					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices("cuda:0")}, testTierOpts(t)...)...)
+					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices("gpu:0")}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
-						noDevice(t, "cuda:0", err)
+						noDevice(t, "gpu:0", err)
 					}
 					defer g.Close()
 					t.Run("decode", func(t *testing.T) { decodeAllocs(t, m, g) })
