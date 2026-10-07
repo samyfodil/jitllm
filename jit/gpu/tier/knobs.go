@@ -284,3 +284,17 @@ func (o *openOpts) apply() {
 func (o *openOpts) devOpts() backend.Opts {
 	return backend.Opts{Vulkan: o.vk, CUDAPosted: o.cudaPosted, Metal: o.metal}
 }
+
+// WithAutoStream sets whether a mixture block no device can hold resident is
+// streamed onto one (GPU.AutoStream) rather than left on the host. On by
+// default.
+func WithAutoStream(on bool) Option {
+	return WithConfig(func(c *Config) { c.NoAutoStream = !on })
+}
+
+// WithHybridExperts sets where a streamed block's routed experts run by
+// default: on the host (true, hybrid execution) or sent to the card each token
+// (false). A placement's choice for a block (GPU.PlaceExperts) wins.
+func WithHybridExperts(on bool) Option {
+	return WithConfig(func(c *Config) { c.HybridExperts, c.NoHybrid = on, !on })
+}

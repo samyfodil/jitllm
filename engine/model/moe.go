@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"slices"
 	"time"
 	"unsafe"
 
@@ -77,7 +78,31 @@ func (s *State) moe(li int, l *layer, rin, h, out []float32) error {
 	sel := s.route.Sel
 	// The selected experts are read here, the first moment anyone knows which.
 	// pageIn deliberately skipped the banks, since a token touches only a few.
-	err := s.m.ensureExperts(li, sel, &s.expHold)
+	var err error
+	if sh := s.shOverlap; sh != nil {
+		// The shared expert reads none of the routed pages, so it runs while
+		// they are read; its contribution is added where it always was, by
+		// the caller, so the sum is the same float sum (placement.md 16c-2).
+		s.shOverlap = nil
+		if s.expReq == nil {
+			// One reader for the State's life, not a goroutine a layer: a go
+			// statement with arguments allocates (TestDecodeDoesNotAllocate).
+			s.expReq = make(chan expRead)
+			go s.expertReader(s.expReq)
+		}
+		s.expWG.Add(1)
+		s.expReq <- expRead{li: li, sel: sel}
+		w, serr := s.sharedExpertOut(sh, s.shOverlapH)
+		s.expWG.Wait()
+		err = s.expErr
+		if err == nil {
+			err = serr
+		}
+		s.shW, s.shReady = w, serr == nil
+		s.ShOverlaps++
+	} else {
+		err = s.m.ensureExperts(li, sel, &s.expHold)
+	}
 	defer s.expHold.release()
 	if err != nil {
 		return err
@@ -115,42 +140,8 @@ func (s *State) moe(li int, l *layer, rin, h, out []float32) error {
 		return err
 	}
 	if !done {
-		// The fallback loops the down projection too, so it is counted here;
-		// moeFFN returned before reaching its own counter.
-		s.moeLooped.Add(1)
-		s.moeDownLooped.Add(1)
-		ff := c.NFFNExp
-		for i, e := range ord {
-			w := ow[i]
-			x := &l.experts[e]
-			if l.ungatedExp {
-				// No gate: the activation alone, in the gate's buffer, which
-				// down reads.
-				if err := s.mv(s.moeGate[:ff], x.up, h); err != nil {
-					return err
-				}
-				s.actAll(s.moeGate[:ff], c.Act)
-			} else {
-				// gate and up read h, which is still the cached quantization.
-				if err := s.mv(s.moeGate[:ff], x.gate, h); err != nil {
-					return err
-				}
-				if err := s.mv(s.moeUp[:ff], x.up, h); err != nil {
-					return err
-				}
-				w = s.weightIn(w, s.moeGate[:ff], s.moeUp[:ff])
-				s.addBias(s.moeGate[:ff], expBias(l.expGateB, int(e), ff))
-				s.addBias(s.moeUp[:ff], expBias(l.expUpB, int(e), ff))
-				s.actmulAll(s.moeGate[:ff], s.moeUp[:ff], c.Act)
-			}
-			s.jit.NewInput()
-			ew := c.ExpWidth()
-			if err := s.mv(s.moeDown[:ew], x.down, s.moeGate[:ff]); err != nil {
-				return err
-			}
-			s.addBias(s.moeDown[:ew], expBias(l.expDownB, int(e), ew))
-			s.axpy(out, s.moeDown[:ew], w)
-			s.jit.NewInput()
+		if err := s.moeLoop(l, ord, ow, h, out); err != nil {
+			return err
 		}
 	}
 	// Gemma 4's dense MLP is not a shared expert's addition (see denseMoE),
@@ -406,33 +397,65 @@ func (s *State) sharedExpert(l *layer, h, out []float32) error {
 	if l.shGate.rows == 0 && l.shUp.rows == 0 {
 		return nil
 	}
+	w, err := s.sharedExpertOut(l, h)
+	if err != nil {
+		return err
+	}
+	s.axpy(out, s.shOut, w)
+	s.jit.NewInput()
+	return nil
+}
+
+// expRead is one layer's routed read handed to the State's reader.
+type expRead struct {
+	li  int
+	sel []int32
+}
+
+// expertReader runs ensureExperts for each request until the channel closes
+// (State.Close), its error left in s.expErr: the routed read moe runs
+// behind the shared expert.
+func (s *State) expertReader(req chan expRead) {
+	for r := range req {
+		s.expErr = s.m.ensureExperts(r.li, r.sel, &s.expHold)
+		s.expWG.Done()
+	}
+}
+
+// sharedExpertOut computes the shared expert's output into s.shOut and
+// returns the weight it is added at, adding nothing: sharedExpert adds it,
+// and moe's overlap leaves the add to its caller.
+func (s *State) sharedExpertOut(l *layer, h []float32) (float32, error) {
+	if l.shGate.rows == 0 && l.shUp.rows == 0 {
+		return 0, nil
+	}
 	// The gate logit is a 1 x NEmbd F32 matvec written straight into s.sg[0].
 	// MatVecHost, not MatVec: this only runs for a block the host is running,
 	// so offering one row to the device would be a pointless round trip.
 	if l.shRouter != nil {
 		if !s.jit.MatVecHost(s.sg[:1], quant.F32, f32Bytes(l.shRouter), h, 1, len(l.shRouter)) {
-			return fmt.Errorf("model: no kernel for the shared expert's gate (F32, 1 x %d)",
+			return 0, fmt.Errorf("model: no kernel for the shared expert's gate (F32, 1 x %d)",
 				len(l.shRouter))
 		}
 	}
 	if l.shGate.rows == 0 {
 		// Ungated (Nemotron 3): down(act(up(h))).
 		if err := s.mv(s.shGate, l.shUp, h); err != nil {
-			return err
+			return 0, err
 		}
 		s.actAll(s.shGate, s.c.Act)
 	} else {
 		if err := s.mv(s.shGate, l.shGate, h); err != nil {
-			return err
+			return 0, err
 		}
 		if err := s.mv(s.shUp, l.shUp, h); err != nil {
-			return err
+			return 0, err
 		}
 		s.actmulAll(s.shGate, s.shUp, s.c.Act)
 	}
 	s.jit.NewInput()
 	if err := s.mv(s.shOut, l.shDown, s.shGate); err != nil {
-		return err
+		return 0, err
 	}
 	// The gate is one logit, and the generated sigmoid takes it as a
 	// one-element vector: sg[0] = sigma(logit) * sg[1], with sg[1] = 1.
@@ -448,9 +471,8 @@ func (s *State) sharedExpert(l *layer, h, out []float32) error {
 	// Granite's residual scale, which the mixture cannot take at an add of
 	// its own: it adds straight into the residual. See addInto.
 	w *= float32(s.c.ResidualScale)
-	s.axpy(out, s.shOut, w)
 	s.jit.NewInput()
-	return nil
+	return w, nil
 }
 
 // moeBatch runs the mixture-of-experts FFN for a whole chunk of rows, visiting
@@ -745,4 +767,171 @@ func (s *State) growMoEBatch(n int) {
 	s.bmY = scratch(h.bmY, n*c.NEmbd, 0)
 	s.bmG = scratch(h.bmG, n*c.NFFNExp, ffnPad(n*c.NFFNExp))
 	s.bmU = scratch(h.bmU, n*c.NFFNExp, ffnPad(n*c.NFFNExp))
+}
+
+// hostExpertsFor is block li's nn.LayerWeights.HostExperts: the routed
+// experts on the host for a device running the rest of the block. nil for a
+// block with no mixture, and for a mixture whose experts read anything but
+// the one vector they are given (a dense MLP beside them, per-expert scales,
+// ungated experts): those stay whole on one tier.
+func (s *State) hostExpertsFor(li int) func(sel []uint32, w, in, out []float32) error {
+	c := s.c
+	if !c.MoEAt(li) || c.DenseMoE || s.m.layers[li].ungatedExp {
+		return nil
+	}
+	return func(sel []uint32, w, in, out []float32) error { return s.hostExperts(li, sel, w, in, out) }
+}
+
+// hostExpertsRowsFor is block li's nn.LayerWeights.HostExpertsRows, nil where
+// hostExpertsFor is.
+func (s *State) hostExpertsRowsFor(li int) func(sel []uint32, w, in, out []float32, rows, k int) error {
+	if s.hostExpertsFor(li) == nil {
+		return nil
+	}
+	return func(sel []uint32, w, in, out []float32, rows, k int) error {
+		return s.hostExpertsRows(li, sel, w, in, out, rows, k)
+	}
+}
+
+// hostExpertsRows is moeBatch's expert-major pass with the device's
+// selections and weights: each expert the chunk chose is read once and run
+// over its rows as one batch (moeBatchExpert), summed into out in ascending
+// expert id, rows ascending -- the order the host's own batched mixture sums.
+func (s *State) hostExpertsRows(li int, sel []uint32, w, in, out []float32, rows, k int) error {
+	c := s.c
+	l := &s.m.layers[li]
+	if k != c.NExpertUsed {
+		return fmt.Errorf("model: block %d: %d routed experts a row, the model routes %d", li, k, c.NExpertUsed)
+	}
+	s.hostOnly = true
+	defer func() { s.hostOnly = false }()
+	if len(s.bsel) < rows*k {
+		s.bsel = make([]int32, rows*k)
+		s.bw = make([]float32, rows*k)
+	}
+	for i := 0; i < rows; i++ {
+		for j := 0; j < k; j++ {
+			s.bsel[i*k+j] = int32(sel[i*(k+1)+j])
+			s.bw[i*k+j] = w[i*k+j]
+		}
+	}
+	s.growMoEBatch(rows)
+	clear(out)
+	for e := 0; e < c.NExpert; e++ {
+		used := false
+		for i := 0; i < rows*k && !used; i++ {
+			used = s.bsel[i] == int32(e)
+		}
+		if !used {
+			continue
+		}
+		one := [1]int32{int32(e)}
+		err := s.m.pageInSelected(li, []uint32{uint32(e)})
+		if err == nil {
+			err = s.m.ensureExperts(li, one[:], &s.expHold)
+		}
+		if err == nil {
+			err = s.moeBatchExpert(l, e, in, out, rows)
+		}
+		s.expHold.release()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// hostExperts is hostExpertsFor's body: the selection put in ascending id
+// with its weights, as moe sums them (the batched path visits the bank in
+// that order), the pages read, and moeFFN over in into out. It is moe() from
+// its selection on, with the device's selection and weights in place of the
+// host router's.
+func (s *State) hostExperts(li int, sel []uint32, w, in, out []float32) error {
+	l := &s.m.layers[li]
+	if l.ungatedExp {
+		return fmt.Errorf("model: block %d: ungated experts do not run split across tiers", li)
+	}
+	k := len(sel)
+	s.hyOrd = slices.Grow(s.hyOrd[:0], k)[:k]
+	s.hyW = slices.Grow(s.hyW[:0], k)[:k]
+	for i, e := range sel {
+		// Insertion by id: k is a handful.
+		j := i
+		for j > 0 && s.hyOrd[j-1] > int32(e) {
+			s.hyOrd[j], s.hyW[j] = s.hyOrd[j-1], s.hyW[j-1]
+			j--
+		}
+		s.hyOrd[j], s.hyW[j] = int32(e), w[i]
+	}
+	s.hostOnly = true
+	defer func() { s.hostOnly = false }()
+	// A bank not split into expert pages lives in the block's own page, which
+	// nothing else on the host has reason to keep in: read the selected
+	// sheets' ranges of it (a no-op for a bank in expert pages).
+	if err := s.m.pageInSelected(li, sel); err != nil {
+		return err
+	}
+	if err := s.m.ensureExperts(li, s.hyOrd, &s.expHold); err != nil {
+		s.expHold.release()
+		return err
+	}
+	defer s.expHold.release()
+	clear(out)
+	s.jit.NewInput()
+	done, err := s.moeFFN(l, s.hyOrd, in, out, s.hyW)
+	if err != nil {
+		return err
+	}
+	if !done {
+		if err := s.moeLoop(l, s.hyOrd, s.hyW, in, out); err != nil {
+			return err
+		}
+	}
+	s.jit.NewInput()
+	return nil
+}
+
+// moeLoop is moeFFN's fallback, one generated matvec per expert and
+// projection, summing each expert's weighted output into out: the path a
+// mixture with no fused expert kernel takes (an F32 bank).
+func (s *State) moeLoop(l *layer, ord []int32, ow []float32, h, out []float32) error {
+	c := s.c
+	// The fallback loops the down projection too, so it is counted here;
+	// moeFFN returned before reaching its own counter.
+	s.moeLooped.Add(1)
+	s.moeDownLooped.Add(1)
+	ff := c.NFFNExp
+	for i, e := range ord {
+		w := ow[i]
+		x := &l.experts[e]
+		if l.ungatedExp {
+			// No gate: the activation alone, in the gate's buffer, which
+			// down reads.
+			if err := s.mv(s.moeGate[:ff], x.up, h); err != nil {
+				return err
+			}
+			s.actAll(s.moeGate[:ff], c.Act)
+		} else {
+			// gate and up read h, which is still the cached quantization.
+			if err := s.mv(s.moeGate[:ff], x.gate, h); err != nil {
+				return err
+			}
+			if err := s.mv(s.moeUp[:ff], x.up, h); err != nil {
+				return err
+			}
+			w = s.weightIn(w, s.moeGate[:ff], s.moeUp[:ff])
+			s.addBias(s.moeGate[:ff], expBias(l.expGateB, int(e), ff))
+			s.addBias(s.moeUp[:ff], expBias(l.expUpB, int(e), ff))
+			s.actmulAll(s.moeGate[:ff], s.moeUp[:ff], c.Act)
+		}
+		s.jit.NewInput()
+		ew := c.ExpWidth()
+		if err := s.mv(s.moeDown[:ew], x.down, s.moeGate[:ff]); err != nil {
+			return err
+		}
+		s.addBias(s.moeDown[:ew], expBias(l.expDownB, int(e), ew))
+		s.axpy(out, s.moeDown[:ew], w)
+		s.jit.NewInput()
+	}
+	return nil
 }

@@ -377,14 +377,28 @@ func (s *State) k3MoE(li int, l *layer, h, out []float32) error {
 		return err
 	}
 	clear(acc)
+	// The shared experts run behind the routed read (moe's shOverlap) when
+	// the block has them; they are added below, where they always were.
+	s.shReady = false
+	if (l.shGate.rows != 0 || l.shUp.rows != 0) && !s.m.opt.noShOverlap {
+		s.shOverlap, s.shOverlapH = l, h
+	}
 	if err := s.moe(li, l, h, lat, acc); err != nil {
+		s.shOverlap = nil
 		return err
 	}
+	s.shOverlap = nil
 	if err := s.k3LatentOut(l, acc, up, 1); err != nil {
 		return err
 	}
 	s.addInto(out, up)
 	s.jit.NewInput()
+	if s.shReady {
+		s.shReady = false
+		s.axpy(out, s.shOut, s.shW)
+		s.jit.NewInput()
+		return nil
+	}
 	return s.sharedExpert(l, h, out)
 }
 

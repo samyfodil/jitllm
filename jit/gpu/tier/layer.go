@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -253,8 +254,74 @@ type streamBank struct {
 	// non-nil fill pipelines: group g uploads while group g+1 reads. See
 	// nn.LayerWeights.PrefetchExperts.
 	pre func([]uint32) error
-	// st is the per-(matrix, plane) staging buffer; see fill.
-	st [9][]byte
+	// rd and grp are fill's reads in flight and its groups, kept so a token
+	// allocates neither; items and want are its work list and the experts
+	// it reads.
+	rd    []streamRead
+	grp   [][2]int
+	items []streamItem
+	want  []uint32
+	// The expert cache (initCache), nil without one: slotOf maps an expert
+	// to the slot holding it or -1, owner a slot to its expert or -1, used a
+	// slot to the tick it was last selected; slotSel is this token's
+	// selection in slots.
+	slotOf  []int32
+	owner   []int32
+	used    []uint64
+	tick    uint64
+	slotSel []uint32
+	bank    *resident
+	// nExpert is the bank's expert count, so a cache can be set up after
+	// placement (GPU.sizeAutoCaches).
+	nExpert int
+	// The cross-layer prefetch (prefetch): the experts it reads, whether a
+	// read is in flight, its join and its error.
+	pfWant []uint32
+	pfOn   bool
+	pfWG   sync.WaitGroup
+	pfErr  error
+	// host is the block's routed experts on the host (hybrid execution), and
+	// hin, hw and hout its input, weights and output, reused every token.
+	host          func(sel []uint32, w, in, out []float32) error
+	hybrid        bool // the experts run on the host (runHost), not sent
+	li            int  // the block, for the session's host side (hostFor)
+	hin, hw, hout []float32
+	hsel          []uint32
+	// pred is this block's selection as the previous block's probe predicted
+	// it (Config.StreamProbe), valid while havePred; score compares it with
+	// the real one and clears it.
+	pred     []uint32
+	havePred bool
+}
+
+// score charges this token's selection to the probe's counters and hands it
+// to Config.StreamSelLog. Both are measurement: a run without either pays a
+// branch.
+func (st *streamBank) score(g *devTier, li int) {
+	if g.StreamSelLog != nil {
+		g.StreamSelLog(li, st.sel)
+	}
+	if !st.havePred {
+		return
+	}
+	st.havePred = false
+	for _, e := range st.sel {
+		for _, q := range st.pred {
+			if q == e {
+				g.ProbeHits++
+				break
+			}
+		}
+	}
+	g.ProbeExperts += len(st.sel)
+}
+
+// growU32 returns s resized to n, reusing its array when it is big enough.
+func growU32(s []uint32, n int) []uint32 {
+	if cap(s) < n {
+		return make([]uint32, n)
+	}
+	return s[:n]
 }
 
 // fill uploads the k sheets this token routed to, in selection order, so that
@@ -268,91 +335,416 @@ func (st *streamBank) fill(g *devTier, s backend.Session, l *layer, nExpert int)
 	// model.enterPager holds the pager for the whole Forward, which closes this
 	// window and the other three like it; jlm.Lease is the finer primitive.
 	//
-	// The read and the upload are pipelined over groups of the selection: group g
-	// uploads while group g+1 reads. Only the first group goes through sel2, which
-	// re-points st.w and binds; the rest go through pre, which touches nothing
-	// shared -- two sel2 calls in flight would race on the model's layer.
-	grp := st.groups(g, len(st.sel))
+	// Every group's read is issued up front and group g uploads as soon as its
+	// own read has landed, so the pager has the whole selection in flight and
+	// the transfers overlap the reads still running. Only the first group goes
+	// through sel2, which re-points st.w and binds; the reads go through pre,
+	// which touches nothing shared -- two sel2 calls in flight would race on
+	// the model's layer. A bank in expert pages gets nothing from sel2 (its
+	// sheets are reached through Sheet), so the first group is read through pre
+	// too: without it every page was faulted in by Sheet one at a time, inside
+	// the upload loop (placement.md 16c).
+	// The work is a list of (expert, slot) items: every selected expert into
+	// slot i without a cache, and only the misses, into the slots they evict,
+	// with one.
+	st.items = st.items[:0]
+	if st.cached() {
+		// A bank paged out and back in is a new buffer with nothing in it, so
+		// the map is only good for the buffer it was built over.
+		if l.down != st.bank {
+			st.forget()
+			st.bank = l.down
+		}
+		st.lookup(g)
+	} else {
+		for i, e := range st.sel {
+			st.items = append(st.items, streamItem{e: e, slot: i})
+		}
+	}
+	if len(st.items) == 0 {
+		return nil
+	}
+	st.want = st.want[:0]
+	for _, it := range st.items {
+		st.want = append(st.want, it.e)
+	}
+	grp := st.groups(g, len(st.items))
 	t0 := time.Now()
+	// The previous block's prefetch of this one is joined first: its reads
+	// are this fill's reads when the prediction was right, and a frame still
+	// being read is the eviction hazard above.
+	if st.pfOn {
+		tw := time.Now()
+		st.pfWG.Wait()
+		st.pfOn = false
+		g.TStreamPrefetchWait += time.Since(tw)
+	}
+	if st.pre != nil {
+		if cap(st.rd) < len(grp) {
+			st.rd = make([]streamRead, len(grp))
+		}
+		st.rd = st.rd[:len(grp)]
+		for gi := 1; gi < len(grp); gi++ {
+			st.rd[gi].wg.Add(1)
+			g.StreamOverlaps++
+			go st.read(gi, grp[gi])
+		}
+	}
+	var err error
+	if st.pre != nil {
+		err = st.pre(st.want[grp[0][0]:grp[0][1]])
+	}
 	switch {
+	case err != nil:
 	case st.sel2 != nil:
 		// The narrow read is preferred: the whole bank is correct but tens of
 		// times the bytes the token consumes.
-		if err := st.sel2(&st.w, st.sel[grp[0][0]:grp[0][1]]); err != nil {
-			return err
-		}
+		err = st.sel2(&st.w, st.want[grp[0][0]:grp[0][1]])
 	case st.ensure != nil:
-		if err := st.ensure(&st.w); err != nil {
-			return err
-		}
+		err = st.ensure(&st.w)
 	}
 	g.TStreamRead += time.Since(t0)
-	// One transfer per plane, not per sheet: a small cuMemcpyHtoD is priced per
-	// call on the goroutine that owns the driver, and staging a plane's k sheets
-	// into one host buffer (a cheap memcpy) turns ~90 small transfers per block
-	// into 9 at a size where PCIe reaches its rate.
 	for gi := range grp {
-		// Start the next group's read before uploading this one. pre touches no
-		// shared state, so the only synchronisation needed is the join below.
-		var errc chan error
-		if gi+1 < len(grp) && st.pre != nil {
-			nx := grp[gi+1]
-			errc = make(chan error, 1)
-			g.StreamOverlaps++
-			go func(sel []uint32) { errc <- st.pre(sel) }(st.sel[nx[0]:nx[1]])
-		}
-		t1 := time.Now()
-		err := st.put(s, l, nExpert, grp[gi])
-		g.TStreamPut += time.Since(t1)
-		if errc != nil {
-			// Joined even on failure: a goroutine still reading into a frame
-			// this block is about to release is the eviction hazard above.
+		// Every read is joined, even after a failure: a goroutine still reading
+		// into a frame this block is about to release is the eviction hazard
+		// above.
+		if gi > 0 && st.pre != nil {
 			t2 := time.Now()
-			rerr := <-errc
+			st.rd[gi].wg.Wait()
 			g.TStreamRead += time.Since(t2)
 			if err == nil {
-				err = rerr
+				err = st.rd[gi].err
 			}
 		}
-		if err != nil {
+		if err == nil {
+			t1 := time.Now()
+			err = st.put(g, s, l, nExpert, grp[gi])
+			g.TStreamPut += time.Since(t1)
+		}
+	}
+	return err
+}
+
+// prefetch starts reading this block's predicted experts into host frames
+// while the block before it finishes (Config.StreamPrefetch). It reads and
+// never uploads: a wrong guess costs disk bytes, not link bytes or cache
+// slots, and the fill that follows still reads, maps and sends exactly the
+// experts the router chose. An expert the cache already holds is not read.
+func (st *streamBank) prefetch(g *devTier) {
+	if st.pre == nil || st.pfOn {
+		return
+	}
+	st.pfWant = st.pfWant[:0]
+	for _, e := range st.pred {
+		if st.cached() && int(e) < len(st.slotOf) && st.slotOf[e] >= 0 {
+			continue
+		}
+		st.pfWant = append(st.pfWant, e)
+	}
+	if len(st.pfWant) == 0 {
+		return
+	}
+	g.StreamPrefetched += len(st.pfWant)
+	st.pfOn = true
+	st.pfWG.Add(1)
+	go st.prefetchRun()
+}
+
+// prefetchRun is prefetch's read on its own goroutine. Its error is kept
+// and not returned: a failed guess is not a failed token, and the fill's own
+// read of anything it needs reports a real failure.
+func (st *streamBank) prefetchRun() {
+	defer st.pfWG.Done()
+	st.pfErr = st.pre(st.pfWant)
+}
+
+// runHostRows is runHost for a chunk of rows: the selections (row stride
+// k+1, ExpertRank's layout), the weights (stride k) and the rows of in come
+// home, the host runs each row's experts, and the rows of the sum go back.
+func (st *streamBank) runHostRows(g *devTier, s backend.Session, sel, w, in, out backend.Buf, n, k, rows int) error {
+	if cap(st.hin) < rows*n {
+		st.hin = make([]float32, rows*n)
+		st.hout = make([]float32, rows*n)
+	}
+	st.hin, st.hout = st.hin[:rows*n], st.hout[:rows*n]
+	if cap(st.hw) < rows*k {
+		st.hw = make([]float32, rows*k)
+	}
+	st.hw = st.hw[:rows*k]
+	if cap(st.hsel) < rows*(k+1) {
+		st.hsel = make([]uint32, rows*(k+1))
+	}
+	st.hsel = st.hsel[:rows*(k+1)]
+	t0 := time.Now()
+	if err := s.Sync(); err != nil {
+		return err
+	}
+	for _, rd := range [3]struct {
+		b backend.Buf
+		p []byte
+	}{{in, f32b(st.hin)}, {w, f32b(st.hw)}, {sel, u32b(st.hsel)}} {
+		if err := s.Read(rd.b, rd.p); err != nil {
 			return err
 		}
 	}
-	return nil
+	if hr := g.hostFns[g.cur][st.li].rows; hr != nil {
+		// Expert-major: each chosen expert read once for the chunk.
+		if err := hr(st.hsel, st.hw, st.hin, st.hout, rows, k); err != nil {
+			return err
+		}
+		err := s.WriteAt(out, 0, f32b(st.hout))
+		g.THybrid += time.Since(t0)
+		g.HybridRows += rows
+		return err
+	}
+	host := g.hostFor(st)
+	if host == nil {
+		return fmt.Errorf("tier: this session offered no host side for a hybrid block")
+	}
+	for r := 0; r < rows; r++ {
+		if err := host(st.hsel[r*(k+1):r*(k+1)+k], st.hw[r*k:(r+1)*k],
+			st.hin[r*n:(r+1)*n], st.hout[r*n:(r+1)*n]); err != nil {
+			return err
+		}
+	}
+	err := s.WriteAt(out, 0, f32b(st.hout))
+	g.THybrid += time.Since(t0)
+	g.HybridRows += rows
+	return err
 }
 
-// defaultStreamGroups is the knee measured on Qwen3-Next-80B: more groups buy
-// more overlap and cost more per-call PCIe transfers.
-const defaultStreamGroups = 3
+// hostFor is the current session's host side for st's block, nil when this
+// session never offered one. Never the placing session's: that State may be
+// closed, and its generated code with it. Callers hold g.mu.
+func (g *devTier) hostFor(st *streamBank) func(sel []uint32, w, in, out []float32) error {
+	return g.hostFns[g.cur][st.li].one
+}
+
+// hostSide is a session's host side for one hybrid block: a row at a time,
+// and a chunk's rows expert-major.
+type hostSide struct {
+	one  func(sel []uint32, w, in, out []float32) error
+	rows func(sel []uint32, w, in, out []float32, rows, k int) error
+}
+
+// runHost is the hybrid suspension: in (the experts' input, n wide -- the
+// expert width, which is the latent on Kimi-K3) and the k routing weights
+// come home, the host's experts sum into hout, and the sum is
+// written to out, where the combine kernel would have put it. The Sync makes
+// the launches that write in land first.
+func (st *streamBank) runHost(g *devTier, s backend.Session, in, w, out backend.Buf, n, k int) error {
+	if cap(st.hin) < n {
+		st.hin = make([]float32, n)
+		st.hout = make([]float32, n)
+	}
+	st.hin, st.hout = st.hin[:n], st.hout[:n]
+	if cap(st.hw) < k+1 {
+		st.hw = make([]float32, k+1)
+	}
+	st.hw = st.hw[:k+1]
+	t0 := time.Now()
+	if err := s.Sync(); err != nil {
+		return err
+	}
+	if err := s.Read(in, f32b(st.hin)); err != nil {
+		return err
+	}
+	if err := s.Read(w, f32b(st.hw)); err != nil {
+		return err
+	}
+	host := g.hostFor(st)
+	if host == nil {
+		return fmt.Errorf("tier: this session offered no host side for a hybrid block")
+	}
+	if err := host(st.sel, st.hw[:k], st.hin, st.hout); err != nil {
+		return err
+	}
+	err := s.WriteAt(out, 0, f32b(st.hout))
+	g.THybrid += time.Since(t0)
+	return err
+}
+
+// streamItem is one sheet set a fill sends: expert e into compact slot slot.
+type streamItem struct {
+	e    uint32
+	slot int
+}
+
+// initCache sets a block's bank up as an expert cache of n slots when n is
+// more than the selection; at n == k there is no cache and fill sends every
+// selected expert into slot i.
+func (st *streamBank) initCache(n, nExpert int) {
+	if n <= len(st.sel) {
+		return
+	}
+	st.slotOf = make([]int32, nExpert)
+	for i := range st.slotOf {
+		st.slotOf[i] = -1
+	}
+	st.owner = make([]int32, n)
+	for i := range st.owner {
+		st.owner[i] = -1
+	}
+	st.used = make([]uint64, n)
+	st.slotSel = make([]uint32, len(st.sel))
+}
+
+// cached reports whether this block's bank is an expert cache.
+func (st *streamBank) cached() bool { return st.owner != nil }
+
+// lookup maps this token's selection onto cache slots: a hit keeps its slot,
+// a miss takes the least recently used slot this token does not need, and
+// only the misses become items. slotSel is the selection in slots, which the
+// kernels index by.
+func (st *streamBank) lookup(g *devTier) {
+	st.tick++
+	for _, e := range st.sel {
+		if s := st.slotOf[e]; s >= 0 {
+			st.used[s] = st.tick
+		}
+	}
+	for i, e := range st.sel {
+		if s := st.slotOf[e]; s >= 0 {
+			st.slotSel[i] = uint32(s)
+			g.StreamCacheHits++
+			continue
+		}
+		// The victim: the oldest slot not touched this token. There always is
+		// one, since the cache holds more slots than a token selects.
+		v := -1
+		for s := range st.owner {
+			if st.used[s] != st.tick && (v < 0 || st.used[s] < st.used[v]) {
+				v = s
+			}
+		}
+		if o := st.owner[v]; o >= 0 {
+			st.slotOf[o] = -1
+		}
+		st.owner[v], st.slotOf[e], st.used[v] = int32(e), int32(v), st.tick
+		st.slotSel[i] = uint32(v)
+		st.items = append(st.items, streamItem{e: e, slot: v})
+		g.StreamCacheMisses++
+	}
+}
+
+// forget empties the cache, for when the bank's bytes can no longer be
+// trusted to be the experts the map says (a fill that failed midway).
+func (st *streamBank) forget() {
+	for i := range st.slotOf {
+		st.slotOf[i] = -1
+	}
+	for i := range st.owner {
+		st.owner[i] = -1
+	}
+}
+
+// cacheSlotsFor is a streamed block's bank size in sheets: the selection, or
+// want (Config.StreamCacheSlots) when that is bigger and the device has room for
+// the block's own bank of that many beside what it already holds. A model
+// whose expert kernels read the selection itself (DenseMoE's per-expert
+// scale) keeps the plain bank: the cache rewrites the selection as slots.
+func (g *devTier) cacheSlotsFor(p *nn.LayerPlan, ws []nn.Weight, want, slots, bank int, biased bool) int {
+	// Nor one whose experts carry biases (gpt-oss): the bias kernels index
+	// them by the selection, which the cache rewrites as slots. A second
+	// buffer of true ids would lift it.
+	if p.DenseMoE || biased {
+		return slots
+	}
+	var sheet uint64
+	for i := 4; i <= 6; i++ {
+		x := ws[i]
+		if len(x.Data) == 0 && x.Packed == nil {
+			continue
+		}
+		q, ok := quantOf(x.T)
+		if !ok {
+			return slots
+		}
+		pq, pd, psc, err := kernels.PackedWords(q, x.Rows/slots, x.K)
+		if err != nil {
+			return slots
+		}
+		sheet += uint64(pq+pd+psc) * 4
+	}
+	n := min(want, bank)
+	if n <= slots {
+		return slots
+	}
+	need := sheet * uint64(n)
+	if !g.room(need) {
+		g.StreamCacheShort++
+		return slots
+	}
+	g.StreamCacheSize = max(g.StreamCacheSize, n)
+	return n
+}
+
+// streamRead is one group's read in flight.
+type streamRead struct {
+	wg  sync.WaitGroup
+	err error
+}
+
+// read is group gi's read, run on its own goroutine. A method rather than a
+// closure, so issuing it allocates nothing on the heap.
+func (st *streamBank) read(gi int, gr [2]int) {
+	defer st.rd[gi].wg.Done()
+	st.rd[gi].err = st.pre(st.want[gr[0]:gr[1]])
+}
 
 // groups splits the selection into contiguous runs so a read can overlap an
 // upload. One group is the unpipelined path and is what a host with no
 // PrefetchExperts gets.
 func (st *streamBank) groups(g *devTier, k int) [][2]int {
-	n := g.StreamGroups
-	if n == 0 {
-		n = defaultStreamGroups
-	}
+	n := g.streamGroups(g.StreamBlocks)
 	if st.pre == nil || n < 2 || k < 2 {
-		return [][2]int{{0, k}}
+		st.grp = append(st.grp[:0], [2]int{0, k})
+		return st.grp
 	}
 	if n > k {
 		n = k
 	}
-	out := make([][2]int, 0, n)
+	st.grp = st.grp[:0]
 	per := (k + n - 1) / n
 	for lo := 0; lo < k; lo += per {
 		hi := min(lo+per, k)
-		out = append(out, [2]int{lo, hi})
+		st.grp = append(st.grp, [2]int{lo, hi})
 	}
-	return out
+	return st.grp
 }
 
-// put stages and uploads one group of sheets into the compact bank. The
-// compact bank is k sheets back to back, so slots [lo, hi) are the byte range
-// [lo*n, hi*n) of every plane.
-func (st *streamBank) put(s backend.Session, l *layer, nExpert int, gr [2]int) error {
-	lo, hi := gr[0], gr[1]
+// directSheet is the plane size from which a sheet is sent straight out of
+// its host frame instead of being gathered first. A gather turns many small
+// transfers into one, which pays below a megabyte; above it the per-call cost
+// is noise and the gather is a second pass over the bytes -- on Kimi-K3 the
+// largest term of the fill, 96 ms of 182 (placement.md 16c).
+const directSheet = 1 << 20
+
+// put uploads one group of sheets into the compact bank. The compact bank is k
+// sheets back to back, so slots [lo, hi) are the byte range [lo*n, hi*n) of
+// every plane. A plane of directSheet or more is sent sheet by sheet from the
+// host frame; a smaller one is gathered into the device's staging buffer and
+// sent once.
+func (st *streamBank) put(g *devTier, s backend.Session, l *layer, nExpert int, gr [2]int) (err error) {
+	items := st.items[gr[0]:gr[1]]
+	// Without a cache the items are slots lo..hi-1 in order, so a small plane
+	// can be gathered into one transfer; a cache's misses land in scattered
+	// slots and every plane is sent sheet by sheet.
+	lo, hi := items[0].slot, items[0].slot+len(items)
+	contiguous := !st.cached()
+	g.pieces = g.pieces[:0]
+	// Every held sheet is released however put leaves, and the direct ones
+	// are sent first.
+	defer func() {
+		if err == nil {
+			err = g.sendPieces(s, g.pieces)
+		}
+		for i := range g.pieces {
+			g.pieces[i].release()
+			g.pieces[i] = sheetPiece{}
+		}
+		g.pieces = g.pieces[:0]
+	}()
 	for m, pair := range [3]struct {
 		r *resident
 		w nn.Weight
@@ -370,9 +762,14 @@ func (st *streamBank) put(s backend.Session, l *layer, nExpert int, gr [2]int) e
 			if n == 0 {
 				continue // this format has no such plane
 			}
-			buf := st.stage(m, pl, n*(hi-lo))
-			for i := lo; i < hi; i++ {
-				e := st.sel[i]
+			dst := [3]backend.Buf{pair.r.qs, pair.r.d, pair.r.sc}[pl]
+			direct := n >= g.directBytes() || !contiguous
+			var buf []byte
+			if !direct {
+				buf = g.streamStage(m, pl, n*(hi-lo))
+			}
+			for _, it := range items {
+				e, i := it.e, it.slot
 				// The bound is checked because the index was read back from a device;
 				// a garbage word would otherwise be a panic mid-token.
 				if int(e) >= nExpert {
@@ -382,6 +779,7 @@ func (st *streamBank) put(s backend.Session, l *layer, nExpert int, gr [2]int) e
 				// contiguous one is sliced at e*n.
 				var src []byte
 				release := func() {}
+				ts := time.Now()
 				if pk.Sheet != nil {
 					sp, rel, err := pk.Sheet(int(e))
 					release = rel
@@ -403,27 +801,206 @@ func (st *streamBank) put(s backend.Session, l *layer, nExpert int, gr [2]int) e
 					release()
 					return fmt.Errorf("tier: expert %d plane %d is %d bytes, want %d", e, pl, len(src), n)
 				}
+				tc := time.Now()
+				g.TStreamSheet += tc.Sub(ts)
+				if direct {
+					// The frame stays held until sendPieces has copied it out.
+					g.pieces = append(g.pieces, sheetPiece{dst: dst, off: i * n, src: src, release: release})
+					continue
+				}
 				copy(buf[(i-lo)*n:(i-lo+1)*n], src)
 				release()
+				g.TStreamCopy += time.Since(tc)
 			}
-			dst := [3]backend.Buf{pair.r.qs, pair.r.d, pair.r.sc}[pl]
+			if direct {
+				continue
+			}
+			th := time.Now()
 			if err := s.WriteAt(dst, lo*n, buf); err != nil {
 				return err
 			}
+			g.TStreamH2D += time.Since(th)
+			g.StreamBytes += int64(len(buf))
+			g.StreamGathered++
 		}
 	}
 	return nil
 }
 
-// stage is the reused host buffer that one plane's k sheets are gathered into.
-// Per (matrix, plane) so a block's nine are independent, and grown rather than
-// reallocated: a token fills all nine on every streamed block.
-func (st *streamBank) stage(m, pl, n int) []byte {
-	i := m*3 + pl
-	if st.st[i] == nil || len(st.st[i]) < n {
-		st.st[i] = make([]byte, n)
+// sheetPiece is one direct sheet plane: where it goes on the card, its bytes
+// in a held host frame, and the release of that hold.
+type sheetPiece struct {
+	dst     backend.Buf
+	off     int
+	src     []byte
+	release func()
+}
+
+// pinHalf is the size of each page-locked half: two of Kimi-K3's 5.6 MiB
+// planes. The first half of every group is copied before any transfer can
+// start, so a smaller half is less of the group spent waiting; 32 MiB cost
+// 29 s of copy wait over a 32-token run, and a sheet a group 62 s
+// (placement.md 16c).
+const pinHalf = 12 << 20
+
+// copyChunk is the most one copy goroutine moves: a 5.6 MiB plane copied by
+// one core ran under the link, so a half is copied by several.
+const copyChunk = 1 << 20
+
+// sendPieces puts direct sheets on the card. With page-locked memory it is a
+// two-stage pipeline: the pieces are copied into one half (concurrently, one
+// goroutine a piece, since a single memcpy from a remote node runs well under
+// the link) while the other half is transferred, and a transfer out of
+// page-locked memory runs at the link's rate where a pageable one went
+// through the driver's bounce buffer at 5.76 GiB/s (placement.md 16c).
+// Without it each piece is a pageable transfer from its frame.
+func (g *devTier) sendPieces(s backend.Session, ps []sheetPiece) error {
+	if len(ps) == 0 {
+		return nil
 	}
-	return st.st[i][:n]
+	pin := g.pinHalves(ps)
+	if pin[0] == nil {
+		for i := range ps {
+			th := time.Now()
+			if err := s.WriteAt(ps[i].dst, ps[i].off, ps[i].src); err != nil {
+				return err
+			}
+			g.TStreamH2D += time.Since(th)
+			g.StreamBytes += int64(len(ps[i].src))
+			g.StreamDirect++
+		}
+		return nil
+	}
+	tc := time.Now()
+	i, j := 0, g.packHalf(pin[0], ps, 0)
+	g.TStreamCopy += time.Since(tc)
+	cur := 0
+	for i < len(ps) {
+		next := j
+		if j < len(ps) {
+			g.packWG.Add(1)
+			go g.packNext(pin[1-cur], ps, j)
+		}
+		off := 0
+		var err error
+		th := time.Now()
+		for k := i; k < j && err == nil; k++ {
+			n := len(ps[k].src)
+			err = s.WriteAt(ps[k].dst, ps[k].off, pin[cur][off:off+n])
+			off += n
+			g.StreamBytes += int64(n)
+			g.StreamDirect++
+			g.StreamPinned++
+		}
+		g.TStreamH2D += time.Since(th)
+		if j < len(ps) {
+			// Joined even on failure: the copy reads frames put releases.
+			tw := time.Now()
+			g.packWG.Wait()
+			g.TStreamCopy += time.Since(tw)
+			next = g.packEnd
+		}
+		if err != nil {
+			return err
+		}
+		i, j, cur = j, next, 1-cur
+	}
+	return nil
+}
+
+// pinHalves returns the two page-locked halves, each big enough for the
+// largest piece, allocating them on first use; nils when the device has no
+// page-locked memory or the caller turned it off.
+func (g *devTier) pinHalves(ps []sheetPiece) [2][]byte {
+	hp, ok := g.dev.(backend.HostPinner)
+	if !ok || g.noPin || g.StreamNoPin {
+		return [2][]byte{}
+	}
+	need := g.pinHalfBytes()
+	for i := range ps {
+		need = max(need, len(ps[i].src))
+	}
+	for h := range g.pin {
+		if len(g.pin[h]) >= need {
+			continue
+		}
+		if g.pin[h] != nil {
+			hp.UnpinHost(g.pin[h])
+			g.pin[h] = nil
+		}
+		b, err := hp.PinHost(need)
+		if err != nil {
+			// Page-locked memory is a speed, not a requirement: the pageable
+			// path is correct, so a refusal turns this off for the device.
+			g.noPin = true
+			for k, b := range g.pin {
+				if b != nil {
+					hp.UnpinHost(b)
+					g.pin[k] = nil
+				}
+			}
+			return [2][]byte{}
+		}
+		g.pin[h] = b
+	}
+	return g.pin
+}
+
+// packNext is packHalf on its own goroutine, its end left in g.packEnd.
+func (g *devTier) packNext(buf []byte, ps []sheetPiece, i int) {
+	defer g.packWG.Done()
+	g.packEnd = g.packHalf(buf, ps, i)
+}
+
+// packHalf copies pieces from i into buf, back to back, as many as fit, one
+// goroutine a copyChunk, and returns the index after the last one copied. At
+// least one always fits: pinHalves sized buf for the largest.
+func (g *devTier) packHalf(buf []byte, ps []sheetPiece, i int) int {
+	// The half in use is the tuned size, never more than was locked: a half
+	// tuned down keeps its bigger buffer and uses a prefix of it.
+	if h := g.pinHalfBytes(); h < len(buf) {
+		big := 0
+		for k := i; k < len(ps); k++ {
+			big = max(big, len(ps[k].src))
+		}
+		buf = buf[:max(h, big)]
+	}
+	j, n := i, 0
+	for j < len(ps) && n+len(ps[j].src) <= len(buf) {
+		n += len(ps[j].src)
+		j++
+	}
+	off := 0
+	for k := i; k < j; k++ {
+		src := ps[k].src
+		for c := 0; c < len(src); c += copyChunk {
+			e := min(c+copyChunk, len(src))
+			g.copyWG.Add(1)
+			go g.copyPiece(buf[off+c:off+e], src[c:e])
+		}
+		off += len(src)
+	}
+	g.copyWG.Wait()
+	return j
+}
+
+// copyPiece is one of packHalf's copies. Only one packHalf runs at a time on
+// a device, so the WaitGroup is the device's and nothing is allocated.
+func (g *devTier) copyPiece(dst, src []byte) {
+	defer g.copyWG.Done()
+	copy(dst, src)
+}
+
+// streamStage is the reused host buffer one plane's gathered sheets go into.
+// One set per device, not per block: a device fills its streamed blocks one
+// after another, and a set per block was 24 GiB of heap on Kimi-K3 that the
+// runtime gave back and faulted in again every token (placement.md 16c).
+func (g *devTier) streamStage(m, pl, n int) []byte {
+	i := m*3 + pl
+	if len(g.sheetStage[i]) < n {
+		g.sheetStage[i] = make([]byte, n)
+	}
+	return g.sheetStage[i][:n]
 }
 
 // mv is a matvec's compiled kernel plus the split it was chosen for. alt is the
@@ -1203,6 +1780,9 @@ type blockScratch struct {
 	route                   backend.Kernel // rank+weights in one launch, the plain softmax route
 	quantX                  backend.Kernel
 	rlogits, rsel, rtop, rw backend.Buf
+	// rwProbe is the cross-layer probe's routing weights, kept off rw, which
+	// holds the block's own until its combine reads them.
+	rwProbe backend.Buf
 	// The V3 family's grouped selection: gscore writes one score per expert
 	// group into rgs, gmask writes the masked selection plane into rbm, and
 	// rank then counts over rbm instead of over the logits. Both are nil on
@@ -1542,6 +2122,22 @@ func declineWeights(w *nn.LayerWeights) string {
 // card with room still gets the block and only when no device has room does
 // anybody swap.
 func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage bool) (placed bool) {
+	// The host side of a hybrid block is the offering session's: a placed
+	// block is shared by every session that attaches, and each runs its experts
+	// on its own State (runHost looks it up by the current session). Recorded
+	// before anything can decline, so a block another session placed still
+	// learns this one's.
+	if w != nil && w.HostExperts != nil {
+		g.mu.Lock()
+		if g.hostFns == nil {
+			g.hostFns = map[uint64]map[int]hostSide{}
+		}
+		if g.hostFns[g.cur] == nil {
+			g.hostFns[g.cur] = map[int]hostSide{}
+		}
+		g.hostFns[g.cur][li] = hostSide{one: w.HostExperts, rows: w.HostExpertsRows}
+		g.mu.Unlock()
+	}
 	// Shapes this tier cannot express are declined first and by name (RULE 8a):
 	// each would run wrong if skipped, so the block goes to the host whole. They
 	// are checked before any allocation so a decline takes no VRAM from the next
@@ -1852,7 +2448,19 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 	// Weight.Rows, so the charge and the refund cannot disagree. slots > 1 is a
 	// kernel constraint: at experts <= 1 mkkID returns the plain matvec, which
 	// has no pSel parameter.
-	stream := moe && g.StreamExperts && slots < bank && slots > 1
+	mode, auto := g.autoStream[li]
+	// hostExp says the block's experts will run on the host (hybrid): the
+	// placement's choice, else the tier's defaults. Such a block keeps no bank
+	// on the card at all -- no compact bank, no expert kernels, no packed
+	// layout needed -- and a top-1 router is no obstacle, since no indexed
+	// matvec runs.
+	hostExp := w.HostExperts != nil && (auto && mode == expHost ||
+		g.HybridExperts && !(auto && mode == expCard) || auto && mode == expAuto && !g.NoHybrid)
+	stream := moe && (g.StreamExperts || auto) && slots < bank && (slots > 1 || hostExp)
+	hybrid := stream && hostExp
+	// cslots is the streamed bank's size in sheets, decided at the first bank
+	// matrix (cacheSlotsFor): slots without an expert cache, more with one.
+	cslots := -1
 	// price is ws with the three banks removed for a streamed block: the
 	// compact bank is one buffer for the whole device (sharedCompact), so a
 	// block costs its base and nothing else.
@@ -2223,14 +2831,31 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 			if stream {
 				// The kernel is told the bank is k experts and indexes it with
 				// 0..k-1; backend.TestIndexedMatVecMatchesACompactBank is where
-				// "the same answer, bit for bit" comes from.
-				e = slots
+				// "the same answer, bit for bit" comes from. With an expert
+				// cache it is told the cache's size and indexed by slot.
+				if cslots < 0 {
+					// An auto-streamed block is placed on the plain bank;
+					// its cache comes after placement (sizeAutoCaches).
+					cslots = g.cacheSlotsFor(p, ws, g.StreamCacheSlots, slots, bank,
+						w.ExpGateB != nil || w.ExpUpB != nil || w.ExpDownB != nil)
+				}
+				e = cslots
 			}
 		}
 		// Weight.Rows already counts the whole bank (model.get multiplies every
 		// trailing dimension), which PackWeights and the upload want; the kernel is
 		// built for one expert's rows and does the offset, so it is divided below.
 		var r *resident
+		if hybrid && i >= 4 && i <= 6 {
+			// Nothing of the bank goes on the card; the host runs it.
+			if l.stream == nil {
+				l.stream = &streamBank{sel: make([]uint32, slots),
+					ensure: w.Ensure, sel2: w.EnsureExperts,
+					pre: w.PrefetchExperts, host: w.HostExperts, w: *w, hybrid: true, nExpert: bank, li: li}
+				g.StreamBlocks++
+			}
+			continue
+		}
 		if stream && i >= 4 && i <= 6 {
 			q, qok := quantOf(x.T)
 			if !qok {
@@ -2248,7 +2873,15 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 			}
 			var sh [3]int
 			var ok bool
-			if r, sh, ok = g.sharedCompact(i, q, x.Rows/slots, x.K, slots); !ok {
+			if cslots > slots {
+				// The block's own bank of cslots sheets, kept across tokens:
+				// it is the expert cache, so it cannot be the device's one
+				// shared compact bank. Its charge is the block's.
+				r, sh, ok = g.residentCompact(q, x.Rows/slots, x.K, cslots)
+			} else {
+				r, sh, ok = g.sharedCompact(i, q, x.Rows/slots, x.K, slots)
+			}
+			if !ok {
 				return false
 			}
 			if l.stream == nil {
@@ -2257,7 +2890,20 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 				// contributes zeros.
 				l.stream = &streamBank{sel: make([]uint32, slots),
 					ensure: w.Ensure, sel2: w.EnsureExperts,
-					pre: w.PrefetchExperts, w: *w}
+					pre: w.PrefetchExperts, host: w.HostExperts, w: *w, li: li}
+				l.stream.nExpert = bank
+				// An auto-streamed block runs its experts on the host unless
+				// told otherwise: on Kimi-K3 over the V100s that decoded 1.43x
+				// the host's rate where sending the sheets lost to it
+				// (placement.md 16c-2).
+				switch {
+				case l.stream.host == nil || auto && mode == expCard:
+				case auto && mode == expHost, g.HybridExperts:
+					l.stream.hybrid = true
+				default:
+					l.stream.hybrid = auto && !g.NoHybrid
+				}
+				l.stream.initCache(cslots, bank)
 				g.StreamBlocks++
 			}
 			l.stream.sh[i-4] = sh
@@ -2272,7 +2918,11 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 			return false
 		}
 		*rs[i] = r
-		if e > 1 {
+		if stream && i >= 4 && i <= 6 {
+			// A streamed bank's rows were scaled to the selection (slots
+			// sheets) above, whatever size its cache is.
+			x.Rows /= slots
+		} else if e > 1 {
 			// e, not bank: they differ for a streamed bank, whose kernel is built for
 			// k experts. This is rows per expert either way.
 			if x.Rows%e != 0 {
@@ -3103,6 +3753,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		al(&bs.ident, k*4)
 		al(&bs.rtop, (k+1)*4)
 		al(&bs.rw, (k+1)*4) // slot k is ExpertRoute's bin
+		al(&bs.rwProbe, (k+1)*4)
 		if p.DenseMoE {
 			al(&bs.hr, rows*p.NEmbd*4)
 			al(&bs.rwS, k*4)
@@ -6869,72 +7520,88 @@ func (g *devTier) layersSession(s backend.Session) {
 				if latent {
 					ein, eout = bs.k3.lat, bs.k3.latAcc
 				}
+				hybrid := false
 				if R > 1 {
 					if latent {
 						g.k3LatentIn(lc, bs, l, R, mvrun)
 					}
-					g.emitGroupedMoE(s, lc, bs, l, R, rin, ein, eout, &err)
+					g.emitGroupedMoE(s, lc, bs, l, R, nrow, rin, ein, eout, &err)
 					if latent {
 						g.k3LatentOut(lc, bs, l, R, mvrun)
 					}
 				} else {
-					lc.la(l.mvRouter, kernels.RouterThreads(bs.nExpert), l.router, rin, bs.rlogits)
-					logits := bs.rlogits
-					if l.routerB != nil {
-						// gpt-oss biases the logits before the rank, so the
-						// bias decides which experts are chosen.
-						lc.la(bs.rbias, bs.nExpert, bs.rlogits, l.routerB, bs.rlogitsB)
-						logits = bs.rlogitsB
-					}
-					// The V3 family's two extra passes exist because the IR has no nested
-					// loops: ranking needs each group's mask, which needs the group's rank
-					// among all groups, which needs a sum over members. Materialising the
-					// group scores and then the masked plane keeps each pass flat.
-					plane := logits
-					if bs.gscore != nil {
-						if l.expSelB != nil {
-							lc.la(bs.gscore, p.ExpertGroups, logits, bs.rgs, l.expSelB)
-							lc.la(bs.gmask, bs.nExpert, logits, bs.rgs, bs.rbm, l.expSelB)
-						} else {
-							lc.la(bs.gscore, p.ExpertGroups, logits, bs.rgs)
-							lc.la(bs.gmask, bs.nExpert, logits, bs.rgs, bs.rbm)
+					// route ranks one block's router over rin into bs.rsel, bs.rtop and,
+					// with weights, bs.rw. It is a closure so the streamed path's
+					// cross-layer probe can run the NEXT block's router over this block's
+					// row through exactly the launches that block will run itself.
+					route := func(l *layer, weights bool) bool {
+						lc.la(l.mvRouter, kernels.RouterThreads(bs.nExpert), l.router, rin, bs.rlogits)
+						logits := bs.rlogits
+						if l.routerB != nil {
+							// gpt-oss biases the logits before the rank, so the
+							// bias decides which experts are chosen.
+							lc.la(bs.rbias, bs.nExpert, bs.rlogits, l.routerB, bs.rlogitsB)
+							logits = bs.rlogitsB
 						}
-						plane = bs.rbm
-					}
-					// The arity follows the route. Vulkan refuses an undeclared buffer count;
-					// CUDA ignores a surplus pointer and silently never reads the plane.
-					// DeepSeek V4 selects through a plane per row (ds4.go).
-					selB := l.expSelB
-					if l.ds4 != nil {
-						selB = g.ds4RouteBias(lc, bs, l, 1)
-					}
-					fusedRoute := bs.route != nil && bs.gscore == nil && selB == nil
-					switch {
-					case fusedRoute:
-						// Rank and weights in one workgroup (kernels.ExpertRoute).
-						if err == nil {
-							err = lc.launch(bs.route, 1, bs.routeWidth,
-								logits, bs.rsel, bs.rtop, bs.rw)
+						// The V3 family's two extra passes exist because the IR has no nested
+						// loops: ranking needs each group's mask, which needs the group's rank
+						// among all groups, which needs a sum over members. Materialising the
+						// group scores and then the masked plane keeps each pass flat.
+						plane := logits
+						if bs.gscore != nil {
+							if l.expSelB != nil {
+								lc.la(bs.gscore, p.ExpertGroups, logits, bs.rgs, l.expSelB)
+								lc.la(bs.gmask, bs.nExpert, logits, bs.rgs, bs.rbm, l.expSelB)
+							} else {
+								lc.la(bs.gscore, p.ExpertGroups, logits, bs.rgs)
+								lc.la(bs.gmask, bs.nExpert, logits, bs.rgs, bs.rbm)
+							}
+							plane = bs.rbm
 						}
-					case bs.gscore != nil:
-						lc.la(bs.rank, bs.nExpert, logits, bs.rsel, bs.rtop, plane)
-					case selB != nil:
-						lc.la(bs.rank, bs.nExpert, logits, bs.rsel, bs.rtop, selB)
-					default:
-						lc.la(bs.rank, bs.nExpert, logits, bs.rsel, bs.rtop)
-					}
-					if err == nil && !fusedRoute {
-						// One thread: k is 2 to 8 and this is three short loops.
-						// The un-renormalised softmax kernel reads the full
-						// logit array; the renormalised one does not declare
-						// it, and the sigmoid one reads neither -- sigma()
-						// already ran inside the rank.
-						if p.NoExpertNorm && !p.ExpertSigmoid {
-							err = lc.launch(bs.weights, 1, 1, bs.rtop, bs.rw, logits)
-						} else {
-							err = lc.launch(bs.weights, 1, 1, bs.rtop, bs.rw)
+						// The arity follows the route. Vulkan refuses an undeclared buffer count;
+						// CUDA ignores a surplus pointer and silently never reads the plane.
+						// DeepSeek V4 selects through a plane per row (ds4.go).
+						selB := l.expSelB
+						if l.ds4 != nil {
+							selB = g.ds4RouteBias(lc, bs, l, 1)
 						}
+						fusedRoute := bs.route != nil && bs.gscore == nil && selB == nil
+						switch {
+						case fusedRoute:
+							// Rank and weights in one workgroup (kernels.ExpertRoute).
+							// The probe's weights go to a scratch of their own:
+							// this block's are already in bs.rw and still to
+							// be read.
+							rwDst := bs.rw
+							if !weights {
+								rwDst = bs.rwProbe
+							}
+							if err == nil {
+								err = lc.launch(bs.route, 1, bs.routeWidth,
+									logits, bs.rsel, bs.rtop, rwDst)
+							}
+						case bs.gscore != nil:
+							lc.la(bs.rank, bs.nExpert, logits, bs.rsel, bs.rtop, plane)
+						case selB != nil:
+							lc.la(bs.rank, bs.nExpert, logits, bs.rsel, bs.rtop, selB)
+						default:
+							lc.la(bs.rank, bs.nExpert, logits, bs.rsel, bs.rtop)
+						}
+						if err == nil && !fusedRoute && weights {
+							// One thread: k is 2 to 8 and this is three short loops.
+							// The un-renormalised softmax kernel reads the full
+							// logit array; the renormalised one does not declare
+							// it, and the sigmoid one reads neither -- sigma()
+							// already ran inside the rank.
+							if p.NoExpertNorm && !p.ExpertSigmoid {
+								err = lc.launch(bs.weights, 1, 1, bs.rtop, bs.rw, logits)
+							} else {
+								err = lc.launch(bs.weights, 1, 1, bs.rtop, bs.rw)
+							}
+						}
+						return false
 					}
+					route(l, true)
 					// The suspension, for a streamed bank: the selection comes home, k
 					// sheets of gate/up/down are uploaded at their compact offsets, and the
 					// submission resumes indexing 0..k-1, because the bank it reads is the
@@ -6943,6 +7610,11 @@ func (g *devTier) layersSession(s backend.Session) {
 					sel := bs.rsel
 					if l.stream != nil {
 						sel = bs.ident
+						if l.stream.cached() {
+							// fill writes each selected expert's cache slot over
+							// the selection, in selection order.
+							sel = bs.rsel
+						}
 						if g.StreamFixedSel {
 							// The probe spreads per block on purpose: a fixed 0..k-1 would keep
 							// one small working set resident and measure that along with the
@@ -6958,97 +7630,146 @@ func (g *devTier) layersSession(s backend.Session) {
 						if err == nil && !g.StreamFixedSel {
 							err = s.Read(bs.rsel, u32b(l.stream.sel))
 						}
-						if err == nil {
-							err = l.stream.fill(g, s, l, p.NExpert)
+						if err == nil && !g.StreamFixedSel {
+							l.stream.score(g, li)
+						}
+						hybrid = l.stream.hybrid && !g.StreamFixedSel
+						if err == nil && hybrid {
+							// Hybrid: the experts' input and the routing weights come
+							// home, the host runs the selected experts, and their sum
+							// goes back where the combine would have written it.
+							if latent {
+								g.k3LatentIn(lc, bs, l, 1, mvrun)
+							}
+							err = l.stream.runHost(g, s, ein, bs.rw, eout, p.ExpWidth(), bs.nUsed)
+						}
+						if err == nil && !hybrid && (g.StreamProbe || g.StreamPrefetch) && li+1 < hi {
+							// The cross-layer probe: the next block's router over this
+							// block's normed row, ranked by that block's own launches.
+							// It clobbers rsel and rtop, which nothing below reads on a
+							// streamed block (it indexes bs.ident and the weights are
+							// already in bs.rw).
+							if nx := g.layers[li+1]; nx != nil && nx.stream != nil && nx.router != nil {
+								if route(nx, false) {
+									g.ProbeFused++
+								} else if err = s.Sync(); err == nil {
+									nx.stream.pred = growU32(nx.stream.pred, len(nx.stream.sel))
+									err = s.Read(bs.rsel, u32b(nx.stream.pred))
+									nx.stream.havePred = err == nil
+									if err == nil && g.StreamPrefetch {
+										nx.stream.prefetch(g)
+									}
+								}
+							}
+						}
+						if err == nil && !hybrid {
+							tf := time.Now()
+							if err = l.stream.fill(g, s, l, p.NExpert); err != nil && l.stream.cached() {
+								l.stream.forget()
+							}
+							g.fillDone(time.Since(tf))
+						}
+						if err == nil && l.stream.cached() {
+							err = s.WriteAt(bs.rsel, 0, u32b(l.stream.slotSel))
 						}
 						if err != nil {
 							return
 						}
-						g.StreamFills++
+						if hybrid {
+							g.HybridRuns++
+						} else {
+							g.StreamFills++
+						}
 					}
-					// gate and up read the one normed vector, so they are
-					// indexed on the weight side only. bs.a/bs.ax still hold
-					// its quantization from the launch above -- or, at
-					// Kimi-K3's latent, its projection's.
-					if latent {
-						g.k3LatentIn(lc, bs, l, 1, mvrun)
+					if hybrid && latent {
+						// The routed sum is already in eout.
+						g.k3LatentOut(lc, bs, l, 1, mvrun)
 					}
-					ffnW := bs.nUsed * bs.nFFNExp
-					// mvidE launches an expert matvec with fused epilogue
-					// operands between its output and the selection -- the
-					// kernel's parameter order (pOut, [pBias], [pGate], pSel).
-					mvidE := func(k backend.Kernel, m mv, r *resident, dst backend.Buf, extra ...backend.Buf) {
-						// Joined in a stack array: appending to a literal of
-						// its own length grew it on the heap every launch.
-						var all [12]backend.Buf
-						args := append(all[:0], r.qs, dOf(r), r.sc, bs.a, bs.ax, dst)
-						args = append(append(args, extra...), sel)
-						lamv(m, k, m.rows*m.slots*m.split, args...)
-						g.MoEFused++
-					}
-					rw := bs.rw
-					if p.DenseMoE {
-						// Each routed weight times its expert's own factor.
-						lc.la(bs.ewScale, bs.nUsed, bs.rw, bs.rsel, l.expScale, bs.rwS)
-						rw = bs.rwS
-					}
-					if ungatedFFN(p) {
-						// Ungated experts (Nemotron 3): up, then the activation
-						// alone. No bias exists on any such architecture.
-						mvid(l.mvu, l.up, bs.eu, sel)
-						lc.la(bs.actMulE, ffnW, bs.eu, bs.eact)
-					} else if l.moeUp != nil {
-						// act(gate)*up in the up projection's own epilogue, the
-						// biases in each matvec's (fuseMoE).
-						if l.moeGate != nil {
-							mvidE(l.moeGate, l.mvg, l.gate, bs.eg, l.expGateB)
+					if !hybrid {
+						// gate and up read the one normed vector, so they are
+						// indexed on the weight side only. bs.a/bs.ax still hold
+						// its quantization from the launch above -- or, at
+						// Kimi-K3's latent, its projection's.
+						if latent {
+							g.k3LatentIn(lc, bs, l, 1, mvrun)
+						}
+						ffnW := bs.nUsed * bs.nFFNExp
+						// mvidE launches an expert matvec with fused epilogue
+						// operands between its output and the selection -- the
+						// kernel's parameter order (pOut, [pBias], [pGate], pSel).
+						mvidE := func(k backend.Kernel, m mv, r *resident, dst backend.Buf, extra ...backend.Buf) {
+							// Joined in a stack array: appending to a literal of
+							// its own length grew it on the heap every launch.
+							var all [12]backend.Buf
+							args := append(all[:0], r.qs, dOf(r), r.sc, bs.a, bs.ax, dst)
+							args = append(append(args, extra...), sel)
+							lamv(m, k, m.rows*m.slots*m.split, args...)
+							g.MoEFused++
+						}
+						rw := bs.rw
+						if p.DenseMoE {
+							// Each routed weight times its expert's own factor.
+							lc.la(bs.ewScale, bs.nUsed, bs.rw, bs.rsel, l.expScale, bs.rwS)
+							rw = bs.rwS
+						}
+						if ungatedFFN(p) {
+							// Ungated experts (Nemotron 3): up, then the activation
+							// alone. No bias exists on any such architecture.
+							mvid(l.mvu, l.up, bs.eu, sel)
+							lc.la(bs.actMulE, ffnW, bs.eu, bs.eact)
+						} else if l.moeUp != nil {
+							// act(gate)*up in the up projection's own epilogue, the
+							// biases in each matvec's (fuseMoE).
+							if l.moeGate != nil {
+								mvidE(l.moeGate, l.mvg, l.gate, bs.eg, l.expGateB)
+							} else {
+								mvid(l.mvg, l.gate, bs.eg, sel)
+							}
+							if l.expUpB != nil {
+								mvidE(l.moeUp, l.mvu, l.up, bs.eact, l.expUpB, bs.eg)
+							} else {
+								mvidE(l.moeUp, l.mvu, l.up, bs.eact, bs.eg)
+							}
 						} else {
 							mvid(l.mvg, l.gate, bs.eg, sel)
+							mvid(l.mvu, l.up, bs.eu, sel)
+							eg, eu := bs.eg, bs.eu
+							// The experts' biases are indexed by the true ids in rsel,
+							// even where the weights are a compacted bank read 0..k-1.
+							if l.expGateB != nil {
+								lc.la(bs.ebiasFF, ffnW, bs.eg, bs.rsel, l.expGateB, bs.egB)
+								eg = bs.egB
+							}
+							if l.expUpB != nil {
+								lc.la(bs.ebiasFF, ffnW, bs.eu, bs.rsel, l.expUpB, bs.euB)
+								eu = bs.euB
+							}
+							if bs.actMulW != nil {
+								// Llama 4: the weight scales gate and up, and the
+								// downs are summed at one.
+								lc.la(bs.actMulW, ffnW, eg, eu, bs.rw, bs.eact)
+								rw = bs.wOnes
+							} else {
+								lc.la(bs.actMulE, ffnW, eg, eu, bs.eact)
+							}
 						}
-						if l.expUpB != nil {
-							mvidE(l.moeUp, l.mvu, l.up, bs.eact, l.expUpB, bs.eg)
+						// One Quantize over all the slots, writing a flat [scales][sums] pAX,
+						// which is the layout down's SlotAct per-slot bases expect.
+						lc.la(bs.quantX, kernels.QuantizeThreads(ffnW/32), bs.eact, bs.a, bs.ax)
+						edown := bs.edown
+						if l.moeDown != nil {
+							mvidE(l.moeDown, l.mvd, l.down, bs.edown, l.expDownB)
 						} else {
-							mvidE(l.moeUp, l.mvu, l.up, bs.eact, bs.eg)
+							mvid(l.mvd, l.down, bs.edown, sel)
+							if l.expDownB != nil {
+								lc.la(bs.ebiasD, bs.nUsed*p.NEmbd, bs.edown, bs.rsel, l.expDownB, bs.edownB)
+								edown = bs.edownB
+							}
 						}
-					} else {
-						mvid(l.mvg, l.gate, bs.eg, sel)
-						mvid(l.mvu, l.up, bs.eu, sel)
-						eg, eu := bs.eg, bs.eu
-						// The experts' biases are indexed by the true ids in rsel,
-						// even where the weights are a compacted bank read 0..k-1.
-						if l.expGateB != nil {
-							lc.la(bs.ebiasFF, ffnW, bs.eg, bs.rsel, l.expGateB, bs.egB)
-							eg = bs.egB
+						lc.la(bs.combine, p.ExpWidth(), edown, rw, eout)
+						if latent {
+							g.k3LatentOut(lc, bs, l, 1, mvrun)
 						}
-						if l.expUpB != nil {
-							lc.la(bs.ebiasFF, ffnW, bs.eu, bs.rsel, l.expUpB, bs.euB)
-							eu = bs.euB
-						}
-						if bs.actMulW != nil {
-							// Llama 4: the weight scales gate and up, and the
-							// downs are summed at one.
-							lc.la(bs.actMulW, ffnW, eg, eu, bs.rw, bs.eact)
-							rw = bs.wOnes
-						} else {
-							lc.la(bs.actMulE, ffnW, eg, eu, bs.eact)
-						}
-					}
-					// One Quantize over all the slots, writing a flat [scales][sums] pAX,
-					// which is the layout down's SlotAct per-slot bases expect.
-					lc.la(bs.quantX, kernels.QuantizeThreads(ffnW/32), bs.eact, bs.a, bs.ax)
-					edown := bs.edown
-					if l.moeDown != nil {
-						mvidE(l.moeDown, l.mvd, l.down, bs.edown, l.expDownB)
-					} else {
-						mvid(l.mvd, l.down, bs.edown, sel)
-						if l.expDownB != nil {
-							lc.la(bs.ebiasD, bs.nUsed*p.NEmbd, bs.edown, bs.rsel, l.expDownB, bs.edownB)
-							edown = bs.edownB
-						}
-					}
-					lc.la(bs.combine, p.ExpWidth(), edown, rw, eout)
-					if latent {
-						g.k3LatentOut(lc, bs, l, 1, mvrun)
 					}
 				}
 				if p.DenseMoE {
@@ -7826,6 +8547,7 @@ func (g *devTier) TrimKV(pos int) bool {
 // dropSession frees everything session sid holds on this device: its history
 // and its recurrent state on every block.
 func (g *devTier) dropSession(sid uint64) {
+	delete(g.hostFns, sid)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	// The crossing sample is this session's too, and session ids never repeat,
@@ -8277,6 +8999,12 @@ func (g *devTier) prepBatch(width int) bool {
 				// A mixture runs grouped (moegroup.go): a streamed bank holds
 				// only the selection.
 				mg := bb.mg
+				// A hybrid block routes the rows on the device and runs their
+				// experts on the host (emitGroupedMoE): the routing scratch is
+				// all it needs, and no grouped expert kernel.
+				if mg != nil && l.stream != nil && l.stream.hybrid {
+					continue
+				}
 				if mg == nil || l.stream != nil {
 					// Named either way: a refusal with a stale LastErr reads as
 					// some other block's failure.

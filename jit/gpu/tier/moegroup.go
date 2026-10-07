@@ -563,7 +563,7 @@ func (g *devTier) groupedMV(m mv, bank, np int) (backend.Kernel, bool) {
 // rin is the router's input rows: bs.h, where the experts read, for every
 // mixture but Gemma 4's (nn.LayerPlan.DenseMoE), whose router has a norm of
 // its own.
-func (g *devTier) emitGroupedMoE(s backend.Session, lc *launcher, bs *blockScratch, l *layer, rows int,
+func (g *devTier) emitGroupedMoE(s backend.Session, lc *launcher, bs *blockScratch, l *layer, rows, valid int,
 	rin, ein, eout backend.Buf, errp *error) {
 	m, p := bs.mg, &bs.p
 	ew := p.ExpWidth()
@@ -611,6 +611,21 @@ func (g *devTier) emitGroupedMoE(s backend.Session, lc *launcher, bs *blockScrat
 		la(m.weights, rows, 64, m.rtop, m.rw, logits)
 	} else {
 		la(m.weights, rows, 64, m.rtop, m.rw)
+	}
+	// A hybrid block's experts run on the host, every valid row of the chunk
+	// (valid, not the padded width: a padding row's experts are host time for
+	// nothing): the routing above is all the device does of them.
+	if l.stream != nil && l.stream.hybrid {
+		if valid <= 0 || valid > rows {
+			valid = rows
+		}
+		if *errp == nil {
+			*errp = l.stream.runHostRows(g, s, m.rsel, m.rw, ein, eout, ew, m.k, valid)
+		}
+		if *errp == nil {
+			g.HybridRuns++
+		}
+		return
 	}
 	// The grouping runs on the device (kernels.ExpertGroup*) and only the used
 	// column count comes home.

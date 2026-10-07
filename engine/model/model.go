@@ -1258,7 +1258,11 @@ type Model struct {
 	// address: the pager tells them when a frame's bytes change (forgetCopies).
 	// owners are the devices holding this model's blocks, released at Close.
 	// Both guarded by devMu, since a page-in on any session reads forgetters.
-	devMu      sync.Mutex
+	devMu sync.Mutex
+	// hyState is the host executor a device's hybrid blocks run their routed
+	// experts on (Model.hostExperts), made on first use, under hyMu.
+	hyMu       sync.Mutex
+	hyState    *State
 	forgetters []nn.CopyForgetter
 	owners     []nn.ModelOwner
 }
@@ -1666,6 +1670,47 @@ func (m *Model) PageSize() uint64 {
 		return 0
 	}
 	return m.container.H.PageSize
+}
+
+// blockBytes is what block li's tensors occupy in the container's device
+// layout, and the routed expert banks' share of that, from the tensor table
+// alone: nothing is read. Zero for a model with no container.
+func (m *Model) blockBytes(li int) (total, bank uint64) {
+	if m.container == nil {
+		return 0, 0
+	}
+	es := m.container.Entries()
+	for i := range es {
+		e := &es[i]
+		if e.Block == jlm.DenseBlock || m.container.BlockOf(e) != li {
+			continue
+		}
+		q, d, sc := jlm.SpanLenOf(e)
+		total += q + d + sc
+		if jlm.ExpertBank(e.Role) {
+			bank += q + d + sc
+		}
+	}
+	return total, bank
+}
+
+// meanBase is the mean of the mixture blocks' bytes without their routed
+// banks, from the tensor table.
+func (m *Model) meanBase() uint64 {
+	var sum uint64
+	n := 0
+	for li := 0; li < m.Cfg.NLayer; li++ {
+		total, bank := m.blockBytes(li)
+		if bank == 0 {
+			continue // only the mixture blocks stream
+		}
+		sum += total - bank
+		n++
+	}
+	if n == 0 {
+		return 0
+	}
+	return sum / uint64(n)
 }
 
 // DenseBytes is what the non-block weights cost. They never page: the
@@ -2096,11 +2141,12 @@ func (m *Model) ensureExperts(li int, sel []int32, h *expertHold) error {
 	// back to the most recently used block page, which is this layer's own. And
 	// one selected expert's fault must not take another's page.
 	if li < int(c.H.NBlocks) {
-		lb, err := c.Hold(li, nil)
-		if err != nil {
-			return err
+		// Only when it is in: a block whose base runs on a device gave its
+		// page back, and claiming a frame for it here would hold a block's
+		// worth of host budget empty for the experts' sake.
+		if lb, ok := c.HoldFilled(li); ok {
+			h.leases = append(h.leases, lb)
 		}
-		h.leases = append(h.leases, lb)
 	}
 	// One read per expert page, all in flight at once. Every page is resolved
 	// before any read starts, so a bad id cannot leave reads in flight holding
@@ -2267,7 +2313,7 @@ func (m *Model) PagerReadWait() time.Duration {
 // layer's spans point into the page and keep its backing array alive.
 //
 // It is the inverse of bindPacked; pageIn rebinds on the next fault.
-func releaseLayer(c *jlm.File, li int, l *layer) {
+func releaseLayer(c *jlm.File, li int, l *layer, keepExperts bool) {
 	for _, t := range []*tensor{
 		&l.wq, &l.wk, &l.wv, &l.wo, &l.gate, &l.up, &l.down, &l.router,
 		&l.shGate, &l.shUp, &l.shDown,
@@ -2336,8 +2382,10 @@ func releaseLayer(c *jlm.File, li int, l *layer) {
 	// A bank in expert pages is not in the block's page: since v26 each expert
 	// is a page of its own, and on a mixture those are nearly all of the
 	// weights (Qwen3-30B-A3B: 18.0 of 18.5 GiB). The device holds the whole
-	// bank, so they go too, and their frames serve the next block's upload.
-	if e := l.expBank().e; e != nil && c.ExpertPaged(e) {
+	// bank, so they go too, and their frames serve the next block's upload --
+	// unless the block's experts still run from the host's pages (keepExperts:
+	// a streamed or hybrid block), which would read them all again.
+	if e := l.expBank().e; e != nil && c.ExpertPaged(e) && !keepExperts {
 		for x := 0; x < int(e.Dims[2]); x++ {
 			c.DropPage(c.ExpertPage(e, x))
 		}

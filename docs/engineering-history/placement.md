@@ -2675,6 +2675,356 @@ took different gates for the same card 1, and `cuda:0` beside `vulkan:0`
       cuda's three keys distinct, cuda:1's among them, vulkan:1 (card 1 again)
       the same key, the iGPU its own, the UUID-less llvmpipe "vulkan:3"
 
+## ★ 16c. KIMI-K3 STREAMED ON EIGHT V100s: THE "UPLOAD" WAS A SERIAL DISK READ, A FAULTING MEMCPY AND A PAGEABLE TRANSFER, AND THE NEXT BLOCK'S ROUTER NAMES 60% OF ITS EXPERTS.
+
+`docs/perf/current.md` ("Kimi-K3 2.78T from disk on the V100 box") left the
+streamed run at 17.27 s a token with 641.5 of 649.6 s of block compute filed
+under `stream cost: upload`, and ~1.4 GiB/s of apparent PCIe. That line was one
+timer around three different things. The measurement that splits it, before
+anything was built:
+
+- **Instrument.** `tier.Stats.TStreamSheet`, `TStreamCopy`, `TStreamH2D` and
+  `StreamBytes` split `streamBank.put` into finding each routed sheet in the
+  host pager, gathering it into the staging buffer and the host-to-device
+  copy. `Config.StreamProbe` (`JITLLM_GPU_PROBE`) runs, at every streamed
+  block's suspension, the NEXT block's router over THIS block's normed row
+  through that block's own route launches and scores the top-k against the
+  selection the next block then makes. `Config.StreamSelLog`
+  (`JITLLM_GPU_SELLOG`) writes every streamed block's selection to a file.
+- **Run.** The V100 box, `Kimi-K3-q8.jlm`, `-devices cuda`,
+  `JITLLM_GPU_STREAM=1`, greedy, `-n 32`, "The capital of France is", default
+  host budget (393 GiB), 93/93 blocks on six cards. Prompt 1m29.9s, decode 32
+  tokens in 9m4.8s (17.0 s/token), block compute 629.9 s, of which the fill is
+  621.0 s over 3404 fills (92 mixture blocks x 37 steps; the prompt also fills
+  per token).
+
+| part of one fill (268 MiB: 16 experts x 16.73 MiB) | total | per fill |
+|---|---|---|
+| sheet lookup (`Sheet` -> `jlm.File.Hold` of the expert page: the disk read, one page at a time) | 173.35 s | 51 ms |
+| gather into the per-block staging buffer (a memcpy) | 326.67 s | 96 ms |
+| `cuMemcpyHtoD` from that pageable buffer, 890.06 GiB | 120.55 s | 35 ms (7.38 GiB/s) |
+| drain before the selection is read home | 6.16 s | 1.8 ms |
+| everything else in block compute (the kernels, readbacks) | ~9 s | ~2.6 ms |
+
+★ **The reads were serial, and the read timer said 0.06 s because the reads
+were not where it looked.** For a bank in expert pages
+`Model.pageInSelected` returns at once (the sheets are reached through
+`Sheet`), so `streamBank.fill`'s `sel2` read nothing and every expert page was
+faulted in by `Sheet`'s `Hold`, one at a time, inside the upload loop. The
+container carries `StreamGroups` 1, so `PrefetchExperts`' parallel read never
+ran either. Decode read 212.19 GiB (7.12 GB a token) this way.
+
+★ **The gather is the biggest term and it is not memory bandwidth.** 268 MiB
+in 96 ms is 2.7 GiB/s for a memcpy. Each of the 92 streamed blocks owns nine
+staging buffers grown to 268 MiB together: 24 GiB of Go heap touched once a
+token each. The run took 153.9 M minor faults (~587 GiB of 4 KiB pages) and
+1206 s of system time against 386 s of user time: the staging is being given
+back and faulted in again. One staging set per device (fills on a device are
+sequential), or no staging at all for sheets of megabytes, removes it.
+
+★ **The transfer is a pageable copy at 7.38 GiB/s**, under the ~11-12 GiB/s a
+pinned buffer reaches on PCIe 3.0 x16, and synchronous: nothing overlaps it.
+
+**Expert reuse** (`JITLLM_GPU_SELLOG`, the 32 decode tokens scored, each
+block's selection against what came before it):
+
+| predictor / cache | hit |
+|---|---|
+| previous token's selection (16 of 896) | 33.4% |
+| a per-block device LRU of 24 experts | 40.8% |
+| 32 | 49.0% |
+| 48 | 57.9% |
+| 64 | 63.0% |
+| 128 | 70.3% |
+| seen anywhere earlier in the run (an unbounded host cache) | 72.4% |
+
+The previous-token figure is the same 34% olmoe and Qwen3-30B-A3B gave (15t):
+a property of routing, now on a 896-expert bank. The spare VRAM is small
+against the bank: the two empty cards and the headroom on the rest hold about
+36 GiB, ~2200 expert pages, ~24 a block -- a 41% hit on the transfer, and
+nothing on the disk read, which the host frames already cache at the 72%.
+
+**★ Cross-layer prediction** (`JITLLM_GPU_PROBE`, every prompt and decode
+step, pairs on the same card): block N+1's router over block N's normed FFN
+row names **25,244 of 41,712 routed experts, 60.5%** (chance 1.8%). This is
+the predictor available AT block N's suspension, a whole block ahead of when
+N+1 needs the sheets; it is not 15t's cross-token reuse, and unlike that one
+it costs no extra bytes per hit beyond the misses it fetches (16 predicted, 16
+used).
+
+**What the attribution says to build, in order.** The disk read and the
+transfer are the token; the kernels are ~2.6 ms of a 182 ms fill. (1) Read the
+selection's pages in parallel and overlap them with the transfer; (2) drop the
+faulting gather; (3) pinned, asynchronous transfers; then the cross-layer
+prefetch, which can start block N+1's reads and transfers a block early with
+60% of them right. A device expert cache is the smallest lever: 41% of the
+transfer at the VRAM there is.
+
+### 16c-1. What was built on that attribution, and what each step measured.
+
+Same box, same container, same prompt, `-n 32`, one run per row (each run is
+three to five minutes and RULE 2's twenty interleaved rounds were not taken,
+so no row is a ratio). "Decode" is the run's own decode line over 32 tokens.
+
+| build | prompt | decode s/token | fill split (whole run) |
+|---|---|---|---|
+| attribution build, `JITLLM_GPU_STREAM=1` | 89.9 s | 17.0 | lookup 173 s, gather 327 s, H2D 121 s |
+| + every group's read issued at once, sheets sent from their frames, `STREAM_GROUPS=4` | 44.8 s | 5.56 | H2D 155 s (5.76 GiB/s pageable), read wait 39 s |
+| + page-locked halves (32 MiB) | 46.5 s | 5.46 | H2D 116 s (7.70 GiB/s), copy wait 48 s |
+| + per-block expert cache, 18 sheets (`STREAM_CACHE=18`), 93/93 on the cards | 36.2 s | 3.87 | 37.5% hit, H2D 70 s, read wait 48 s, copy wait 29 s |
+| + cross-layer prefetch (`STREAM_PREFETCH=1`) | 44.4 s | **8.35** | read wait 135 s, decode read 7.7 GB/token |
+| prefetch off, `STREAM_GROUPS=16` | 43.4 s | 4.74 | copy wait 62 s |
+| 12 MiB halves copied a megabyte a goroutine, groups 4, cache 18 | 38.8 s | **3.55** | H2D 79 s, read wait 44 s, copy wait 13 s |
+| `-devices cpu`, same binary family | 59.6-61.0 s | 3.61-3.69 | decode reads 6.0 GB/token at 2.0 GiB/s |
+
+- **The link is the wall.** `cuda.BenchmarkHostToDevicePinned` on the box:
+  8.88 GB/s (8.27 GiB/s) from node 0, 8.03 from node 1; pageable 7.98. Every
+  card is on node 0 behind PCIe switches, and two cards at once aggregate
+  ~11 GB/s. The pinned fill reached 7.3-7.95 GiB/s, so the transfer runs at
+  88-96% of the link. 24.1 GiB of routed experts a token is 2.9 s at the
+  link; the cache's ~38% brings it to ~1.8 s.
+- **The disk is not the wall.** Sixteen parallel 16 MiB `O_DIRECT` reads of the
+  container ran at 5.7 GiB/s (one at 5.3). The host path reads its 6.0 GB a
+  token at 2.0 GiB/s of blocked wall; its decode is read-bound, not compute.
+- **★ The cross-layer prefetch measured worse, not better.** 60.4% of the next
+  block's experts were predicted, and reading them a block early took the
+  token from 3.87 to 8.35 s: the demand reads waited 135 s against 48, and
+  decode read 7.7 GB a token against 6.5. The prefetch's reads queue in
+  front of the reads the fill needs now, and its wrong 40% are bytes the
+  disk serves first. A second opinion (codex) at this fork had expected at
+  best 3.1-3.6 s and named the exact risk (prediction coverage of the MISSES
+  is what pays, and wrong guesses spend the same disk); the mechanism stays as
+  `Config.StreamPrefetch`, off.
+- **Hybrid expert execution was priced, not built.** The host run's decode is
+  3.6 s with ~2.9 s of it blocked on reads; hybrid moves only attention to the
+  card and keeps that read, so it lands at the host's rate. It pays only after
+  the host's own expert read is fixed, and then the host path gains the same.
+- **Placement reads nothing to refuse.** `-devices cuda` without streaming:
+  load read 1.16 GiB (was 55.43) and the run took 3m19.8s wall (was 25m06s),
+  every mixture block refused from the tensor table (`nn.SizeDecliner`).
+- **The default now streams such a block** (`nn.AutoStreamer`,
+  `tier.GPU.AutoStream`), with a cache sized by `autoCacheSlots` (18 on this
+  box). Two runs: 78/93 blocks on the cards (15 on the host: the auto run's
+  cards held 10 blocks each where the forced `STREAM=1 STREAM_CACHE=18` run
+  held up to 16 -- not yet explained), prompt 36.9-41.5 s, decode 3.51-3.66
+  s/token, against the host's 59.9-61.0 s and 3.61-3.69 interleaved with them
+  (auto, cpu, auto, cpu, auto). Faster to first token, level in decode; no
+  ratio is claimed (RULE 2 not met).
+
+### 16c-2. Stacking: the host's read, the auto placement, the trial, and hybrid experts.
+
+Same box, container and prompt; one run a row unless said; runs of one table
+taken back to back.
+
+**The host's expert read was not at 2.0 GiB/s.** That figure is the pager's
+per-phase rate, bytes over the SUM of every reader's I/O time, and the reads
+of one layer run concurrently, so it divides by several times the wall. The
+host run's own `experts` line has the wall: 70.6 s blocked over 37 steps
+(prompt included) for 272 GiB, and a layer's few cold pages read at near the
+disk's rate. What was left to take was the overlap: a latent mixture's shared
+experts read nothing the routed read brings in, so they now run while it is in
+flight (`WithSharedOverlap`, one reader goroutine per State so a warm token
+still allocates nothing), with the same float sum (`TestSharedOverlapIsTheSameSum`,
+bit for bit, fails when the shared weight is perturbed by 1e-4). `-devices cpu`,
+32 tokens, alternating off/on: 3.57, 3.32, 3.64, 3.34 s/token.
+
+**Auto-stream's 78/93 had three causes, found one after the other.** (1) The
+cache was sized from the first mixture block offered, a KDA block with two
+thirds of an MLA block's base: 35 sheets. (2) Sizing from tensor bytes at all
+was wrong: a card's real cost per base, its scratch and the head are what they
+come to. (3) Fill-first packed six cards and left two empty. Now a streamed
+block is placed on the plain shared bank, the plan spreads streamed blocks over
+every card (priced on a streamed block, not the dense lead), and after
+placement each card gives its streamed blocks a cache from the room it really
+has left (`GPU.sizeAutoCaches`, at `EndPlacement`), stepping a sheet down where
+an allocation rounds over. The kernels need nothing: an indexed matvec
+addresses a sheet as slot times stride whatever the bank's size, so the cache's
+slot ids index a bigger bank as the compact one's did (the gate's
+"sized after placement" arm runs a 512-sheet cache on kernels built for 10, bit
+for bit). Result: 93/93 on eight cards, 11-12 each, caches up to 42 sheets on
+the 44 blocks whose cards had room past the selection.
+
+**The trial.** `initStreamTrial` arms the seam tuner with {streamed, host}
+whenever a placement auto-streamed a block (`WithStreamTrial`, on): ABBA runs
+with the migration outside the clock, the first tokens after each migration
+skipped (one arm read 0.38 tok/s warm and 0.11 just after moving), and the
+host adopted only past `SeamTuneMargin`. `TestStreamTrialAdoptsOnlyPastTheMargin`
+drives the decision with rates (an 18% faster host adopted, 3.5% not, slower
+not, dispersed not; fails with the margin at 1.00); `TestAutoStreamPlacesWhatCannotFit`
+runs a trial to a decision through real migrations. `SetSeamTuning(false)`,
+which the CLI always calls, used to disarm it.
+
+**The fill's group count is measured** (`streamtune.go`): the pack tuner's
+ABBA duels per device, climbing from the container's figure while a doubling
+wins by 2%. On the box it settled on 2-8 depending on the run.
+
+**★ Hybrid experts pay once stacked.** The host profile (`JITLLM_PROFILE`,
+16 tokens) is 93% matvec, and of what a host token reads from RAM the block
+bases (Q8_0 attention, latent and shared projections, 0.63 GB a block, 58 GB
+a token) are more than twice the routed experts (16 x 17.5 MB a block, 26 GB).
+Hybrid execution keeps the bases, router and shared experts on the cards and
+runs only the routed experts on the host's generated kernels over the host's
+pages (`nn.LayerWeights.HostExperts`, `streamBank.runHost`): the latent input
+(the routed-down projection) and the routing weights come home, the sum goes
+back into the latent accumulator, 7 KB each way a block. It is the streamed
+block's suspension with the transfer replaced, so a block is still one unit
+the device places (RULE 8a); `TestHybridExpertsMatchTheHost` holds it to the
+host at every position of Kimi-K3-0.40B (NMSE 2.3e-7, same argmax), failing at
+1.6e-5 when the routing weights are swapped for one expert's.
+
+| 64 tokens, back to back | prompt | decode s/token |
+|---|---|---|
+| `-devices cuda`, hybrid (auto-stream, trial off) | 27.1 s | **3.11** |
+| `-devices cpu` | 60.1 s | 4.44 |
+| `-devices cuda`, sheets sent, cache, groups tuned | 36.2 s | 5.66 |
+
+**The paired comparison, in one process.** The stream trial is RULE 2's harness
+for this question: the same process alternates the hybrid placement (93 blocks)
+and the host (0) in ABBA runs of 8 tokens, migrating between them outside the
+clock and skipping 2 warm-up tokens after each move. `JITLLM_SEAM_RUN=8
+JITLLM_SEAM_ROUNDS=10`, 430 tokens, default auto-stream with hybrid experts: 10 quads, 20
+ratios. Hybrid over host **median 1.873, IQR/median 0.057** (warm quads only:
+1.875, 0.043); the tuner kept hybrid ("0 blocks is not 5% better (0.530)").
+The A/A pairs from the same runs (incumbent against incumbent, challenger
+against challenger, three runs apart) centre at **0.987** (warm 1.000) -- no
+slot bias -- but their IQR/median is **0.134** (warm 0.109), over the 0.10
+gate, and the comparison was taken once. Warm rates: hybrid 0.66-0.93 tok/s,
+host 0.37-0.41 (the host budget evicting at this length). The ratio is a
+one-pass, A/B-gated result whose self-control is dispersed, and is quoted as
+such.
+
+At 64 tokens the host budget starts to evict (peak RSS 418 GB against the
+393 GiB budget), which is why every row is slower than the 32-token ones. The
+prefetch (`STREAM_PREFETCH`) stacked on the streamed path read 5.9 GB/token
+against 4.9 and decoded at the same 5.79 s: neutral now, not the 2x loss it was
+before the reads went parallel; it stays an option. Hybrid is the default for an
+auto-streamed block (`Config.NoHybrid` sends the sheets).
+
+**Finer pages and sub-block placement, priced.** The streamed path already is
+sub-block placement: the base (attention, router, shared) is the card's unit
+and the bank pages through, and the expert cache is a resident subset chosen by
+use; seeding it from the hotness accounting instead of LRU is the open
+variant. Finer expert pages would not cut bytes: a selected expert reads all
+three of gate, up and down, so a 16.73 MiB page split per matrix is three
+requests for the same bytes. Splitting an expert's rows across cards to use
+more links is priced by the link measurement: two cards at once aggregate
+~11 GB/s against 8.9 for one, so at best 1.25x on transfers that hybrid no
+longer makes, for a reduction across cards per block. The dense base pages
+(1185 MiB) are read whole by every token on the host and are resident on the
+cards, so a smaller base page would not cut what a token reads either. No
+converter change is warranted by these numbers.
+
+### 16c-3. Is auto-stream a limitation? An audit, and what it removed.
+
+Where a mixture block's routed experts run is now a placement like any other:
+`model.WithExperts("host"|"card")`, `-placement N=DEV%host` / `%card`,
+`tier.WithHybridExperts`, `tier.WithAutoStream`, and the choice is kept on every
+device (`nn.ExpertPlacer`), so a block that hops tiers, goes home and comes back
+keeps it (`TestOffCardExpertsRelocate`, which counts the off-card runs at each
+destination and fails when a returning block arrives unmarked). The stream trial
+measures three arms -- the placement made, the host, and the same blocks with
+their experts on the other side of the bus -- under the same margin
+(`TestStreamTrialTriesEveryArm`).
+
+What "auto" restricted, read at the source and measured:
+
+- **It fired only for a block bigger than every card, not for one refused for
+  room. Artificial; removed.** A model whose blocks each fit but whose whole does
+  not left the overflow on the host. gpt-oss-20b Q4_K_M on the laptop's 4 GB RTX
+  3050 Ti (CUDA, 6 P-cores, 48 tokens, one run each): default 2/24 blocks
+  resident, the rest host, 4.84 tok/s; every block streamed with its experts on
+  the host, 9.56 tok/s, the host's ids; the same with the sheets sent, 2.90-2.99;
+  `-devices cpu` 2.29. Now a mixture block refused for room streams, and the
+  trial measures the result against the host. With the change, the default run
+  (2 resident, 22 hybrid) read 8.18 tok/s.
+- **A block that fits stays resident by default. Real, priced.** Resident costs
+  no per-token traffic and runs the experts at the card's bandwidth; hybrid only
+  wins where the card cannot hold the experts. Forcing it is one option away
+  (`WithExperts`, `%host`), and the trial is the instrument if a shared card
+  ever argues otherwise.
+- **Streaming needs a pre-packed bank; hybrid inherited it. Partly artificial,
+  priced.** Sent sheets need the sheet layout (real). A hybrid block still
+  allocates the compact bank and compiles the expert kernels it never launches;
+  dropping them frees VRAM for more bases, not yet done.
+- **Top-1 routers (llama4) do not stream** (`slots > 1`): a kernel constraint of
+  the indexed matvec, real for sent sheets, not for hybrid. Priced.
+- **Batched rows refuse a streamed block** (`rows.go`, `prepBatch`): a prompt
+  runs such blocks a row at a time. Real until a hybrid batched path (the host's
+  expert-major `moeBatch` over the rows) is built; it is the next prefill lever.
+- **The expert cache rewrote the selection as slots, and gpt-oss's expert biases
+  are indexed by it.** A real bug, found by the sheets run parting from the host
+  at the thirteenth token: biased banks now keep the plain bank
+  (`TestBiasedExpertsKeepThePlainBank`); a second buffer of true ids would
+  lift it.
+- **Hybrid refused Gemma 4's dense-MLP mixture and ungated experts.** Real: the
+  host's expert path reads one vector and has no ungated fused path; ungated is
+  now refused at offer rather than failing mid-token.
+- **Backends: none.** Streaming uses the generic `WriteAt` (page-locked memory
+  is CUDA's alone, a speed); hybrid uses `Read`/`WriteAt`. gpt-oss-20b on the
+  laptop over Vulkan: hybrid 5.91 tok/s, sheets 2.13, both with the host's
+  tokens over the first twelve. Metal is untested.
+- **Models: no list.** Hybrid runs any gated mixture through `moeFFN` (biases,
+  MXFP4, latent mixtures): Kimi-K3's latent and gpt-oss's biased MXFP4 both held
+  the host's tokens.
+
+So auto-stream was a mode in one respect -- it engaged only past a size -- and
+that is gone: a mixture block that does not get a resident place gets an
+off-card one, and whether that beats the host is measured.
+
+### 16c-4. Closing it out: batched hybrid, no bank on the card, per-session host sides, the host pages a hybrid block keeps.
+
+- **Batched rows.** A hybrid block now takes a prompt's chunk and a ragged
+  step's rows: the rows are routed on the device (`emitGroupedMoE` up to the
+  weights), their selections, weights and expert inputs come home, and the host
+  runs them expert-major -- each chosen expert read once and run over its rows
+  as one batch (`hostExpertsRows`, `moeBatchExpert`), the host's own batched
+  order -- before the sums go back. Only the valid rows run (a padded chunk of
+  32 for a 10-token prompt ran 224 rows' experts before that). Gates:
+  `TestHybridPrefillMatchesTheHost` (fails at NMSE 6.6e-3 with one row's
+  selection used for all), `TestBatchSeamMovesCarryEveryRowOffCard` (three
+  rows across seam moves and round trips, fails when a hybrid block refuses
+  rows).
+- **No bank on the card.** A hybrid block uploads no compact bank, compiles no
+  expert kernel and needs no packed layout (an F32 fixture runs hybrid); a top-1
+  router streams this way too. Its VRAM goes to bases.
+- **Bugs the gates found on the way.** (1) The host side was the placing
+  State's closure: a block shared by a second session ran the first one's
+  closed generated code (`jit: Call on closed code`). The tier now keeps each
+  session's host side and uses the current session's (`hostFns`, dropped on
+  detach). (2) While blocks were home the host offered their weights to the
+  device as lone matvecs, and a hybrid block never took those copies back:
+  +971 KB a round trip. A routed expert is never offered now, and a block whose
+  host page stays tells the device to forget its weights' copies at placement.
+  (3) A streamed block kept its host block page (1.2 GiB a block on Kimi-K3)
+  and `releaseLayer` dropped its expert pages, which it still reads; now the
+  block page goes and the expert pages stay (`nn.ExpertHolder`), and nothing
+  claims an empty frame for a block page that is out. (4) A block that could
+  neither stream nor run hybrid kept its auto mark and could never come back
+  resident (Gemma 4's dense mixture, F32). (5) Forced `%host` packed the first
+  cards like fill-first and left no room for a prompt's scratch on Kimi-K3; a
+  placement's mark spreads like an auto one.
+- **Zero allocations.** `TestOffCardDecodeDoesNotAllocate`: hybrid decode and
+  steps on synth-kimik3 and Kimi-K3-0.40B, sheet decode on Kimi-K3-0.40B, each
+  counted as having run; `TestDecodeDoesNotAllocate` pins the stream trial off
+  with the tuners (its migrations are page-ins, not a decode).
+- **Tuned constants.** The page-locked half and the direct-send threshold are
+  measured per device after the group count, on one ladder tuner
+  (`streamtune.go`), each pinned by its `Config` field.
+- **The paired comparison did not pass its self-control.** The stream trial
+  grew an A/A arm (`WithStreamTrialAA`): the placement against itself, every
+  change of arm a migration. On Kimi-K3 with 8-token runs it read 0.993 at
+  IQR/median 0.118, with 16-token runs 1.001 at 0.111 -- centred, so no slot
+  bias, but over the gate both times, because the hybrid arm's own runs spread
+  0.55-0.92 tok/s (the host arm holds 0.37-0.41). The A/B came out 1.935 and
+  1.921 in two passes. What would tighten it is the hybrid arm's variance: its
+  host expert reads at a long run are evictions of the 393 GiB budget, and a run
+  that lands on one is slow. No ratio is quoted (docs/perf/current.md).
+- **kimi-k3-in-c on this box is still not possible inside the floor.** It reads
+  the 1.56 TB safetensors checkpoint plus a 109 GB packed trunk from local disk
+  (O_DIRECT); the RAID has 237 GiB free and must keep 60 GiB, so at most ~177
+  GiB could be used. No reduced or streamed mode of it reads weights from
+  anywhere but that local tree. Nothing was deleted for it.
+
 ## GPU.Layers' head-on-another-device arm is dead code
 
 ★★★ **AND `GPU.Layers`' HEAD-ON-ANOTHER-DEVICE ARM IS DEAD CODE, ESTABLISHED

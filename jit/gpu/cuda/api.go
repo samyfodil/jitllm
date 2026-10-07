@@ -346,6 +346,31 @@ func (b *Buffer) Read(p unsafe.Pointer, n int) error {
 	return call(cuMemcpyDtoH(p, b.p, uint64(n)), "cuMemcpyDtoH")
 }
 
+// HostAlloc is n bytes of page-locked host memory, portable to every context.
+// A transfer from it runs at the link's rate and needs no staging inside the
+// driver; a pageable one is copied through the driver's own pinned bounce
+// buffer first. The memory is the driver's, outside the Go heap, and lives
+// until FreeHost.
+func HostAlloc(n int) ([]byte, error) {
+	if n <= 0 {
+		return nil, fmt.Errorf("cuda: page-locking %d bytes", n)
+	}
+	var p unsafe.Pointer
+	// CU_MEMHOSTALLOC_PORTABLE: pinned for every context, not only the
+	// current one, so any card's transfer reads it at full rate.
+	if err := call(cuMemHostAlloc(&p, uint64(n), 1), "cuMemHostAlloc"); err != nil {
+		return nil, err
+	}
+	return unsafe.Slice((*byte)(p), n), nil
+}
+
+// FreeHost gives back memory HostAlloc returned.
+func FreeHost(b []byte) {
+	if len(b) > 0 {
+		cuMemFreeHost(unsafe.Pointer(&b[0]))
+	}
+}
+
 // Len is the buffer's size in bytes.
 func (b *Buffer) Len() int { return int(b.n) }
 

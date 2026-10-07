@@ -943,6 +943,28 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 						"over %d fill(s), %d overlapped read(s)\n",
 					sec(ds.TStreamWait), sec(ds.TStreamRead), sec(ds.TStreamPut),
 					ds.StreamFills, ds.StreamOverlaps)
+				fmt.Fprintf(os.Stderr,
+					"stream upload: sheet lookup %.2f s, gather %.2f s, host-to-device %.2f s for %.2f GiB (%.2f GiB/s); "+
+						"%d plane(s) direct (%d page-locked), %d gathered; groups %d\n",
+					sec(ds.TStreamSheet), sec(ds.TStreamCopy), sec(ds.TStreamH2D),
+					float64(ds.StreamBytes)/(1<<30), float64(ds.StreamBytes)/(1<<30)/max(sec(ds.TStreamH2D), 1e-9),
+					ds.StreamDirect, ds.StreamPinned, ds.StreamGathered, ds.StreamGroupsTuned)
+			}
+			if ds.StreamCacheHits+ds.StreamCacheMisses > 0 || ds.StreamCacheShort > 0 {
+				fmt.Fprintf(os.Stderr, "expert cache: %d sheet(s) a block, %d hit(s), %d miss(es) (%.1f%% hit), %d block(s) without room for one (mean base %d B)\n",
+					ds.StreamCacheSize, ds.StreamCacheHits, ds.StreamCacheMisses,
+					100*float64(ds.StreamCacheHits)/max(float64(ds.StreamCacheHits+ds.StreamCacheMisses), 1), ds.StreamCacheShort, ds.AutoMeanBase)
+			}
+			if ds.HybridRuns > 0 {
+				fmt.Fprintf(os.Stderr, "hybrid experts: %d block-step(s) on the host, %.2f s\n", ds.HybridRuns, sec(ds.THybrid))
+			}
+			if ds.StreamPrefetched > 0 {
+				fmt.Fprintf(os.Stderr, "cross-layer prefetch: %d expert(s) read ahead, %.2f s joining them\n",
+					ds.StreamPrefetched, sec(ds.TStreamPrefetchWait))
+			}
+			if ds.ProbeExperts > 0 || ds.ProbeFused > 0 {
+				fmt.Fprintf(os.Stderr, "cross-layer probe: %d of %d routed experts predicted (%.1f%%), %d probe(s) skipped on a fused route\n",
+					ds.ProbeHits, ds.ProbeExperts, 100*float64(ds.ProbeHits)/max(float64(ds.ProbeExperts), 1), ds.ProbeFused)
 			}
 		}
 	}
@@ -1528,6 +1550,23 @@ func loadOpts(t []tok.Option, budget uint64) []model.Option {
 	// JITLLM_HUGEPAGES=0 leaves the frames on the kernel's default page size.
 	if os.Getenv("JITLLM_HUGEPAGES") == "0" {
 		o = append(o, model.WithHugePages(false))
+	}
+	// JITLLM_SH_OVERLAP=0 runs a mixture's shared experts after its routed
+	// read instead of behind it.
+	// JITLLM_EXPERTS=host|card places every mixture block's routed experts
+	// off the card (model.WithExperts); -placement's %host / %card per block.
+	if e := os.Getenv("JITLLM_EXPERTS"); e != "" {
+		o = append(o, model.WithExperts(e))
+	}
+	// JITLLM_STREAM_TRIAL=0 keeps an auto-streamed placement unmeasured.
+	if os.Getenv("JITLLM_STREAM_TRIAL") == "aa" {
+		o = append(o, model.WithStreamTrialAA(true))
+	}
+	if os.Getenv("JITLLM_STREAM_TRIAL") == "0" {
+		o = append(o, model.WithStreamTrial(false))
+	}
+	if os.Getenv("JITLLM_SH_OVERLAP") == "0" {
+		o = append(o, model.WithSharedOverlap(false))
 	}
 	if n := numaNodes(); n != nil {
 		o = append(o, model.WithInterleave(n))

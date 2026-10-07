@@ -311,6 +311,22 @@ func (g *GPU) PrepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool {
 	// overstates the per-block cost and spreads the plan over a device too
 	// many. The first two blocks land on the first device under any plan.
 	first := g.planN > 1 && g.share == nil && len(g.own) == 1
+	// A streamed plan is priced on the first streamed block after the one it
+	// measures from, not on a dense lead resident whole: Kimi-K3's block 0
+	// priced every base at its own size and the plan fell back to fill-first.
+	if g.spreadAll && g.planN > 1 && !g.streamPlanned {
+		d0 := g.devs[0]
+		d0.mu.Lock()
+		_, auto := d0.autoStream[li]
+		d0.mu.Unlock()
+		first = (auto || g.StreamExperts) && g.streamSeen > 0
+		if auto || g.StreamExperts {
+			g.streamSeen++
+		}
+		if first {
+			g.share, g.streamPlanned = nil, true
+		}
+	}
 	g.mu.Unlock()
 	for _, mayPage := range [2]bool{false, true} {
 		for i := start; i < end; i++ {
@@ -335,7 +351,7 @@ func (g *GPU) PrepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool {
 				// scratch, the session's seat); every device a plan uses
 				// pays them once.
 				var fixed uint64
-				if base := g.planBase[i]; before > base+per {
+				if base := g.planBase[i]; before > base+per && !g.streamPlanned {
 					fixed = before - base - per
 				}
 				g.planShares(per, fixed)
@@ -382,6 +398,8 @@ func (g *GPU) PlanBlocks(n int, extra uint64) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.planN, g.share, g.planExtra = n, nil, extra
+	g.spreadAll = g.StreamExperts && g.StreamCacheSlots == 0
+	g.streamPlanned, g.streamSeen = false, 0
 	if g.Config.FillFirst {
 		g.planN = 0
 	}
@@ -428,7 +446,11 @@ func (g *GPU) planShares(per, fixed uint64) {
 	for k < len(g.devs) {
 		sum += avail(k)
 		k++
-		if fits(sum, k) {
+		// Streamed blocks spread over every device: what the bases leave is
+		// their expert caches (sizeAutoCaches), and a card left empty is
+		// cache nobody uses -- fill-first packed Kimi-K3's 93 bases onto six
+		// of eight V100s, and only the seven blocks on the sixth got a cache.
+		if fits(sum, k) && !g.spreadAll {
 			break
 		}
 	}
@@ -500,6 +522,252 @@ func (g *GPU) Stream(li int, on bool) bool {
 		d.mu.Unlock()
 	}
 	return len(g.devs) > 0
+}
+
+// DeclineSize refuses a block whose resident bytes exceed every device's
+// whole budget, so placement does not read gigabytes to be told so by
+// PrepLayer. A device that streams the block (Config.StreamExperts, or the
+// block marked by Stream) keeps neither the bank resident nor necessarily the
+// block, so it never refuses here; PrepLayer stays the real decision.
+func (g *GPU) DeclineSize(li int, total, bank uint64) string {
+	var widest uint64
+	for _, d := range g.devs {
+		d.mu.Lock()
+		_, auto := d.autoStream[li]
+		streams := d.StreamExperts || d.stream[li] || auto
+		lim := d.limit
+		d.mu.Unlock()
+		if streams || total <= lim {
+			return ""
+		}
+		widest = max(widest, lim)
+	}
+	if len(g.devs) == 0 {
+		return ""
+	}
+	// No block index or byte count in the text: placement groups identical
+	// reasons, and ninety-two lines that differ by a number say one thing.
+	return fmt.Sprintf("the block with its routed experts is above every device's whole budget "+
+		"(the largest %.2f GiB), so it runs on the host unread by the device "+
+		"(a placement that streams it -- JITLLM_GPU_STREAM, -placement N=DEV~ -- puts it on a card)",
+		float64(widest)/(1<<30))
+}
+
+// AutoStream marks block li streamed on every device when its base -- the
+// block without its routed bank -- fits one of them. It is the default for a
+// mixture no card can hold: on Kimi-K3 over eight V100s the streamed blocks,
+// cached, prefilled 1.5x faster than the host and decoded at its rate
+// (placement.md 16c). Config.NoAutoStream turns it off and leaves such blocks
+// on the host.
+//
+// The blocks are placed with the plain bank, so every one fits before any
+// cache takes room; sizeAutoCaches gives them their caches from what each card
+// really has left once placement ends. blocks and meanBase are kept for the
+// report.
+func (g *GPU) AutoStream(li int, total, bank uint64, nExpert, nUsed, blocks int, meanBase uint64) bool {
+	if g.NoAutoStream || len(g.devs) == 0 || bank >= total || nExpert <= nUsed || nUsed < 2 {
+		return false
+	}
+	base := total - bank
+	var widest uint64
+	for _, d := range g.devs {
+		d.mu.Lock()
+		widest = max(widest, d.limit)
+		d.mu.Unlock()
+	}
+	if base > widest {
+		return false
+	}
+	g.mu.Lock()
+	g.spreadAll = g.spreadAll || g.StreamCacheSlots == 0
+	g.mu.Unlock()
+	for _, d := range g.devs {
+		d.mu.Lock()
+		if d.autoStream == nil {
+			d.autoStream = map[int]expertMode{}
+		}
+		if _, set := d.autoStream[li]; !set {
+			d.autoStream[li] = expAuto
+		}
+		d.AutoMeanBase = meanBase
+		d.mu.Unlock()
+	}
+	return true
+}
+
+// expertMode is where a streamed block's routed experts run.
+type expertMode int
+
+const (
+	// expAuto is GPU.AutoStream's mark: the block's experts run where the
+	// tier's defaults say (on the host unless Config.NoHybrid).
+	expAuto expertMode = iota
+	// expHost runs them on the host (hybrid), whatever the defaults.
+	expHost
+	// expCard sends their sheets to the card each token.
+	expCard
+)
+
+// PlaceExperts is nn.ExpertPlacer: it places block li's routed experts off
+// the card -- "host" runs them on the host (hybrid), "card" streams their
+// sheets to it -- on every device, so the block keeps the choice wherever it
+// moves; "" clears the choice. It reports false for a word it does not know.
+func (g *GPU) PlaceExperts(li int, where string) bool {
+	var m expertMode
+	switch where {
+	case "host":
+		m = expHost
+	case "card":
+		m = expCard
+	case "":
+	default:
+		return false
+	}
+	// A block placed with its experts off the card spreads like an
+	// auto-streamed one: packed onto the first cards, it left them no room for
+	// a prompt's batched scratch, and Kimi-K3's first chunk failed there.
+	if where != "" {
+		g.mu.Lock()
+		g.spreadAll = true
+		g.mu.Unlock()
+	}
+	for _, d := range g.devs {
+		d.mu.Lock()
+		if d.autoStream == nil {
+			d.autoStream = map[int]expertMode{}
+		}
+		if where == "" {
+			delete(d.autoStream, li)
+		} else {
+			d.autoStream[li] = m
+		}
+		d.mu.Unlock()
+	}
+	return len(g.devs) > 0
+}
+
+// SetExpertMode re-decides where every marked block's experts run, for the
+// trial: "host", "card", or "" for the defaults. A block takes it the next
+// time it is placed. It reports how many blocks it touched.
+func (g *GPU) SetExpertMode(where string) int {
+	m := expAuto
+	switch where {
+	case "host":
+		m = expHost
+	case "card":
+		m = expCard
+	}
+	n := 0
+	for i, d := range g.devs {
+		d.mu.Lock()
+		for li := range d.autoStream {
+			d.autoStream[li] = m
+			if i == 0 {
+				n++
+			}
+		}
+		d.mu.Unlock()
+	}
+	return n
+}
+
+// sizeAutoCaches gives every streamed block on its plain bank an expert
+// cache once placement has ended: on each card, the budget less what the
+// card holds now, split evenly among the card's streamed blocks in device
+// sheet bytes. Config.StreamCacheSlots states the size instead (negative:
+// no cache). Measured rather than estimated -- the scratch,
+// the head and the shared bank are whatever they came to -- and sized per
+// card, so a card that took the head gives smaller caches than one that did
+// not. The kernels need nothing new: an indexed matvec addresses a sheet by
+// slot times its stride whatever the bank's size, so the slot ids the cache
+// writes over the selection index the bigger bank as they did the compact
+// one. A cache the card cannot allocate leaves the block on its plain bank.
+func (g *GPU) sizeAutoCaches() {
+	if g.StreamCacheSlots != 0 {
+		return
+	}
+	for _, d := range g.devs {
+		d.mu.Lock()
+		d.sizeAutoCaches()
+		d.mu.Unlock()
+	}
+}
+
+// cacheBlock gives block l a cache of n sheets, or reports false and leaves
+// it on its plain bank. Callers hold g.mu.
+func (g *devTier) cacheBlock(l *layer, n, k int) bool {
+	var got [3]*resident
+	for m, r := range [3]*resident{l.gate, l.up, l.down} {
+		if r == nil {
+			continue // an ungated bank has no gate
+		}
+		nr, _, ok := g.residentCompact(r.t, r.nrows/k, r.k, n)
+		if !ok {
+			for _, r := range got {
+				if r != nil {
+					g.refund(r.bytes())
+					g.freeResident(r)
+				}
+			}
+			return false
+		}
+		got[m] = nr
+	}
+	for m, dst := range [3]**resident{&l.gate, &l.up, &l.down} {
+		if got[m] != nil {
+			*dst = got[m]
+		}
+	}
+	l.stream.initCache(n, l.stream.nExpert)
+	g.StreamCacheSize = max(g.StreamCacheSize, n)
+	return true
+}
+
+// sizeAutoCaches is GPU.sizeAutoCaches on one device. Callers hold g.mu.
+func (g *devTier) sizeAutoCaches() {
+	var ls []*layer
+	var sheet uint64
+	k := 0
+	for _, l := range g.layers {
+		// A block whose experts carry biases keeps its plain bank: see
+		// cacheSlotsFor.
+		if l == nil || l.stream == nil || l.stream.cached() || l.stream.hybrid || l.down == nil ||
+			l.expGateB != nil || l.expUpB != nil || l.expDownB != nil {
+			continue
+		}
+		var s uint64
+		for m := range l.stream.sh {
+			for pl := range l.stream.sh[m] {
+				s += uint64(l.stream.sh[m][pl])
+			}
+		}
+		sheet = max(sheet, s)
+		k = len(l.stream.sel)
+		ls = append(ls, l)
+	}
+	// The budget already leaves the driver its headroom.
+	room := g.limit
+	if len(ls) == 0 || sheet == 0 || g.used >= room {
+		return
+	}
+	n := int((room - g.used) / (uint64(len(ls)) * sheet))
+	// The cache must hold more than a token's selection to keep anything.
+	if n <= k {
+		return
+	}
+	for _, l := range ls {
+		// A card's allocations round, so the even share can be a sheet too
+		// many for the last blocks: those step down rather than go without.
+		for ; n > k; n-- {
+			if g.cacheBlock(l, min(n, l.stream.nExpert), k) {
+				break
+			}
+			g.StreamCacheShort++
+		}
+		if n <= k {
+			return
+		}
+	}
 }
 
 // SetBudget retargets every device's weight budget while the model is running,
@@ -1308,6 +1576,22 @@ func (g *GPU) ReleasesHostPage(li int) bool {
 		return false
 	}
 	return d.ReleasesHostPage(li)
+}
+
+// HoldsExperts is nn.ExpertHolder: whether the device holding block li holds
+// its routed bank, so the host may give the bank's expert pages back. A
+// streamed or hybrid block holds none of it.
+func (g *GPU) HoldsExperts(li int) bool {
+	g.mu.Lock()
+	d := g.own[li]
+	g.mu.Unlock()
+	if d == nil {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	l, ok := d.layers[li]
+	return ok && l.stream == nil
 }
 
 // RopeRows reads back the rotary table the first device's width-row batched

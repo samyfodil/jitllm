@@ -245,6 +245,18 @@ type LayerWeights struct {
 	// goroutine while the caller uploads sheets it already has (EnsureExperts
 	// writes through w and is not). nil means the caller must not overlap.
 	PrefetchExperts func(sel []uint32) error
+	// HostExperts runs this block's routed experts on the host, for a device
+	// that keeps the rest of the block (hybrid execution): out = sum over i
+	// of w[i] * expert sel[i] applied to in, sel and w in selection order, in
+	// the expert width the block's mixture reads (the latent on Kimi-K3). It
+	// runs the host's generated kernels over the host's pages; only in and
+	// out cross the bus. nil where the host cannot.
+	HostExperts func(sel []uint32, w, in, out []float32) error
+	// HostExpertsRows is HostExperts over rows of a chunk, expert-major: each
+	// selected expert runs once over the rows that chose it. sel has a row
+	// stride of k+1 (ExpertRank's layout), w of k, in and out of the expert
+	// width.
+	HostExpertsRows func(sel []uint32, w, in, out []float32, rows, k int) error
 }
 
 // SSMWeights are the gated delta rule's tensors.
@@ -1261,6 +1273,11 @@ type SessionStepper interface {
 // work at once instead of in turn.
 type Pipeliner interface{ PipelineDepth() int }
 
+// ExpertHolder says whether the device holding block li holds its routed
+// bank, so the host may give the bank's expert pages back with the block's
+// page. A block whose experts run off the card (streamed, hybrid) does not.
+type ExpertHolder interface{ HoldsExperts(li int) bool }
+
 // HostPageReleaser says a placed block's host page can be given back.
 type HostPageReleaser interface{ ReleasesHostPage(li int) bool }
 
@@ -1305,6 +1322,44 @@ type RecRewinder interface {
 // page-in, so this lets placement skip reading blocks the device will refuse.
 type PlanDecliner interface {
 	DeclinePlan(p *LayerPlan) string
+}
+
+// SizeDecliner is an optional LayerDevice that can answer from a block's
+// size alone that no device could hold it, before the caller reads it. total
+// is every byte the block keeps resident; bank is the routed expert banks'
+// share of it, which a device that streams the bank does not keep. A
+// mixture block on a large model is gigabytes, so the read this saves is
+// the whole cost of a refusal.
+type SizeDecliner interface {
+	DeclineSize(li int, total, bank uint64) string
+}
+
+// AutoStreamer is an optional LayerDevice that, offered a mixture block no
+// device could hold resident (SizeDecliner), can take it streamed: the
+// block's base on a card and its routed experts sent per token. It answers
+// whether it will; blocks is how many blocks the model has and meanBase
+// their mean bytes without routed banks, so the device can size what
+// streaming keeps beside the bases from the whole model, not from whichever
+// block was offered first.
+type AutoStreamer interface {
+	AutoStream(li int, total, bank uint64, nExpert, nUsed, blocks int, meanBase uint64) bool
+}
+
+// ExpertPlacer is an optional LayerDevice that can place a mixture block's
+// routed experts off the card: "host" runs them on the host (hybrid
+// execution), "card" streams their sheets to the card each token, "" leaves
+// the device to decide. The choice holds on every device, so a block that
+// moves keeps it.
+type ExpertPlacer interface {
+	PlaceExperts(li int, where string) bool
+}
+
+// ExpertModer is an optional LayerDevice that re-decides where every block
+// placed with its experts off the card runs them ("host", "card", or "" for
+// its defaults), for a measured trial; it takes effect when a block is next
+// placed, and reports how many blocks it touched.
+type ExpertModer interface {
+	SetExpertMode(where string) int
 }
 
 // DeviceName is a device name as a placement compares it: lower case, and the

@@ -182,6 +182,15 @@ type Device interface {
 	Session(f func(s Session))
 }
 
+// HostPinner is an optional Device that can hand out page-locked host memory,
+// which its transfers read at the link's rate. Pin and Unpin may be called
+// inside a Session. CUDA implements it; on Vulkan and Metal the mapped
+// buffers are already the transfer path and nothing is gained.
+type HostPinner interface {
+	PinHost(n int) ([]byte, error)
+	UnpinHost(p []byte)
+}
+
 // Session is a batch of device calls that runs under one ownership hop. The
 // methods mirror Buf and Kernel but skip the hop, so they are only valid inside
 // the closure Device.Session was given.

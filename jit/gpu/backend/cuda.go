@@ -667,6 +667,17 @@ func (c *cudaDev) Alloc(n int) (Buf, error) {
 	return &cudaBuf{b: b, dev: c, acc: c.take(n, cudaFootprint(n))}, nil
 }
 
+// PinHost is cuda.HostAlloc on the owner goroutine (backend.HostPinner).
+func (c *cudaDev) PinHost(n int) ([]byte, error) {
+	var b []byte
+	err := errCUDAClosed
+	c.do(func() { b, err = cuda.HostAlloc(n) })
+	return b, err
+}
+
+// UnpinHost gives PinHost's memory back.
+func (c *cudaDev) UnpinHost(b []byte) { c.do(func() { cuda.FreeHost(b) }) }
+
 // GuaranteedLanes: a CUDA warp is 32 threads on every architecture NVIDIA has
 // shipped, WARP_SIZE is 32 in every CUDA toolkit, and ptx.Lower emits
 // shfl.sync with a full member mask and maxLane 31 -- one segment, the whole

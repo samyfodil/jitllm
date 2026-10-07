@@ -362,8 +362,57 @@ type Config struct {
 	// StreamGroups is how many pieces a streamed block's selection is uploaded
 	// in, so that group g's PCIe transfer overlaps group g+1's file read. 1 is
 	// serial read-then-upload, and is what a host with no PrefetchExperts gets;
-	// see streamBank.fill.
+	// 0 measures it per device (streamtune.go). See streamBank.fill.
 	StreamGroups int
+	// StreamGroupsStart is where the group tuner starts (the container's
+	// figure, format/jlm streamGroupsFor); it is not a pin.
+	StreamGroupsStart int
+	// StreamDirectBytes is the plane size from which a streamed sheet is sent
+	// straight from its host frame rather than gathered; 0 is directSheet. A
+	// field so a gate can force either path on a fixture of any size.
+	StreamDirectBytes int
+	// StreamNoPin sends direct sheets from their host frames as pageable
+	// transfers instead of through page-locked halves: the other arm.
+	StreamNoPin bool
+	// StreamPinHalf is each page-locked half's size; 0 is pinHalf. A gate
+	// sets it to one byte so every piece takes its own half and the
+	// pipeline's second stage runs on a fixture's small sheets.
+	StreamPinHalf int
+	// StreamCacheSlots makes each streamed block's bank an expert cache of
+	// this many sheets, kept across tokens: a selected expert already there
+	// is neither read nor sent. 0 sizes the cache from the room each card has
+	// left after placement (GPU.sizeAutoCaches); negative, or a stated size
+	// not above the selection, is no cache; a device without room for a
+	// block's stated cache gives that block the plain bank
+	// (Stats.StreamCacheShort).
+	StreamCacheSlots int
+	// StreamPrefetch runs the cross-layer probe (StreamProbe's launches) at
+	// each streamed block's suspension and starts reading the next block's
+	// predicted experts into host frames behind this block's transfers. Host
+	// reads only; see streamBank.prefetch.
+	StreamPrefetch bool
+	// HybridExperts runs a streamed block's routed experts on the host
+	// (nn.LayerWeights.HostExperts) instead of sending their sheets: the
+	// block's base, router and shared experts stay on the card, and the
+	// experts' input and output vectors are all that cross the bus.
+	HybridExperts bool
+	// NoHybrid sends an auto-streamed block's expert sheets to the card
+	// instead of running its experts on the host, which is that block's
+	// default (GPU.AutoStream).
+	NoHybrid bool
+	// NoAutoStream leaves a mixture block that no device can hold resident
+	// on the host, as before GPU.AutoStream, instead of streaming it.
+	NoAutoStream bool
+	// StreamProbe runs, at each streamed block's suspension, the next block's
+	// router over this block's normed row and scores its top-k against the
+	// selection that block then makes (Stats.ProbeHits): the measurement of a
+	// cross-layer expert prefetch. It costs a router launch and a round trip a
+	// block, so it is an instrument, never a mode to run in.
+	StreamProbe bool
+	// StreamSelLog, when set, is handed every streamed block's selection as it
+	// comes home (block index, the k expert ids in rank order). The slice is
+	// reused; copy it to keep it.
+	StreamSelLog func(block int, sel []uint32)
 	// NoGraph issues the token's launches one driver call at a time instead of
 	// replaying a captured graph: the other arm of that comparison, a field so
 	// both arms can be live in one process.
@@ -641,6 +690,46 @@ type Stats struct {
 	// read at all. A CPU profile cannot split this, since the reads overlap
 	// across goroutines.
 	TStreamWait, TStreamRead, TStreamPut time.Duration
+	// TStreamSheet, TStreamCopy and TStreamH2D split TStreamPut: finding each
+	// routed sheet in the host pager (a read when the page is not resident),
+	// gathering it into the staging buffer, and the host-to-device transfer of
+	// StreamBytes.
+	TStreamSheet, TStreamCopy, TStreamH2D time.Duration
+	StreamBytes                           int64
+	// StreamDirect counts sheet planes sent straight from a host frame, and
+	// StreamGathered the gathered transfers: the selection check for put.
+	// StreamPinned counts the direct planes that went through the page-locked
+	// halves (sendPieces).
+	StreamDirect, StreamGathered, StreamPinned int
+	// StreamCacheHits and StreamCacheMisses count selected experts found in
+	// and missing from a block's expert cache; StreamCacheShort counts blocks
+	// given the plain bank for want of room.
+	StreamCacheHits, StreamCacheMisses, StreamCacheShort int
+	// HybridRuns counts streamed blocks whose experts ran on the host
+	// (Config.HybridExperts), and THybrid the wall of those host calls.
+	HybridRuns int
+	// HybridRows counts rows of batched chunks whose experts ran on the host.
+	HybridRows int
+	THybrid    time.Duration
+	// StreamCacheSize is the largest expert cache a block was given, in
+	// sheets: the check that an auto-sized cache is the size intended.
+	StreamCacheSize int
+	// StreamGroupsTuned is the group count the fill tuner holds (0: not
+	// tuning, a stated Config.StreamGroups).
+	StreamGroupsTuned int
+	// StreamPinHalfTuned and StreamDirectTuned are the page-locked half and
+	// the direct-send threshold the fill tuner holds, in bytes.
+	StreamPinHalfTuned, StreamDirectTuned int
+	// AutoMeanBase is the model's mean mixture base GPU.AutoStream was told.
+	AutoMeanBase uint64
+	// StreamPrefetched counts experts the cross-layer prefetch read, and
+	// TStreamPrefetchWait the wall a fill spent joining it.
+	StreamPrefetched    int
+	TStreamPrefetchWait time.Duration
+	// ProbeHits of ProbeExperts routed experts were in the previous block's
+	// cross-layer prediction (Config.StreamProbe); ProbeFused counts probes
+	// skipped because the route fuses the rank with the weights.
+	ProbeHits, ProbeExperts, ProbeFused int
 	// TPrewarm is packing done off the main loop, kept apart from TPack
 	// because only TPack is on the critical path.
 	TPrewarm time.Duration
@@ -914,6 +1003,29 @@ func (s *Stats) add(o Stats) {
 	s.TStreamWait += o.TStreamWait
 	s.TStreamRead += o.TStreamRead
 	s.TStreamPut += o.TStreamPut
+	s.TStreamSheet += o.TStreamSheet
+	s.TStreamCopy += o.TStreamCopy
+	s.TStreamH2D += o.TStreamH2D
+	s.StreamBytes += o.StreamBytes
+	s.StreamDirect += o.StreamDirect
+	s.StreamGathered += o.StreamGathered
+	s.StreamPinned += o.StreamPinned
+	s.StreamCacheHits += o.StreamCacheHits
+	s.StreamCacheMisses += o.StreamCacheMisses
+	s.StreamCacheShort += o.StreamCacheShort
+	s.HybridRuns += o.HybridRuns
+	s.HybridRows += o.HybridRows
+	s.THybrid += o.THybrid
+	s.StreamCacheSize = max(s.StreamCacheSize, o.StreamCacheSize)
+	s.StreamGroupsTuned = max(s.StreamGroupsTuned, o.StreamGroupsTuned)
+	s.StreamPinHalfTuned = max(s.StreamPinHalfTuned, o.StreamPinHalfTuned)
+	s.StreamDirectTuned = max(s.StreamDirectTuned, o.StreamDirectTuned)
+	s.AutoMeanBase = max(s.AutoMeanBase, o.AutoMeanBase)
+	s.StreamPrefetched += o.StreamPrefetched
+	s.TStreamPrefetchWait += o.TStreamPrefetchWait
+	s.ProbeHits += o.ProbeHits
+	s.ProbeExperts += o.ProbeExperts
+	s.ProbeFused += o.ProbeFused
 	s.TPrewarm += o.TPrewarm
 	s.Captures += o.Captures
 	s.AttnMMA = s.AttnMMA || o.AttnMMA
@@ -1138,6 +1250,31 @@ type devTier struct {
 	layerGen uint64
 	// tabPend are page-table writes waiting for flushTabs (kvpool.go).
 	tabPend []tabWrite
+	// autoStream holds the blocks placed with their routed experts off the
+	// card, and where those experts run: GPU.AutoStream's mark (expAuto) or a
+	// placement's (GPU.PlaceExperts). Such a block is placed streamed whatever
+	// StreamExperts says, and given its expert cache after placement
+	// (sizeAutoCaches). It is set on every device, so a block that moves
+	// keeps it. Under mu.
+	autoStream map[int]expertMode
+	// hostFns is each session's host side for its hybrid blocks, by block
+	// (hostFor); a session's go when it detaches. Under mu.
+	hostFns map[uint64]map[int]hostSide
+	// ftune measures the streamed fill's knobs (streamtune.go).
+	ftune *fillTune
+	// sheetStage is the streamed fill's gather buffer per (matrix, plane);
+	// see streamStage.
+	sheetStage [9][]byte
+	// pin is the streamed fill's two page-locked halves, nil until the first
+	// direct sheet or on a device with no page-locked memory; pieces is
+	// put's list of direct sheets, kept so a token allocates none. See
+	// sendPieces.
+	pin     [2][]byte
+	noPin   bool
+	pieces  []sheetPiece
+	packWG  sync.WaitGroup
+	copyWG  sync.WaitGroup
+	packEnd int
 	*Config
 	Stats
 	mu sync.Mutex
@@ -1456,6 +1593,14 @@ type GPU struct {
 	held  bool
 	// devs is every device, fastest first; see order().
 	devs []*devTier
+	// spreadAll steers a plan over every device rather than the fewest that
+	// hold it: streamed blocks, whose caches take what the bases leave
+	// (planShares). Under mu.
+	spreadAll bool
+	// streamPlanned says the streamed plan was priced, and streamSeen counts
+	// streamed blocks offered before it was.
+	streamPlanned bool
+	streamSeen    int
 	// own maps a block index to the device holding it. A block with no entry is
 	// on the host.
 	own map[int]*devTier
@@ -1922,6 +2067,14 @@ func (g *devTier) Close() {
 		return
 	}
 	g.closed = true
+	if hp, ok := g.dev.(backend.HostPinner); ok {
+		for i, b := range g.pin {
+			if b != nil {
+				hp.UnpinHost(b)
+				g.pin[i] = nil
+			}
+		}
+	}
 	// nil entries are compile failures, cached so they are not retried; Close
 	// on one would panic.
 	for _, k := range g.kerns {

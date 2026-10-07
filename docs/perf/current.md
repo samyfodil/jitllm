@@ -768,6 +768,120 @@ Vulkan, model-correctness.md "kimi-k3") plus these answers.
   with a read. If a fill moves the 16 routed expert pages (268 MiB) that is
   ~1.4 GiB/s over PCIe, far under the link.
 
+### Kimi-K3 streamed on the cards (k3-streaming)
+
+Same box, container and prompt as above, `-n 32`, one run a row, runs
+interleaved device/host; no ratio (RULE 2's paired rounds were not taken).
+placement.md 16c has the attribution.
+
+| run | prompt | decode s/token | tok/s | decode B/token | peak RSS | blocks on cards |
+|---|---|---|---|---|---|---|
+| `-devices cpu` (x3) | 59.9-61.0 s | 3.61-3.69 | 0.27-0.28 | 6.01 GB | 330.7 GiB | 0 |
+| `-devices cuda`, default (auto-stream, cache 18) (x3) | 36.9-41.5 s | 3.51-3.66 | 0.27-0.29 | 6.54-6.57 GB | 347-348 GiB | 78/93 |
+| `-devices cuda`, `STREAM=1 STREAM_GROUPS=4 STREAM_CACHE=18` | 38.8 s | 3.55 | 0.28 | 6.04 GB | 333.4 GiB | 93/93 |
+| `-devices cuda`, `JITLLM_GPU_NO_AUTOSTREAM=1` | 63.5 s | 3.68 | 0.27 | 6.54 GB | 347.2 GiB | 1/93 (load 1.16 GiB, 3m20s wall) |
+
+Link ceiling measured in the same session: 8.27 GiB/s pinned to one V100.
+
+### Kimi-K3: hybrid experts against the host (k3-streaming, later)
+
+Same box and container, "The capital of France is", runs back to back.
+placement.md 16c-2 has the attribution.
+
+| run, 64 tokens | prompt | decode s/token | tok/s | decode B/token | peak RSS |
+|---|---|---|---|---|---|
+| `-devices cuda`, default (auto-stream, hybrid experts), trial off | 27.1 s | 3.11 | 0.32 | 5.58 GB | 418 GB |
+| `-devices cpu` (shared-expert overlap on) | 60.1 s | 4.44 | 0.23 | 4.98 GB | 416 GB |
+| `-devices cuda`, `JITLLM_GPU_HYBRID=0` (sheets sent, cache, groups tuned) | 36.2 s | 5.66 | 0.18 | 4.92 GB | 418 GB |
+
+Paired, in one process (the stream trial, ABBA runs of 8 tokens, 10 quads, 430
+tokens): hybrid / host **1.873**, IQR/median 0.057, n = 20; A/A from the same
+runs 0.987 with IQR/median 0.134, over the 0.10 gate; one pass. Not a clean
+RULE 2 ratio: the self-control is dispersed and the comparison was not run
+twice.
+
+### Kimi-K3: everything stacked (k3-streaming, final)
+
+Same box, container and prompt, 64 tokens, runs back to back, one each. VRAM
+is the per-card peak from `nvidia-smi -l 2` in MiB.
+
+| run | prompt | decode s/token | tok/s | decode B/token | peak RSS | VRAM per card |
+|---|---|---|---|---|---|---|
+| `-devices cpu` | 59.4 s | 4.34 | 0.23 | 4.98 GB | 416 GB | -- |
+| `-devices cuda`, default (auto-stream, hybrid experts), trial off | 25.9 s | **2.44** | 0.41 | 4.86 GB | 407 GB | 13.3-15.0 G on all 8 |
+| `-devices cuda`, `JITLLM_EXPERTS=host` (hybrid forced) | 26.1 s | 2.85 | 0.35 | 5.38 GB | 418 GB | 13.4-15.0 G on all 8 |
+| `-devices cuda`, `JITLLM_EXPERTS=card` (sheets forced) | 39.8 s | 6.64 | 0.15 | 4.93 GB | 418 GB | 0.3-15.9 G |
+
+The cpu and sheets rows are from the binary at 0ebf9b8c; the two hybrid rows
+and the trials from the one at 050ac402 (the spread fix), whose forced-hybrid
+run the earlier binary could not prefill.
+
+**Paired, in one process (the stream trial, ABBA runs of 16 tokens, 10 quads,
+900 tokens, warm quads 2-10):** A/A (the placement against itself through the
+same migrations) median **1.001**, IQR/median **0.111** -- over the 0.10 gate.
+Hybrid / host, pass 1 median **1.935** (IQR/median 0.218), pass 2 **1.921**
+(0.187). The two passes agree and the A/A sits at 1.00, but the A/A's own
+dispersion fails RULE 2's gate (the hybrid arm's runs spread 0.55-0.92 tok/s
+against the host's 0.37-0.41), so this is **not** a RULE 2 ratio. With 8-token
+runs the A/A read 0.993 at 0.118.
+
+### Kimi-K3: kimi-k3-in-c on the same box
+
+kimi-k3-in-c (github.com/FareedKhan-dev/kimi-k3-in-c at 81bb6c2, built on the
+box with `make -j`, `make test`: "ENGINE MATCHES THE REFERENCE EXACTLY") on the
+release's safetensors at the revision jitllm's container was converted from
+(moonshotai/Kimi-K3@f831ab66, 96 shards, 1,560,998,661,367 B, every file's size
+checked against the Hub), its trunk packed per its README (108.8 GB). Same box
+and RAID as every row above; the jitllm container was deleted to make the room
+and reconverted afterwards. Command, run twice back to back under one cgroup
+ceiling (`systemd-run --user --scope -p MemoryMax=420G -p MemorySwapMax=0`),
+all 56 threads (its default physical-core count), no numactl:
+
+    ./bin/k3 model --trunk trunk --trunk-gb 112 --cache-gb 260 --tok model \
+        --prompt "The capital of France is" --gen 64 --incremental
+
+| run | first token (step 0) | decode s/token (steps 1-63) | tok/s | read | peak RSS |
+|---|---|---|---|---|---|
+| kimi-k3-in-c, run 1 | 153.9 s | 9.55 | 0.105 | 539 GB in the run (430 GB experts, 109 GB trunk) | 376.7 GB |
+| kimi-k3-in-c, run 2 | 74.9 s | 8.83 | 0.113 | 544 GB | 376.7 GB |
+
+Then the jitllm container was reconverted with the same options
+(`jitllm convert -q8 hf://moonshotai/Kimi-K3@f831ab66... Kimi-K3-q8.jlm`, 22369c5c,
+4h36m streamed from the Hub, 1,564,653,101,056 B, the same size as before) and
+jitllm ran back to back on the same box, disk and cgroup ceiling (MemoryMax=420G:
+jitllm's self-set budget 378 GiB, kimi-k3-in-c's peak RSS 376.7 GB), all cores,
+no numactl, trial off:
+
+| run | prompt (5 tok) | decode s/token | tok/s | decode read | peak RSS |
+|---|---|---|---|---|---|
+| jitllm `-devices cpu`, run 1 | 302.2 s | 8.59 | 0.12 | 5.16 GB/token | 355.6 GB |
+| jitllm `-devices cpu`, run 2 | 60.0 s | 4.31 | 0.23 | 5.16 GB/token | 355.6 GB |
+| jitllm `-devices cuda` (hybrid), run 1 | 47.0 s | 3.46 | 0.29 | 4.91 GB/token | 357.5 GB |
+| jitllm `-devices cuda` (hybrid), run 2 | 46.4 s | 2.69 | 0.37 | 4.70 GB/token | 358.0 GB |
+
+The first CPU run came right after the conversion's 1.45 TB of writes and is the
+cold-reclaim run the first table above describes (its decode read the same bytes
+as run 2 at a third of the rate); the second is the one to read. The
+reconverted file gives the earlier runs' answers: the CPU runs' 64 ids are the
+earlier CPU runs' exactly, and the first device run's are the earlier device
+runs' and kimi-k3-in-c's exactly ("Paris." and a list); the second device run
+parts after 31 tokens, within the device band.
+
+**No ratio.** RULE 1 wants both arms measured in the same pass with the same
+tool, and RULE 2 paired interleaved rounds: kimi-k3-in-c and the jitllm
+container could not both be on this disk (237 GiB free, a 60 GiB floor, and
+1.45 TB each), so the arms are hours apart with a reconversion between them, two
+runs each, not interleaved. Absolute rows only: kimi-k3-in-c decoded at
+8.8-9.6 s/token with a 75-154 s first step; jitllm's host 4.31 s/token (warm run)
+and its hybrid device placement 2.69-3.46 s/token with a 46-47 s prompt, under
+the same memory ceiling.
+
+Its tokens: `17374 20829 10 427 414 1008 606 142957 37092 387 7081 306 ...` --
+"Paris.", then a quoted list of sentences about Paris, identical in both runs
+and identical to jitllm's device runs of this prompt (the streamed rows above);
+jitllm's host run parts from it at the second token (`13` against `20829`),
+within RULE 11c's band of two f32 reduction orders.
+
 ## ★ THE V100 BOARD (sweep5, one pass, main at c07936d + fixes)
 
 Host: the 8x V100 server, 2x Xeon E5-2680 v4, 8x Tesla V100-SXM2-16GB (sm_70), CUDA.

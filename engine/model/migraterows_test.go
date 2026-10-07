@@ -67,6 +67,27 @@ func TestBatchSeamMovesCarryEveryRowMoEFamilies(t *testing.T) {
 	}
 }
 
+// TestBatchSeamMovesCarryEveryRowOffCard is the same on synth-kimik3 with
+// its mixture blocks' experts off the card: on the host (hybrid), where a
+// step's rows are routed on the device and their experts run on the host, and
+// sent to the card, which a batched step runs a row at a time. Each arm counts
+// its path having run across the moves.
+func TestBatchSeamMovesCarryEveryRowOffCard(t *testing.T) {
+	p, ok := existingModel(testmodels.Path("synth-kimik3.gguf"))
+	if !ok {
+		testmodels.Missing(t, "%s", "MODEL MISSING: "+testmodels.Path("synth-kimik3.gguf"))
+	}
+	t.Run("host", func(t *testing.T) {
+		batchSeamMovesWith(t, p, 1e-3, false, []Option{WithExperts("host"), WithStreamTrial(false)},
+			func(t *testing.T, st tier.Stats) {
+				if st.HybridRows == 0 {
+					t.Fatalf("no batched row ran its experts on the host (%d hybrid block-steps)", st.HybridRuns)
+				}
+				t.Logf("%d hybrid rows over %d block-steps", st.HybridRows, st.HybridRuns)
+			})
+	})
+}
+
 // TestBatchSeamMovesCarryEveryRowHunyuan is the same on Hunyuan, whose k is
 // cached unweighted on every tier (jlm.FlagQKNormPostRope folds its weight into
 // q's): a history written by the device must be read by the host and back
@@ -109,10 +130,18 @@ func TestBatchSeamMovesCarryEveryRowHunyuan(t *testing.T) {
 // The V100's device arithmetic alone reads 1.3e-02 on Llama and 8.3e-03 on the
 // hybrid before any move, which is what the bounds sit above.
 func batchSeamMoves(t *testing.T, p string, bound float64, relocate bool) {
+	batchSeamMovesWith(t, p, bound, relocate, nil, nil)
+}
+
+// batchSeamMovesWith is batchSeamMoves with model options added and a check
+// handed each arm's device stats once its steps have run -- the count that
+// says the configuration under test was the one that ran (RULE 10).
+func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mopts []Option,
+	check func(t *testing.T, st tier.Stats)) {
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
-	m, err := Open(jlmOf(t, p), noGEMM, noTune)
+	m, err := Open(jlmOf(t, p), append([]Option{noGEMM, noTune}, mopts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,6 +340,9 @@ func batchSeamMoves(t *testing.T, p string, bound float64, relocate bool) {
 					}
 				}
 			})
+			if check != nil {
+				check(t, g.Stats())
+			}
 			if arm.squeeze {
 				// The step after the budget came back reclaimed the blocks it
 				// could, sending the rows' history up with them.

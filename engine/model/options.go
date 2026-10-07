@@ -22,6 +22,16 @@ type modelOpts struct {
 	// profile arms the per-op nanosecond counters OpProfile reports. The
 	// counters stay process-wide; only the gate is per model.
 	profile bool
+	// noShOverlap runs a mixture's shared expert after its routed read
+	// rather than behind it; see WithSharedOverlap.
+	noShOverlap bool
+	// noStreamTrial keeps an auto-streamed placement without measuring it
+	// against the host; see WithStreamTrial.
+	noStreamTrial bool
+	// experts is WithExperts' choice.
+	experts string
+	// trialAA makes the stream trial an A/A self-control (WithStreamTrialAA).
+	trialAA bool
 
 	// chatClock is the clock a chat template's strftime_now reads; nil is the
 	// wall clock.
@@ -88,6 +98,29 @@ func defaultOpts() modelOpts {
 	}
 }
 
+// WithSharedOverlap sets whether a latent mixture's shared experts run while
+// its routed experts are read from the container, instead of after. On by
+// default: the two read nothing in common and the shared contribution is
+// added where it always was, so the answer is the same float sum
+// (TestSharedOverlapIsTheSameSum); off is the other arm.
+func WithSharedOverlap(on bool) Option { return func(l *loadOpts) { l.opt.noShOverlap = !on } }
+
+// WithExperts places the routed experts of every mixture block a device
+// takes: "host" (hybrid), "card" (sheets streamed every token), or "" (the
+// engine decides; the default). A -placement entry's %host or %card wins for
+// its blocks.
+func WithExperts(where string) Option { return func(l *loadOpts) { l.opt.experts = where } }
+
+// WithStreamTrialAA turns the stream trial into its own self-control: the
+// placement made against itself, through the same migrations, so a paired
+// comparison can be checked against the harness's bias and spread first.
+func WithStreamTrialAA(on bool) Option { return func(l *loadOpts) { l.opt.trialAA = on } }
+
+// WithStreamTrial sets whether a placement that streamed mixture blocks no
+// card could hold resident is measured against running them on the host
+// (State.initStreamTrial) and the faster kept. On by default.
+func WithStreamTrial(on bool) Option { return func(l *loadOpts) { l.opt.noStreamTrial = !on } }
+
 // WithProfile arms the per-op nanosecond counters OpProfile reports.
 func WithProfile(on bool) Option { return func(l *loadOpts) { l.opt.profile = on } }
 
@@ -126,6 +159,13 @@ type Place struct {
 	// host when it does not fit. On must name a device. With Pin, the block
 	// stays on that device and keeps streaming.
 	Stream bool
+	// Experts places a mixture block's routed experts off the card: "host"
+	// runs them on the host's kernels while the rest of the block runs on
+	// device On (hybrid), "card" streams their sheets to it every token. ""
+	// leaves it to the engine: resident when the block fits, otherwise
+	// streamed with the experts on the host and measured against the host
+	// (WithStreamTrial). Written "N=DEV%host" or "N=DEV%card".
+	Experts string
 }
 
 // Placement is an explicit map of where blocks run, for the blocks it names;
@@ -268,6 +308,13 @@ func ParsePlacement(spec string, strict bool) (Placement, error) {
 		}
 		where = strings.TrimSpace(where)
 		var pl Place
+		if w, ex, ok := strings.Cut(where, "%"); ok {
+			if ex != "host" && ex != "card" {
+				return Placement{}, fmt.Errorf("model: placement %q: %q places the experts on %q; "+
+					"the choices are %%host and %%card", spec, e, ex)
+			}
+			where, pl.Experts = strings.TrimSpace(w), ex
+		}
 		for {
 			switch {
 			case strings.HasSuffix(where, "!"):
@@ -282,6 +329,9 @@ func ParsePlacement(spec string, strict bool) (Placement, error) {
 		pl.On = where
 		if pl.On != "host" {
 			pl.On = nn.DeviceName(pl.On)
+		} else if pl.Experts != "" {
+			return Placement{}, fmt.Errorf("model: placement %q: %q places a block's experts beside "+
+				"a block that is on the host already", spec, e)
 		} else if pl.Stream {
 			return Placement{}, fmt.Errorf("model: placement %q: %q streams a block through the host, "+
 				"which has no slots to stream through", spec, e)

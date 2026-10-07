@@ -54,7 +54,12 @@ func (s *gpuSession) PlanBlocks(n int, extra uint64) { s.g.PlanBlocks(n, extra) 
 // budget the other is spending. The lock is on the router, not a device,
 // because which device takes a block is the decision being serialised.
 func (s *gpuSession) BeginPlacement() { s.g.place.Lock() }
-func (s *gpuSession) EndPlacement()   { s.g.place.Unlock() }
+func (s *gpuSession) EndPlacement() {
+	// Auto-streamed blocks get their expert caches from the room placement
+	// left (GPU.sizeAutoCaches), before another session can place.
+	s.g.sizeAutoCaches()
+	s.g.place.Unlock()
+}
 
 // enter makes this session current on every device and takes their call locks,
 // so a concurrent session's call waits rather than interleaving into the shared
@@ -240,3 +245,6 @@ func (s *gpuSession) HeadDeviceName() (string, bool) { return s.g.HeadDeviceName
 func (s *gpuSession) HeadWith(li int) bool           { return s.g.HeadWith(li) }
 func (s *gpuSession) Pin(li int, on bool) bool       { return s.g.Pin(li, on) }
 func (s *gpuSession) Stream(li int, on bool) bool    { return s.g.Stream(li, on) }
+
+// HoldsExperts forwards to the tier (nn.ExpertHolder).
+func (s *gpuSession) HoldsExperts(li int) bool { return s.g.HoldsExperts(li) }

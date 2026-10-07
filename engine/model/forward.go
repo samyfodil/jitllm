@@ -6,8 +6,10 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/samyfodil/jitllm/engine/sched"
 	"github.com/samyfodil/jitllm/format/jlm"
@@ -170,6 +172,29 @@ type State struct {
 	// The shared expert's scratch. Its width is NFFNShExp, a different key
 	// from the routed experts'.
 	shGate, shUp, shOut []float32
+	// The shared expert run behind the routed read (moe): the block and row
+	// it is for, the read's join and error, and its weight once computed.
+	shOverlap  *layer
+	shOverlapH []float32
+	expWG      sync.WaitGroup
+	expReq     chan expRead
+	expErr     error
+	shW        float32
+	// hyOrd and hyW are hostExperts' selection in ascending id and its
+	// weights in that order, kept so a token allocates neither.
+	hyOrd []int32
+	hyW   []float32
+	// hostOnly keeps every matvec on the host's kernels: set while the
+	// device's own submission waits on hostExperts, when offering a matvec to
+	// that device would wait on the session it is inside of.
+	hostOnly bool
+	// autoStreamed counts the blocks the last placement streamed because no
+	// card could hold them resident (nn.AutoStreamer).
+	autoStreamed int
+	shReady      bool
+	// ShOverlaps counts mixture layers whose shared expert ran behind the
+	// routed read: the selection check for WithSharedOverlap.
+	ShOverlaps int
 	// sg is the shared expert's one-logit gate and a constant 1, the operands
 	// of a one-element generated sigmoid (see sharedExpert).
 	sg [2]float32
@@ -785,6 +810,10 @@ func (s *State) dev() nn.LayerDevice {
 // State must be closed before its Model (`defer m.Close()` then
 // `defer st.Close()` gives that order).
 func (s *State) Close() error {
+	if s.expReq != nil {
+		close(s.expReq)
+		s.expReq = nil
+	}
 	// The vision State runs on this State's JIT, so it goes first.
 	if s.visState != nil {
 		s.visState.Close()
@@ -1007,9 +1036,15 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 			pb.PlanBlocks(hi, s.planExtra(hi))
 		}
 		s.placing, s.placeErr = true, nil
+		s.autoStreamed = 0
 		s.offerRange(s.lo, hi)
 		s.placing = false
 		pl.EndPlacement()
+		// Blocks no card could hold went on streamed by default; whether that
+		// beats the host is measured, not assumed (initStreamTrial).
+		if s.autoStreamed > 0 && s.seam == nil && !s.m.opt.noStreamTrial {
+			s.initStreamTrial()
+		}
 	} else {
 		s.placing, s.placeErr = true, nil
 		s.offerRange(s.lo, hi)
@@ -1390,7 +1425,7 @@ func (s *State) ensureLayer(li int) func(*nn.LayerWeights) error {
 		// by the first Ensure (a missed PrefetchExperts disables the streamed
 		// read/upload pipeline).
 		w.Ensure, w.EnsureExperts = dst.Ensure, dst.EnsureExperts
-		w.PrefetchExperts = dst.PrefetchExperts
+		w.PrefetchExperts, w.HostExperts, w.HostExpertsRows = dst.PrefetchExperts, dst.HostExperts, dst.HostExpertsRows
 		*dst = w
 		return nil
 	}
@@ -1413,7 +1448,7 @@ func (s *State) ensureSelected(li int) func(*nn.LayerWeights, []uint32) error {
 		w := s.layerWeightsAt(li)
 		// Carry every callback over; see ensureLayer.
 		w.Ensure, w.EnsureExperts = dst.Ensure, dst.EnsureExperts
-		w.PrefetchExperts = dst.PrefetchExperts
+		w.PrefetchExperts, w.HostExperts = dst.PrefetchExperts, dst.HostExperts
 		*dst = w
 		return nil
 	}
@@ -1489,6 +1524,37 @@ func (s *State) offerRange(lo, hi int) {
 				continue
 			}
 		}
+		// Where the block's routed experts run, when a placement or the caller
+		// says: set before the size check, so a block placed with its experts
+		// off the card is not refused for a bank it will not hold.
+		if ep, ok := ld.(nn.ExpertPlacer); ok && c.MoEAt(li) {
+			where := s.m.opt.experts
+			if named && place.Experts != "" {
+				where = place.Experts
+			}
+			if where != "" {
+				ep.PlaceExperts(li, where)
+			}
+		}
+		// The same for a size no device can hold: a mixture block with its
+		// bank can be bigger than a card, and reading it to learn that cost
+		// minutes a block on a model that size.
+		if d, ok := ld.(nn.SizeDecliner); ok && !(named && place.Stream) {
+			total, bank := s.m.blockBytes(li)
+			if why := d.DeclineSize(li, total, bank); why != "" {
+				// A mixture block too big for any card resident is streamed
+				// there instead when the device offers it: the base on the
+				// card, the routed experts sent per token. A placement that
+				// keeps the block home is honoured above, and the device can
+				// be told not to (tier.Config.NoAutoStream).
+				as, ok := ld.(nn.AutoStreamer)
+				if !ok || bank == 0 || !as.AutoStream(li, total, bank, c.NExpert, c.NExpertUsed, c.NLayer, s.m.meanBase()) {
+					s.noteDecline(why)
+					continue
+				}
+				s.autoStreamed++
+			}
+		}
 		// A block whose experts are separate tensors has no bank to offer; say
 		// why rather than let the tier report zero-value weights. See
 		// convert.stackGGUFExperts.
@@ -1506,7 +1572,8 @@ func (s *State) offerRange(lo, hi int) {
 		// "Measurements once cited in engine/model's comments").
 		if bh, ok := ld.(nn.BlockHolder); ok && !named && bh.HoldsBlock(li) {
 			w := nn.LayerWeights{Ensure: s.ensureLayer(li), EnsureExperts: s.ensureSelected(li),
-				PrefetchExperts: s.prefetchSelected(li)}
+				PrefetchExperts: s.prefetchSelected(li), HostExperts: s.hostExpertsFor(li),
+				HostExpertsRows: s.hostExpertsRowsFor(li)}
 			plan := *s.planFor(li)
 			if adm.PrepLayer(li, &plan, &w) {
 				s.markOnDev(li)
@@ -1522,6 +1589,7 @@ func (s *State) offerRange(lo, hi int) {
 		// page re-read on every swap.
 		w.Ensure, w.EnsureExperts = s.ensureLayer(li), s.ensureSelected(li)
 		w.PrefetchExperts = s.prefetchSelected(li)
+		w.HostExperts, w.HostExpertsRows = s.hostExpertsFor(li), s.hostExpertsRowsFor(li)
 		if c.MoE() {
 			// The expert banks are fetched by the tier through Ensure once it
 			// admits the block: pageIn does not read them (the host fetches
@@ -1570,6 +1638,27 @@ func (s *State) offerRange(lo, hi int) {
 		} else {
 			took = adm.PrepLayer(li, &plan, &w)
 		}
+		// A mixture block refused for room on every card goes on streamed,
+		// its base on a card and its experts off it, rather than to the host:
+		// gpt-oss-20b on a 4 GB card held 2 of 24 blocks resident and decoded
+		// at 4.84 tok/s, and with all 24 streamed and their experts on the
+		// host at 9.56 (placement.md 16c-3). The stream trial measures it
+		// against the host like any auto-streamed placement.
+		if !took && c.MoEAt(li) && !(named && place.On == "host") {
+			if as, ok := ld.(nn.AutoStreamer); ok {
+				total, bank := s.m.blockBytes(li)
+				if bank > 0 && as.AutoStream(li, total, bank, c.NExpert, c.NExpertUsed, c.NLayer, s.m.meanBase()) {
+					if took = adm.PrepLayer(li, &plan, &w); took {
+						s.autoStreamed++
+					} else if ep, ok := ld.(nn.ExpertPlacer); ok && !(named && place.Experts != "") && s.m.opt.experts == "" {
+						// It cannot stream either (a float bank with no host
+						// side, Gemma 4's dense MLP): the mark goes, or the block
+						// could never come back resident once there is room.
+						ep.PlaceExperts(li, "")
+					}
+				}
+			}
+		}
 		if !took {
 			// Refused after seeing the weights. The device's own reason when it
 			// gives one -- a kernel gap reported as the budget sends a caller
@@ -1597,8 +1686,18 @@ func (s *State) offerRange(lo, hi int) {
 			// Under bind, as pageIn binds: another State may be binding or
 			// reading this block's spans while this one places it.
 			s.m.bind.Lock()
-			releaseLayer(s.m.container, li, l)
+			keep := false
+			if eh, ok := ld.(nn.ExpertHolder); ok {
+				keep = !eh.HoldsExperts(li)
+			}
+			releaseLayer(s.m.container, li, l, keep)
 			s.m.bind.Unlock()
+		} else if buf := s.m.container.Page(li); len(buf) > 0 {
+			// The page stays (a streamed block's host side reads it), so no
+			// recycle tells the devices to drop the lone-matvec copies they
+			// made of its weights while the host ran it; the block is placed
+			// now and they are dead weight. Said here instead.
+			s.m.forgetCopies(unsafe.Pointer(&buf[0]), uintptr(len(buf)))
 		}
 	}
 }
@@ -2132,9 +2231,11 @@ func (m *Model) bankWeight(t tensor) nn.Weight {
 		// the router and shared expert the same upload reads.
 		var lb jlm.Lease
 		if b := int(t.e.Block); b >= 0 && b < int(c.H.NBlocks) {
-			var err error
-			if lb, err = c.Hold(b, nil); err != nil {
-				return nn.Packed{}, func() {}, err
+			// Held only when in, as ensureExperts does: claiming the
+			// frame of a block whose base is on the card held its size of
+			// host budget empty for every sheet sent.
+			if l, ok := c.HoldFilled(b); ok {
+				lb = l
 			}
 		}
 		off, size := c.PageBounds(p)
@@ -2550,7 +2651,8 @@ func (s *State) PrewarmGPU(n int) <-chan struct{} {
 				// live submission, so the tier skips packing such a block and
 				// the upload path ensures it.
 				w.Ensure, w.EnsureExperts = s.ensureLayer(li), s.ensureSelected(li)
-				w.PrefetchExperts = s.prefetchSelected(li)
+				w.PrefetchExperts, w.HostExperts = s.prefetchSelected(li), s.hostExpertsFor(li)
+				w.HostExpertsRows = s.hostExpertsRowsFor(li)
 			}
 			s.ldCand.PrewarmLayer(li, &s.plan, &w)
 		}
@@ -2708,7 +2810,13 @@ func (s *State) mv(out []float32, w tensor, x []float32) error {
 	// answer for the next block from its copy of the first
 	// (TestPagedWeightsAreNeverServedStale).
 	matvec := s.jit.MatVecHost
-	if w.e != nil && s.m.container != nil && (s.forgets || s.m.container.InDense(w.e)) {
+	// A routed expert's sheet is never offered: a device copy of it (a lone
+	// matvec the device keeps keyed on the weight) is an upload for one row's
+	// use and a buffer nothing frees when the block is placed -- a hybrid block
+	// never uploads its bank to take the copies back, and they outlived its
+	// return (TestBatchSeamMovesCarryEveryRowOffCard).
+	if w.e != nil && s.m.container != nil && (s.forgets || s.m.container.InDense(w.e)) && !s.hostOnly &&
+		!jlm.ExpertBank(w.e.Role) {
 		matvec = s.jit.MatVec
 	}
 	if matvec(out, w.typ, w.data, x, w.rows, w.k) {
