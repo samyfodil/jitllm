@@ -167,8 +167,3 @@ func main() {
 
 See the [Go library guide](docs/embedding-go.md) for budgets, devices, KV caching,
 embeddings and batching.
-
-## License
-
-Apache License 2.0; see [LICENSE](LICENSE). Copyright Bunshin Labs LLC
-([bunshinlabs.com](https://bunshinlabs.com)); see [COPYRIGHT](COPYRIGHT).
