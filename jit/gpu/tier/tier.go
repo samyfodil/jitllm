@@ -717,6 +717,9 @@ type Stats struct {
 	// StreamGroupsTuned is the group count the fill tuner holds (0: not
 	// tuning, a stated Config.StreamGroups).
 	StreamGroupsTuned int
+	// StreamPinHalfTuned and StreamDirectTuned are the page-locked half and
+	// the direct-send threshold the fill tuner holds, in bytes.
+	StreamPinHalfTuned, StreamDirectTuned int
 	// AutoMeanBase is the model's mean mixture base GPU.AutoStream was told.
 	AutoMeanBase uint64
 	// StreamPrefetched counts experts the cross-layer prefetch read, and
@@ -1015,6 +1018,8 @@ func (s *Stats) add(o Stats) {
 	s.THybrid += o.THybrid
 	s.StreamCacheSize = max(s.StreamCacheSize, o.StreamCacheSize)
 	s.StreamGroupsTuned = max(s.StreamGroupsTuned, o.StreamGroupsTuned)
+	s.StreamPinHalfTuned = max(s.StreamPinHalfTuned, o.StreamPinHalfTuned)
+	s.StreamDirectTuned = max(s.StreamDirectTuned, o.StreamDirectTuned)
 	s.AutoMeanBase = max(s.AutoMeanBase, o.AutoMeanBase)
 	s.StreamPrefetched += o.StreamPrefetched
 	s.TStreamPrefetchWait += o.TStreamPrefetchWait
@@ -1255,8 +1260,8 @@ type devTier struct {
 	// hostFns is each session's host side for its hybrid blocks, by block
 	// (hostFor); a session's go when it detaches. Under mu.
 	hostFns map[uint64]map[int]func(sel []uint32, w, in, out []float32) error
-	// gtune measures the streamed fill's group count (streamtune.go).
-	gtune *groupTuner
+	// ftune measures the streamed fill's knobs (streamtune.go).
+	ftune *fillTune
 	// sheetStage is the streamed fill's gather buffer per (matrix, plane);
 	// see streamStage.
 	sheetStage [9][]byte

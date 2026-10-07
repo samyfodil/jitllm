@@ -746,11 +746,7 @@ func (st *streamBank) put(g *devTier, s backend.Session, l *layer, nExpert int, 
 				continue // this format has no such plane
 			}
 			dst := [3]backend.Buf{pair.r.qs, pair.r.d, pair.r.sc}[pl]
-			thr := g.StreamDirectBytes
-			if thr <= 0 {
-				thr = directSheet
-			}
-			direct := n >= thr || !contiguous
+			direct := n >= g.directBytes() || !contiguous
 			var buf []byte
 			if !direct {
 				buf = g.streamStage(m, pl, n*(hi-lo))
@@ -903,10 +899,7 @@ func (g *devTier) pinHalves(ps []sheetPiece) [2][]byte {
 	if !ok || g.noPin || g.StreamNoPin {
 		return [2][]byte{}
 	}
-	need := pinHalf
-	if g.StreamPinHalf > 0 {
-		need = g.StreamPinHalf
-	}
+	need := g.pinHalfBytes()
 	for i := range ps {
 		need = max(need, len(ps[i].src))
 	}
@@ -946,6 +939,15 @@ func (g *devTier) packNext(buf []byte, ps []sheetPiece, i int) {
 // goroutine a copyChunk, and returns the index after the last one copied. At
 // least one always fits: pinHalves sized buf for the largest.
 func (g *devTier) packHalf(buf []byte, ps []sheetPiece, i int) int {
+	// The half in use is the tuned size, never more than was locked: a half
+	// tuned down keeps its bigger buffer and uses a prefix of it.
+	if h := g.pinHalfBytes(); h < len(buf) {
+		big := 0
+		for k := i; k < len(ps); k++ {
+			big = max(big, len(ps[k].src))
+		}
+		buf = buf[:max(h, big)]
+	}
 	j, n := i, 0
 	for j < len(ps) && n+len(ps[j].src) <= len(buf) {
 		n += len(ps[j].src)
