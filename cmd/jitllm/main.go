@@ -1559,6 +1559,9 @@ func loadOpts(t []tok.Option, budget uint64) []model.Option {
 		o = append(o, model.WithExperts(e))
 	}
 	// JITLLM_STREAM_TRIAL=0 keeps an auto-streamed placement unmeasured.
+	if os.Getenv("JITLLM_STREAM_TRIAL") == "aa" {
+		o = append(o, model.WithStreamTrialAA(true))
+	}
 	if os.Getenv("JITLLM_STREAM_TRIAL") == "0" {
 		o = append(o, model.WithStreamTrial(false))
 	}

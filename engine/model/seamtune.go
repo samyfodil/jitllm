@@ -41,6 +41,7 @@ type seamTuner struct {
 	// force ("" for the device's defaults).
 	arms []trialArm
 	mode string
+	at   int // the arm in force
 	// warming and warmLeft skip the tokens just after a migration.
 	warming  bool
 	warmLeft int
@@ -97,10 +98,18 @@ func (s *State) initStreamTrial() {
 	if s.m.opt.experts == "card" {
 		other = "host"
 	}
+	arms := []trialArm{{blocks: full, experts: s.m.opt.experts}, {blocks: 0, experts: s.m.opt.experts}, {blocks: full, experts: other}}
+	if s.m.opt.trialAA {
+		// The self-control: the incumbent against itself, migrations and
+		// all, so the harness's own bias and spread are measured before any
+		// ratio between placements is believed (RULE 2).
+		arms = []trialArm{arms[0], {blocks: 0, experts: s.m.opt.experts}, arms[0]}
+		arms[1] = arms[0]
+	}
 	s.seam = &seamTuner{
 		on:      true,
 		trial:   true,
-		arms:    []trialArm{{blocks: full, experts: s.m.opt.experts}, {blocks: 0, experts: s.m.opt.experts}, {blocks: full, experts: other}},
+		arms:    arms,
 		mode:    s.m.opt.experts,
 		cands:   []int{0, 1, 2},
 		best:    0,
@@ -278,13 +287,20 @@ func (t *seamTuner) place(s *State, c int) bool {
 		return s.SetGPULayers(c) == c
 	}
 	a := t.arms[c]
-	if a.experts != t.mode {
-		em, ok := s.ld.(nn.ExpertModer)
-		if !ok {
-			return false
+	// Every change of arm is a migration, even between two arms that are the
+	// same placement (the A/A self-control), so both sides of every ratio pay
+	// the same move.
+	moved := c != t.at
+	t.at = c
+	if a.experts != t.mode || moved && a.blocks > 0 && s.GPULayers() == a.blocks {
+		if a.experts != t.mode {
+			em, ok := s.ld.(nn.ExpertModer)
+			if !ok {
+				return false
+			}
+			em.SetExpertMode(a.experts)
+			t.mode = a.experts
 		}
-		em.SetExpertMode(a.experts)
-		t.mode = a.experts
 		s.SetGPULayers(0)
 	}
 	return s.SetGPULayers(a.blocks) == a.blocks

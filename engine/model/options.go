@@ -30,6 +30,8 @@ type modelOpts struct {
 	noStreamTrial bool
 	// experts is WithExperts' choice.
 	experts string
+	// trialAA makes the stream trial an A/A self-control (WithStreamTrialAA).
+	trialAA bool
 
 	// chatClock is the clock a chat template's strftime_now reads; nil is the
 	// wall clock.
@@ -108,6 +110,11 @@ func WithSharedOverlap(on bool) Option { return func(l *loadOpts) { l.opt.noShOv
 // engine decides; the default). A -placement entry's %host or %card wins for
 // its blocks.
 func WithExperts(where string) Option { return func(l *loadOpts) { l.opt.experts = where } }
+
+// WithStreamTrialAA turns the stream trial into its own self-control: the
+// placement made against itself, through the same migrations, so a paired
+// comparison can be checked against the harness's bias and spread first.
+func WithStreamTrialAA(on bool) Option { return func(l *loadOpts) { l.opt.trialAA = on } }
 
 // WithStreamTrial sets whether a placement that streamed mixture blocks no
 // card could hold resident is measured against running them on the host
