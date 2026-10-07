@@ -64,16 +64,18 @@ go build ./cmd/jitllm
 ## Quick start
 
 ```sh
-# Fetch a small instruct model from the catalog and convert it (about 386 MB).
+# Fetch Qwen3-30B-A3B from the catalog and convert it (18.6 GB): a mixture of
+# experts with 30B weights and 3B used per token. With less memory than it
+# needs, it pages from disk.
 mkdir -p models
-jitllm convert -o models smollm2-360m-instruct models/smollm2.jlm
+jitllm convert -o models qwen3-30b-a3b models/qwen3.jlm
 
-# Ask it something from the command line.
-jitllm run -chat -n 128 models/smollm2.jlm "Why is the sky blue?"
+# Ask it something from the command line. It thinks first, then answers.
+jitllm run -chat models/qwen3.jlm "Why is the sky blue?"
 
 # Or serve it.
 jitllmd serve -addr 127.0.0.1:8080 -models ./models \
-  -load smollm2.jlm -id smollm2 -devices auto
+  -load qwen3.jlm -id qwen3 -devices auto
 ```
 
 From another terminal:
@@ -81,7 +83,7 @@ From another terminal:
 ```sh
 curl http://127.0.0.1:8080/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"smollm2","messages":[{"role":"user","content":"Why is the sky blue?"}],"max_tokens":128,"stream":true}'
+  -d '{"model":"qwen3","messages":[{"role":"user","content":"Why is the sky blue?"}],"stream":true}'
 ```
 
 Flags go before the model path. `jitllm <command>` with no arguments prints the
@@ -95,8 +97,8 @@ and the [server reference](docs/server.md) for endpoints and daemon commands.
 
 ```sh
 docker volume create jitllm-models
-docker run --rm -v jitllm-models:/models --entrypoint jitllm ghcr.io/samyfodil/jitllm convert smollm2-360m-instruct
-docker run -d -p 8080:8080 -v jitllm-models:/models ghcr.io/samyfodil/jitllm -load SmolLM2-360M-Instruct-Q8_0.jlm -id smollm2
+docker run --rm -v jitllm-models:/models --entrypoint jitllm ghcr.io/samyfodil/jitllm convert qwen3-30b-a3b
+docker run -d -p 8080:8080 -v jitllm-models:/models ghcr.io/samyfodil/jitllm -load Qwen3-30B-A3B-Q4_K_M.jlm -id qwen3
 ```
 
 Add `--gpus all` (with the NVIDIA Container Toolkit) to run on an NVIDIA GPU. The image is
@@ -123,10 +125,10 @@ take its archive from the Releases page) and run `jitllm-desktop`.
 The same screens in a terminal, over SSH too, sharing the desktop app's settings
 and chats. The arrow keys move the model's blocks between the CPU and the GPU,
 and the conversation keeps its history across the move. Install it with
-`| sh -s -- tui` and run `jitllm-tui models/smollm2.jlm`.
+`| sh -s -- tui` and run `jitllm-tui models/qwen3.jlm`.
 
 <p align="center">
-<img src="website/public/shots/tui-chat.png" width="400" alt="The terminal app's Chat screen: Qwen3-30B-A3B answering at 16.2 tokens a second, the engine panel beside it">
+<img src="website/public/shots/tui-chat.png" width="400" alt="The terminal app's Chat screen: Qwen3-30B-A3B answering, the engine panel beside it">
 <img src="website/public/shots/tui-engine.png" width="400" alt="The terminal app's Engine screen: every block and where it runs, the rate over time, memory and the pager">
 </p>
 
@@ -187,7 +189,7 @@ import (
 )
 
 func main() {
-    m, err := model.Open("models/smollm2.jlm")
+    m, err := model.Open("models/qwen3.jlm")
     if err != nil {
         log.Fatal(err)
     }
@@ -199,11 +201,11 @@ func main() {
     if err != nil {
         log.Fatal(err)
     }
-    state := m.NewState(2048)
+    state := m.NewState(8192)
     defer state.Close()
 
     logits, err := state.Prefill(ids)
-    for i := 0; i < 128 && err == nil; i++ {
+    for err == nil && state.Pos() < 8192 {
         id := model.Greedy(logits)
         if m.Vocab.IsEOG(id) {
             break

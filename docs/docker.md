@@ -42,7 +42,7 @@ from a GGUF already in the volume:
 
     docker volume create jitllm-models
     docker run --rm -v jitllm-models:/models --entrypoint jitllm \
-      ghcr.io/samyfodil/jitllm convert smollm2-360m-instruct
+      ghcr.io/samyfodil/jitllm convert qwen3-30b-a3b
 
 A gated Hub repository needs a token: `-e HF_TOKEN=...`. `HF_ENDPOINT` points
 the download at a mirror.
@@ -60,11 +60,11 @@ a named volume is faster.
 ## Run on the CPU
 
     docker run -d --name jitllm -p 8080:8080 -v jitllm-models:/models \
-      ghcr.io/samyfodil/jitllm -load SmolLM2-360M-Instruct-Q8_0.jlm -id smollm2
+      ghcr.io/samyfodil/jitllm -load Qwen3-30B-A3B-Q4_K_M.jlm -id qwen3
 
     curl localhost:8080/v1/models
     curl localhost:8080/v1/chat/completions -H 'Content-Type: application/json' \
-      -d '{"model":"smollm2","messages":[{"role":"user","content":"What is the capital of France?"}]}'
+      -d '{"model":"qwen3","messages":[{"role":"user","content":"What is the capital of France?"}]}'
 
 `-load` is optional: a model can be loaded into a running server with the
 same image's client, `docker exec jitllm jitllmd models -load NAME.jlm`, and
@@ -90,7 +90,7 @@ Every `serve` flag is available (`docker run --rm ghcr.io/samyfodil/jitllm -h`).
 The whole CLI is there too, for example a one-off decode:
 
     docker run --rm -v jitllm-models:/models --entrypoint jitllm \
-      ghcr.io/samyfodil/jitllm run SmolLM2-360M-Instruct-Q8_0.jlm "The capital of France is"
+      ghcr.io/samyfodil/jitllm run -chat Qwen3-30B-A3B-Q4_K_M.jlm "What is the capital of France?"
 
 ## Run on an NVIDIA GPU
 
@@ -101,7 +101,7 @@ registered with Docker (`sudo nvidia-ctk runtime configure --runtime=docker`,
 then restart Docker). Then add `--gpus all`:
 
     docker run -d --name jitllm --gpus all -p 8080:8080 -v jitllm-models:/models \
-      ghcr.io/samyfodil/jitllm -load SmolLM2-360M-Instruct-Q8_0.jlm -id smollm2 -devices cuda
+      ghcr.io/samyfodil/jitllm -load Qwen3-30B-A3B-Q4_K_M.jlm -id qwen3 -devices cuda
 
     docker run --rm --gpus all --entrypoint jitllm ghcr.io/samyfodil/jitllm hardware
 

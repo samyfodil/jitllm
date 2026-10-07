@@ -36,7 +36,7 @@ Generation is greedy unless you ask otherwise. The sampling flag names match lla
 
 | Flag | Default | Effect |
 |---|---|---|
-| `-n N` | 32 | tokens to generate |
+| `-n N` | until the end | tokens to generate; by default the model runs until it ends its reply or fills its context |
 | `-temp F` | 0 | sampling temperature; 0 is greedy |
 | `-top-k N` | 0 (off) | keep only the k most likely tokens |
 | `-top-p F` | 0 (off) | nucleus sampling |

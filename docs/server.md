@@ -17,7 +17,9 @@ Both compatible APIs stream and take `tools`: the tool list is rendered by the
 model's own chat template, and calls come back as OpenAI `tool_calls` or
 Anthropic `tool_use` blocks. `ignore_eos` on the OpenAI endpoints and the
 Connect `GenerateRequest` (`jitllmd run -ignore-eos`) keeps generating past the
-stop tokens until `max_tokens`. Generates of one model placed wholly on a device
+stop tokens until `max_tokens` or the end of the session's context. A request
+with no `max_tokens` runs until the model ends its reply or fills the context;
+either way a reply that reaches the end of the context finishes as `length`. Generates of one model placed wholly on a device
 decode together as rows of one step (`-max-batch`).
 
 | `jitllmd` verb | What it does |

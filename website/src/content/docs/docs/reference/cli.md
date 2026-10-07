@@ -28,7 +28,7 @@ Every size, on `jitllm` and `jitllmd` alike, is a byte count or a number with a 
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `-n N` | 32 | tokens to generate |
+| `-n N` | until the end | tokens to generate; by default the model runs until it ends its reply or fills its context |
 | `-chat` | off | apply the model's chat template |
 | `-system TEXT` | | a system message, with `-chat` |
 | `-image FILE` | | an image for a vision model |
@@ -146,7 +146,7 @@ Every client command takes `-addr` (`host:port`, `:port` or a full URL; default 
 | `-session ID` | generate in an existing session, keeping its history |
 | `-continue` | continue from the session's position instead of prefilling from scratch |
 | `-chat`, `-system TEXT` | apply the model's chat template, with a system message |
-| `-n N` | tokens to generate (default 32) |
+| `-n N` | tokens to generate (default: until the model ends its reply or fills the session's context) |
 | `-stop A,B` | stop strings |
 | `-temp`, `-top-k`, `-top-p`, `-min-p`, `-repeat-penalty`, `-repeat-last-n`, `-seed` | sampling, as for `jitllm run` |
 | `-queue-timeout MS` | how long to wait for a device another session holds; 0 waits indefinitely |

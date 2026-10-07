@@ -1,9 +1,9 @@
 ---
 title: Quickstart
-description: Fetch a small model, serve it over the OpenAI API and send it a request.
+description: Fetch a 30B mixture of experts, serve it over the OpenAI API and send it a request.
 ---
 
-This takes about five minutes and a 386 MB download. It assumes you have [installed `jitllm` and `jitllmd`](/docs/install/) and they are on your `PATH`.
+This takes an 18.6 GB download. It assumes you have [installed `jitllm` and `jitllmd`](/docs/install/) and they are on your `PATH`.
 
 ## 1. Fetch and convert a model
 
@@ -11,24 +11,26 @@ This takes about five minutes and a 386 MB download. It assumes you have [instal
 
 ```sh
 mkdir -p models
-jitllm convert -o models smollm2-360m-instruct models/smollm2.jlm
+jitllm convert -o models qwen3-30b-a3b models/qwen3.jlm
 ```
+
+Qwen3-30B-A3B is a mixture of experts: 30B weights, of which each token uses 3B, so it decodes like a much smaller model. It wants about 20 GB of memory; with less, the engine pages its experts from disk and it still runs, at a speed set by the drive. A smaller model is a name away: `qwen3-8b`, or `smollm2-360m-instruct` for a 386 MB first try.
 
 `jitllm library` lists every name it accepts. You can also convert a GGUF or a Hugging Face model you already have; see [Convert models](/docs/guides/convert/).
 
 ## 2. Try it from the command line
 
 ```sh
-jitllm run -chat -n 128 models/smollm2.jlm "Why is the sky blue?"
+jitllm run -chat models/qwen3.jlm "Why is the sky blue?"
 ```
 
-`-chat` applies the model's own chat template. Flags go before the model path; everything after it is the prompt.
+`-chat` applies the model's own chat template. Qwen3 thinks before it answers, and the reply runs until the model ends it; `-n N` caps it at N tokens. Flags go before the model path; everything after it is the prompt.
 
 ## 3. Serve it
 
 ```sh
 jitllmd serve -addr 127.0.0.1:8080 -models ./models \
-  -load smollm2.jlm -id smollm2 -devices auto
+  -load qwen3.jlm -id qwen3 -devices auto
 ```
 
 `-devices auto` measures each GPU backend and picks one; a machine with no GPU runs on the CPU. Leave `-devices` out and the server runs on the CPU only. The server is ready when it prints `jitllmd on 127.0.0.1:8080` and the three endpoint addresses.
@@ -40,7 +42,7 @@ From another terminal:
 ```sh
 curl http://127.0.0.1:8080/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"smollm2","messages":[{"role":"user","content":"Why is the sky blue?"}],"max_tokens":128,"stream":true}'
+  -d '{"model":"qwen3","messages":[{"role":"user","content":"Why is the sky blue?"}],"stream":true}'
 ```
 
 Any OpenAI client works with the base URL `http://127.0.0.1:8080/v1`:
@@ -50,7 +52,7 @@ from openai import OpenAI
 
 client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="unused")
 for chunk in client.chat.completions.create(
-    model="smollm2",
+    model="qwen3",
     messages=[{"role": "user", "content": "Why is the sky blue?"}],
     stream=True,
 ):

@@ -72,7 +72,7 @@ curl http://127.0.0.1:8080/v1/chat/completions \
   }'
 ```
 
-Supported fields: `model`, `messages`, `max_tokens` or `max_completion_tokens`, `temperature`, `top_p`, `seed`, `stop`, `stream`, `tools` and `tool_choice`. The prompt goes through the model's own chat template. A streamed response is server-sent events ending in `data: [DONE]`; `finish_reason` is `stop`, `length`, `tool_calls`, or `cancelled` when the request was cancelled.
+Supported fields: `model`, `messages`, `max_tokens` or `max_completion_tokens`, `temperature`, `top_p`, `seed`, `stop`, `stream`, `tools` and `tool_choice`. The prompt goes through the model's own chat template. A streamed response is server-sent events ending in `data: [DONE]`; `finish_reason` is `stop`, `length`, `tool_calls`, or `cancelled` when the request was cancelled. Without `max_tokens` the reply runs until the model ends it or the session's context is full, which finishes as `length`; a `max_tokens` larger than the context has room for is cut to that room.
 
 `/v1/completions` takes a raw `prompt` instead of messages, with `echo` to return the prompt too.
 

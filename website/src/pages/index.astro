@@ -304,12 +304,12 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '')
         <div class="two">
           <div class="panel step">
             <div class="step-head"><span class="pix sm" data-pixel="probe" aria-hidden="true"></span><h3>Install and fetch a model</h3></div>
-            <p>Install the CLI and the server from the latest release, then convert a small instruct model (about 386 MB to download). On Windows: <code>irm https://raw.githubusercontent.com/samyfodil/jitllm/main/scripts/install.ps1 | iex</code>.</p>
+            <p>Install the CLI and the server from the latest release, then convert Qwen3-30B-A3B, a 30B mixture of experts that uses 3B per token (18.6 GB to download). On Windows: <code>irm https://raw.githubusercontent.com/samyfodil/jitllm/main/scripts/install.ps1 | iex</code>.</p>
             <div class="cmd">
               <div class="cmd-head"><span>shell</span><button class="copy" type="button" data-copy>Copy</button></div>
 <pre><code><span class="p">$</span> curl -fsSL https://raw.githubusercontent.com/samyfodil/jitllm/main/scripts/install.sh | sh
 <span class="p">$</span> mkdir -p models
-<span class="p">$</span> jitllm convert -o models smollm2-360m-instruct models/smollm2.jlm</code></pre>
+<span class="p">$</span> jitllm convert -o models qwen3-30b-a3b models/qwen3.jlm</code></pre>
             </div>
           </div>
           <div class="panel step">
@@ -318,10 +318,10 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '')
             <div class="cmd">
               <div class="cmd-head"><span>shell</span><button class="copy" type="button" data-copy>Copy</button></div>
 <pre><code><span class="p">$</span> jitllmd serve -addr 127.0.0.1:8080 -models ./models \
-    -load smollm2.jlm -id smollm2 -devices auto
+    -load qwen3.jlm -id qwen3 -devices auto
 <span class="p">$</span> curl http://127.0.0.1:8080/v1/chat/completions \
     -H 'Content-Type: application/json' \
-    -d '&#123;"model":"smollm2","stream":true,
+    -d '&#123;"model":"qwen3","stream":true,
          "messages":[&#123;"role":"user","content":"Hi"&#125;]&#125;'</code></pre>
             </div>
           </div>
@@ -373,7 +373,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '')
           <div class="bench-tabs seg" role="tablist" aria-label="Terminal app screens"><button type="button" role="tab" id="tui-tab-chat" aria-controls="tui-chat" aria-selected="true">Chat</button><button type="button" role="tab" id="tui-tab-engine" aria-controls="tui-engine" aria-selected="false">Engine</button><button type="button" role="tab" id="tui-tab-models" aria-controls="tui-models" aria-selected="false">Models</button><button type="button" role="tab" id="tui-tab-discover" aria-controls="tui-discover" aria-selected="false">Discover</button></div>
           <figure class="shot" id="tui-chat" role="tabpanel" aria-labelledby="tui-tab-chat">
             <img src={`${base}/shots/tui-chat.png`} width="1430" height="880" loading="lazy" alt="The jitllm terminal app, Chat screen" />
-            <figcaption>Qwen3-30B-A3B answering at 16.2 tokens a second on a laptop with a 4 GB GPU, the engine beside the conversation.</figcaption>
+            <figcaption>Qwen3-30B-A3B answering on a laptop with a 4 GB GPU, the engine beside the conversation.</figcaption>
           </figure>
           <figure class="shot" id="tui-engine" role="tabpanel" aria-labelledby="tui-tab-engine" hidden>
             <img src={`${base}/shots/tui-engine.png`} width="1430" height="880" loading="lazy" alt="The jitllm terminal app, Engine screen" />

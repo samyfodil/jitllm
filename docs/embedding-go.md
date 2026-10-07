@@ -18,7 +18,7 @@ import (
 )
 
 func main() {
-    m, err := model.Open("models/smollm2.jlm")
+    m, err := model.Open("models/qwen3.jlm")
     if err != nil {
         log.Fatal(err)
     }
@@ -30,11 +30,11 @@ func main() {
     if err != nil {
         log.Fatal(err)
     }
-    state := m.NewState(2048)
+    state := m.NewState(8192)
     defer state.Close()
 
     logits, err := state.Prefill(ids)
-    for i := 0; i < 128 && err == nil; i++ {
+    for err == nil && state.Pos() < 8192 {
         id := model.Greedy(logits)
         if m.Vocab.IsEOG(id) {
             break
