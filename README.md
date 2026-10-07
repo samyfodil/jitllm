@@ -24,8 +24,9 @@ page models larger than memory, and move execution without losing the conversati
   Windows; x86 and Arm) that finds CUDA, Vulkan or Metal at run time and
   otherwise runs on the CPU.
 
-Use the engine through an **OpenAI- or Anthropic-compatible server** with streaming
-and tool calling, an embeddable Go library, [desktop](#desktop-app) and [terminal](#terminal-app) apps, or Docker.
+Serve it as an **OpenAI- and Anthropic-compatible API** with streaming and tool
+calling from one standalone binary, `jitllmd`, or embed it as a Go library. There
+are [desktop](#desktop-app) and [terminal](#terminal-app) apps too.
 
 ## Quick start
 
