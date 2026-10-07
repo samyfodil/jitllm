@@ -81,6 +81,17 @@ fi
 summary=()
 for ((i = 0; i < ${#ALLOW[@]}; i += 2)); do
   k=${ALLOW[i]} want=${ALLOW[i + 1]} got=${seen[i / 2]}
+  # A finding that is missing is recounted from an empty build cache before
+  # it counts as gone: go vet replays a cached package result, and a cached
+  # entry has come back without its finding (a CI run whose restored cache
+  # read 0 where the same commit read 1 from nothing). A finding the code
+  # really lost is still missing there.
+  if [ "$mod" = . ] && [ "$got" = 0 ] && [ "$want" != 0 ]; then
+    fresh=$(mktemp -d)
+    got=$(GOCACHE=$fresh go vet "$@" "./$(dirname "${k%%:*}")" 2>&1 | tr -d '\r' | tr '\\' '/' |
+      sed -E 's#^(\./)?##; s#^([^:]+\.go):[0-9]+:[0-9]+:#\1:#' | grep -cxF "$k")
+    rm -rf "$fresh"
+  fi
   if { [ "$mod" = . ] && [ "$got" != "$want" ]; } || [ "$got" -gt "$want" ]; then
     echo "scripts/vet: '$k' was found $got times, the allowlist says $want." >&2
     echo "  Either the code changed or the analyzer did. Re-argue it and update ALLOW;" >&2
