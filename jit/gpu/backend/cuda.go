@@ -158,8 +158,20 @@ type sessReq struct {
 }
 
 func (r *sessReq) call() {
+	// The legacy stream and a queue's non-blocking stream are not ordered
+	// against each other: with queues open, the session starts after
+	// everything already queued and has landed when it returns, so a queue's
+	// later work reads what it wrote. A failed synchronise is a sticky
+	// context error, which the session's own first call reports.
+	queues := r.c.hasQueues()
+	if queues {
+		cuda.Sync()
+	}
 	r.s = cudaSession{c: r.c}
 	r.f(&r.s)
+	if queues {
+		cuda.Sync()
+	}
 }
 
 // cudaSession's methods run on the owner goroutine already, so they call
@@ -802,12 +814,20 @@ func (b *cudaBuf) WriteAt(off int, p []byte) error {
 	b.dev.do(func() {
 		// Outside a queue the legacy stream does not wait for one, and a write
 		// must land after everything before it.
-		if b.dev.hasQueues() {
+		queues := b.dev.hasQueues()
+		if queues {
 			if err = cuda.Sync(); err != nil {
 				return
 			}
 		}
 		err = b.b.WriteAt(off, unsafe.Pointer(&p[0]), len(p))
+		// From pageable memory the copy returns once the driver has staged
+		// the bytes, not once they have landed: a queue's next launch, on a
+		// stream that does not wait for the legacy one, could read the old
+		// ones.
+		if err == nil && queues {
+			err = cuda.Sync()
+		}
 	})
 	return err
 }
