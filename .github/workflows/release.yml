@@ -6,10 +6,6 @@ name: release
 # three hosts, and publishes the draft only if all three decoded a real model
 # correctly. The container image is pushed to ghcr.io under the
 # version with the draft, and tagged latest only when the draft is published.
-#
-# A tag whose suffix starts with -draft (v0.1.0-draft.1) tests all of this
-# without releasing anything: the archives are built, uploaded to the draft
-# and smoke-tested, but no image is pushed and the draft stays a draft.
 on:
   push:
     tags: ["v*"]
