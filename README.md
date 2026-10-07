@@ -108,7 +108,7 @@ and the conversation keeps its history across the move:
 ```
 
 <p align="center">
-<img src="website/public/shots/tui-chat.png" width="400" alt="The terminal app's Chat screen: Qwen3-30B-A3B answering at 16.3 tokens a second, the engine panel beside it">
+<img src="website/public/shots/tui-chat.png" width="400" alt="The terminal app's Chat screen: Qwen3-30B-A3B answering at 16.2 tokens a second, the engine panel beside it">
 <img src="website/public/shots/tui-engine.png" width="400" alt="The terminal app's Engine screen: every block and where it runs, the rate over time, memory and the pager">
 </p>
 

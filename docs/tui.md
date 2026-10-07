@@ -16,7 +16,7 @@ for this run only; `-mouse` scrolls with the wheel, and the terminal's own text
 selection then needs shift. The app paints its own background, so use a
 terminal with 24-bit colour.
 
-![The Chat screen: Qwen3-30B-A3B answering at 16.3 tokens a second on a laptop with a 4 GB GPU, the engine panel beside the conversation](../website/public/shots/tui-chat.png)
+![The Chat screen: Qwen3-30B-A3B answering at 16.2 tokens a second on a laptop with a 4 GB GPU, the engine panel beside the conversation](../website/public/shots/tui-chat.png)
 
 ## Screens
 

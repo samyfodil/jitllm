@@ -35,7 +35,7 @@ The app paints its own background, so it looks the same whatever your terminal's
 
 <img src="/shots/tui-chat.png" width="1430" height="880" alt="The terminal app's Chat screen: a reply with its reasoning folded, and the engine panel with the decode rate, the blocks and memory" />
 
-The saved chats, the transcript, the prompt, and at the right the engine: the open models, the decode rate, which blocks run where and how full each memory is. Above, Qwen3-30B-A3B, a 30B mixture of experts, answers at 16.3 tokens a second on a laptop with a 4 GB GPU: one block on the card, the other 47 on the CPU, its experts paged from disk.
+The saved chats, the transcript, the prompt, and at the right the engine: the open models, the decode rate, which blocks run where and how full each memory is. Above, Qwen3-30B-A3B, a 30B mixture of experts, answers at 16.2 tokens a second on a laptop with a 4 GB GPU: one block on the card, the other 47 on the CPU, its experts paged from disk.
 
 | Key | Does |
 |---|---|
