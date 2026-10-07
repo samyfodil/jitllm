@@ -251,20 +251,30 @@ func (d *vkDev) Session(f func(Session)) {
 }
 
 type vkSession struct {
-	c     *vulkan.Ctx
+	c *vulkan.Ctx
+	// l is the queue a queued session records on, nil for the context's own.
+	l     *vulkan.Queue
 	batch *vulkan.Batch
 	// vb is Launch's buffer list, reused.
 	vb []*vulkan.Buf
 }
 
-func (s *vkSession) Write(b Buf, p []byte) error { return b.Write(p) }
+func (s *vkSession) Write(b Buf, p []byte) error { return s.WriteAt(b, 0, p) }
 
-func (s *vkSession) WriteAt(b Buf, off int, p []byte) error { return b.WriteAt(off, p) }
+func (s *vkSession) WriteAt(b Buf, off int, p []byte) error {
+	if s.l != nil {
+		return s.l.WriteAt(b.(*vkBuf).b, off, p)
+	}
+	return b.WriteAt(off, p)
+}
 
 func (s *vkSession) Read(b Buf, p []byte) error {
 	// A read needs everything recorded so far to have run.
 	if err := s.Sync(); err != nil {
 		return err
+	}
+	if s.l != nil {
+		return s.l.Read(b.(*vkBuf).b, p)
 	}
 	return b.Read(p)
 }
@@ -275,7 +285,11 @@ func (s *vkSession) Launch(k Kernel, groups, width int, bufs ...Buf) error {
 		return err
 	}
 	if s.batch == nil {
-		s.batch = s.c.NewBatch()
+		if s.l != nil {
+			s.batch = s.l.NewBatch()
+		} else {
+			s.batch = s.c.NewBatch()
+		}
 	}
 	s.vb = s.vb[:0]
 	for _, b := range bufs {
@@ -335,4 +349,38 @@ func coopComp(e ir.TileElem) vulkan.ComponentType {
 		return vulkan.CompS32
 	}
 	return vulkan.CompF32
+}
+
+// vkQueue is a queue of the context, with the session SessionOn hands out on it.
+type vkQueue struct {
+	mu sync.Mutex
+	l  *vulkan.Queue
+	s  vkSession
+}
+
+func (q *vkQueue) Close() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.l.Close()
+}
+
+// NewQueue is a queue of its own: a command pool, buffers, descriptor pool,
+// staging and fence, on one of the device's queues (backend.Queued).
+func (d *vkDev) NewQueue() (Queue, error) {
+	l, err := d.c.NewQueue()
+	if err != nil {
+		return nil, err
+	}
+	return &vkQueue{l: l}, nil
+}
+
+// SessionOn records f's work on q and submits it there, waiting for
+// that queue's fence alone.
+func (d *vkDev) SessionOn(q Queue, f func(Session)) {
+	vq := q.(*vkQueue)
+	vq.mu.Lock()
+	defer vq.mu.Unlock()
+	vq.s.c, vq.s.l = d.c, vq.l
+	f(&vq.s)
+	vq.s.Sync()
 }

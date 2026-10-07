@@ -24,6 +24,7 @@ type candidate struct {
 	name    string
 	devType uint32
 	family  uint32 // compute queue family, or noFamily
+	queues  int    // how many queues that family has
 	// apiVer is the device's VkPhysicalDeviceProperties.apiVersion, not the
 	// instance's. A query that is core in 1.1 is invalid usage on a 1.0 device,
 	// and the instance asking for 1.3 says nothing about what the device
@@ -164,9 +165,17 @@ func enumerate(inst Instance) ([]candidate, error) {
 		if nq > 0 {
 			fams := make([]queueFamily, nq)
 			vkGetPhysicalDeviceQueueFamilyProperties(p, &nq, up(&fams[0]))
-			for j, f := range fams {
-				if f.flags&queueCompute != 0 {
-					c.family = uint32(j)
+			// A compute-only family first: on NVIDIA the graphics family's
+			// queues run one after another, and the compute-only one is where
+			// two sessions' submissions run at once. Any compute family else.
+			for _, only := range []bool{true, false} {
+				for j, f := range fams {
+					if f.flags&queueCompute != 0 && (!only || f.flags&queueGraphics == 0) {
+						c.family, c.queues = uint32(j), int(f.count)
+						break
+					}
+				}
+				if c.family != noFamily {
 					break
 				}
 			}

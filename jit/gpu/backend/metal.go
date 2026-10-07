@@ -263,7 +263,9 @@ func (d *mtlDev) Session(f func(Session)) {
 }
 
 type mtlSession struct {
-	c     *metal.Ctx
+	c *metal.Ctx
+	// q is the queue a queued session commits to, nil for the context's own.
+	q     *metal.Queue
 	batch *metal.Batch
 	err   error
 	// mb is Launch's buffer list, reused.
@@ -287,7 +289,11 @@ func (s *mtlSession) Launch(k Kernel, groups, width int, bufs ...Buf) error {
 		return err
 	}
 	if s.batch == nil {
-		s.batch = s.c.NewBatch()
+		if s.q != nil {
+			s.batch = s.q.NewBatch()
+		} else {
+			s.batch = s.c.NewBatch()
+		}
 	}
 	s.mb = s.mb[:0]
 	for _, b := range bufs {
@@ -302,12 +308,17 @@ func (s *mtlSession) Launch(k Kernel, groups, width int, bufs ...Buf) error {
 // Sync must: tier.tuneSplit and tier.choose time a loop of launches and then
 // call Sync, and without the wait they would time only the encode.
 func (s *mtlSession) Sync() error {
+	wait := s.c.Wait
+	if s.q != nil {
+		// A queued session's work is its queue's alone.
+		wait = s.q.Wait
+	}
 	if s.batch == nil {
-		return s.c.Wait()
+		return wait()
 	}
 	err := s.batch.Commit()
 	s.batch = nil
-	if e := s.c.Wait(); err == nil {
+	if e := wait(); err == nil {
 		err = e
 	}
 	return err
@@ -323,4 +334,38 @@ func (s *mtlSession) finish() {
 		s.err = s.batch.Commit()
 		s.batch = nil
 	}
+}
+
+// mtlQueue is a command queue of the device's own, with the session SessionOn
+// hands out on it.
+type mtlQueue struct {
+	mu sync.Mutex
+	q  *metal.Queue
+	s  mtlSession
+}
+
+func (q *mtlQueue) Close() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.q.Close()
+}
+
+// NewQueue is a command queue of its own (backend.Queued).
+func (d *mtlDev) NewQueue() (Queue, error) {
+	q, err := d.c.NewQueue()
+	if err != nil {
+		return nil, err
+	}
+	return &mtlQueue{q: q}, nil
+}
+
+// SessionOn commits f's work to q's command queue. Like Session it does not
+// wait at the end: a read waits, for q's work alone.
+func (d *mtlDev) SessionOn(q Queue, f func(Session)) {
+	mq := q.(*mtlQueue)
+	mq.mu.Lock()
+	defer mq.mu.Unlock()
+	mq.s.c, mq.s.q, mq.s.err = d.c, mq.q, nil
+	f(&mq.s)
+	mq.s.finish()
 }

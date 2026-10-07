@@ -106,16 +106,27 @@ func (b *Buf) WriteAt(off int, p []byte) error {
 	if off < 0 || off+len(p) > b.n {
 		return fmt.Errorf("vulkan: writing %d bytes at offset %d of a %d-byte buffer", len(p), off, b.n)
 	}
+	return b.c.rec.writeAt(b, off, p)
+}
+
+// writeAt is Buf.WriteAt with a staged transfer on r.
+func (r *rec) writeAt(b *Buf, off int, p []byte) error {
+	if off < 0 || off+len(p) > b.n {
+		return fmt.Errorf("vulkan: writing %d bytes at offset %d of a %d-byte buffer", len(p), off, b.n)
+	}
 	if b.host != nil {
 		copy(b.host[off:], p)
 		return nil
 	}
-	st, err := b.c.staging(len(p))
+	if err := r.outsideQueues(); err != nil {
+		return err
+	}
+	st, err := r.staging(len(p))
 	if err != nil {
 		return err
 	}
 	copy(st.host, p)
-	return b.c.copyBuf(st.buf, b.buf, 0, uint64(off), len(p))
+	return r.copyBuf(st.buf, b.buf, 0, uint64(off), len(p))
 }
 
 // Len is the buffer's size in bytes.
@@ -130,11 +141,20 @@ func (c *Ctx) Copy(dst *Buf, dstOff int, src *Buf, srcOff, n int) error {
 	if dst.c != c || src.c != c {
 		return fmt.Errorf("vulkan: a copy between buffers of another device")
 	}
+	// Ordered after every lane's work, not only this context's own.
+	if err := c.waitAll(); err != nil {
+		return err
+	}
 	return c.copyBuf(src.buf, dst.buf, uint64(srcOff), uint64(dstOff), n)
 }
 
 // Read copies the buffer back, staging if it must.
 func (b *Buf) Read(p []byte) error {
+	return b.c.rec.read(b, p)
+}
+
+// read is Buf.Read with a staged transfer on r.
+func (r *rec) read(b *Buf, p []byte) error {
 	if len(p) > b.n {
 		return fmt.Errorf("vulkan: reading %d bytes from a %d-byte buffer", len(p), b.n)
 	}
@@ -142,11 +162,14 @@ func (b *Buf) Read(p []byte) error {
 		copy(p, b.host)
 		return nil
 	}
-	st, err := b.c.staging(len(p))
+	if err := r.outsideQueues(); err != nil {
+		return err
+	}
+	st, err := r.staging(len(p))
 	if err != nil {
 		return err
 	}
-	if err := b.c.copyBuf(b.buf, st.buf, 0, 0, len(p)); err != nil {
+	if err := r.copyBuf(b.buf, st.buf, 0, 0, len(p)); err != nil {
 		return err
 	}
 	copy(p, st.host)
@@ -154,16 +177,16 @@ func (b *Buf) Read(p []byte) error {
 }
 
 // staging returns a host-visible scratch buffer of at least n bytes, growing it
-// as needed. One per context: transfers are serialised by the queue anyway.
-func (c *Ctx) staging(n int) (*Buf, error) {
-	if c.stage != nil && c.stage.n >= n {
-		return c.stage, nil
+// as needed. One per rec: its transfers wait before the next one starts.
+func (r *rec) staging(n int) (*Buf, error) {
+	if r.stage != nil && r.stage.n >= n {
+		return r.stage, nil
 	}
-	if c.stage != nil {
-		c.stage.Free()
-		c.stage = nil
+	if r.stage != nil {
+		r.stage.Free()
+		r.stage = nil
 	}
-	b, err := c.alloc(n, usageTransferSrc|usageTransferDst, memHostVisible|memHostCoherent)
+	b, err := r.c.alloc(n, usageTransferSrc|usageTransferDst, memHostVisible|memHostCoherent)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +194,7 @@ func (c *Ctx) staging(n int) (*Buf, error) {
 		b.Free()
 		return nil, fmt.Errorf("vulkan: staging buffer came back unmappable")
 	}
-	c.stage = b
+	r.stage = b
 	return b, nil
 }
 
@@ -179,43 +202,37 @@ func (c *Ctx) staging(n int) (*Buf, error) {
 // may be recording a batch into c.cmd right now, and a one-shot that resets it
 // would discard everything encoded so far and silently drop everything encoded
 // after. See Ctx.one.
-func (c *Ctx) copyBuf(src, dst Buffer, srcOff, dstOff uint64, n int) error {
-	if err := check(vkResetCommandBuffer(c.one, 0), "vkResetCommandBuffer"); err != nil {
+func (r *rec) copyBuf(src, dst Buffer, srcOff, dstOff uint64, n int) error {
+	if err := check(vkResetCommandBuffer(r.one, 0), "vkResetCommandBuffer"); err != nil {
 		return err
 	}
-	x := &c.scr
+	x := &r.scr
 	x.oneBI = cmdBeginI{sType: stCmdBufBegin, flags: cmdBufOneTime}
-	if err := check(vkBeginCommandBuffer(c.one, up(&x.oneBI)), "vkBeginCommandBuffer"); err != nil {
+	if err := check(vkBeginCommandBuffer(r.one, up(&x.oneBI)), "vkBeginCommandBuffer"); err != nil {
 		return err
 	}
 	x.region = bufCopy{srcOff: srcOff, dstOff: dstOff, size: uint64(n)}
-	vkCmdCopyBuffer(c.one, src, dst, 1, up(&x.region))
-	if err := check(vkEndCommandBuffer(c.one), "vkEndCommandBuffer"); err != nil {
+	vkCmdCopyBuffer(r.one, src, dst, 1, up(&x.region))
+	if err := check(vkEndCommandBuffer(r.one), "vkEndCommandBuffer"); err != nil {
 		return err
 	}
-	return c.submitOne()
+	return r.submitOne()
 }
 
-// submitOne submits c.one and waits. Separate from submit for the reason c.one
+// submitOne submits r.one and waits. Separate from submit for the reason one
 // is separate: the two must not name the same buffer.
-func (c *Ctx) submitOne() error {
-	x := &c.scr
-	x.oneCmd = c.one
+func (r *rec) submitOne() error {
+	x := &r.scr
+	x.oneCmd = r.one
 	x.oneSI = submitInfo{sType: stSubmitInfo, nCmd: 1, pCmd: uintptr(up(&x.oneCmd))}
-	if err := check(vkQueueSubmit(c.queue, 1, up(&x.oneSI), 0), "vkQueueSubmit"); err != nil {
-		return err
-	}
-	return check(vkQueueWaitIdle(c.queue), "vkQueueWaitIdle")
+	return r.run(&x.oneSI)
 }
 
-func (c *Ctx) submit() error {
-	x := &c.scr
-	x.cmd = c.cmd
+func (r *rec) submit() error {
+	x := &r.scr
+	x.cmd = r.cmd
 	x.si = submitInfo{sType: stSubmitInfo, nCmd: 1, pCmd: uintptr(up(&x.cmd))}
-	if err := check(vkQueueSubmit(c.queue, 1, up(&x.si), 0), "vkQueueSubmit"); err != nil {
-		return err
-	}
-	return check(vkQueueWaitIdle(c.queue), "vkQueueWaitIdle")
+	return r.run(&x.si)
 }
 
 func (b *Buf) Free() {
@@ -487,7 +504,7 @@ func (k *Kernel) Close() {
 //     run both with the last binding. Sets come from a per-Ctx pool that the
 //     commit resets.
 type Batch struct {
-	c    *Ctx
+	r    *rec
 	n    int
 	open bool
 	err  error
@@ -496,22 +513,24 @@ type Batch struct {
 // NewBatch begins recording. Commit must be called, and Ctx holds one command
 // buffer, so batches do not nest -- which is why the Batch is the context's
 // own, reset here, rather than a new one per session.
-func (c *Ctx) NewBatch() *Batch {
-	c.batch = Batch{c: c}
-	c.batch.begin()
-	return &c.batch
+func (c *Ctx) NewBatch() *Batch { return c.rec.newBatch() }
+
+func (r *rec) newBatch() *Batch {
+	r.batch = Batch{r: r}
+	r.batch.begin()
+	return &r.batch
 }
 
 func (b *Batch) begin() {
 	if b.err != nil {
 		return
 	}
-	c := b.c
-	if b.err = check(vkResetCommandBuffer(c.cmd, 0), "vkResetCommandBuffer"); b.err != nil {
+	r := b.r
+	if b.err = check(vkResetCommandBuffer(r.cmd, 0), "vkResetCommandBuffer"); b.err != nil {
 		return
 	}
-	c.scr.bi = cmdBeginI{sType: stCmdBufBegin, flags: cmdBufOneTime}
-	b.err = check(vkBeginCommandBuffer(c.cmd, up(&c.scr.bi)), "vkBeginCommandBuffer")
+	r.scr.bi = cmdBeginI{sType: stCmdBufBegin, flags: cmdBufOneTime}
+	b.err = check(vkBeginCommandBuffer(r.cmd, up(&r.scr.bi)), "vkBeginCommandBuffer")
 	b.open = b.err == nil
 	b.n = 0
 }
@@ -524,7 +543,7 @@ func (b *Batch) Encode(k *Kernel, groups int, bufs ...*Buf) error {
 	if len(bufs) != k.nbuf {
 		return fmt.Errorf("vulkan: kernel %q wants %d buffers, got %d", kernName(k), k.nbuf, len(bufs))
 	}
-	if err := b.c.launchable(k, groups); err != nil {
+	if err := b.r.c.launchable(k, groups); err != nil {
 		return err
 	}
 	if b.n >= batchSets {
@@ -538,13 +557,14 @@ func (b *Batch) Encode(k *Kernel, groups int, bufs ...*Buf) error {
 			return b.err
 		}
 	}
-	c := b.c
-	set, err := c.allocSet(k.layout)
+	r := b.r
+	c := r.c
+	set, err := r.allocSet(k.layout)
 	if err != nil {
 		b.err = err
 		return err
 	}
-	x := &c.scr
+	x := &r.scr
 	x.infos = slices.Grow(x.infos[:0], len(bufs))[:len(bufs)]
 	x.writes = slices.Grow(x.writes[:0], len(bufs))[:len(bufs)]
 	infos, writes := x.infos, x.writes
@@ -559,10 +579,10 @@ func (b *Batch) Encode(k *Kernel, groups int, bufs ...*Buf) error {
 	runtime.KeepAlive(infos)
 	runtime.KeepAlive(writes)
 
-	vkCmdBindPipeline(c.cmd, pipeBindCompute, k.pipe)
+	vkCmdBindPipeline(r.cmd, pipeBindCompute, k.pipe)
 	x.bindSet = set
-	vkCmdBindDescriptorSets(c.cmd, pipeBindCompute, k.plyt, 0, 1, up(&x.bindSet), 0, nil)
-	c.dispatch(c.cmd, &c.scr.base, k, groups)
+	vkCmdBindDescriptorSets(r.cmd, pipeBindCompute, k.plyt, 0, 1, up(&x.bindSet), 0, nil)
+	c.dispatch(r.cmd, &r.scr.base, k, groups)
 	// Both masks cover read and write: write -> read alone leaves write ->
 	// write and read -> write unordered. Most kernels form a chain, but two
 	// shapes are not:
@@ -579,7 +599,7 @@ func (b *Batch) Encode(k *Kernel, groups int, bufs ...*Buf) error {
 	x.mb = memBarrier{sType: stMemBarrier,
 		src: accessShaderRead | accessShaderWrite,
 		dst: accessShaderRead | accessShaderWrite}
-	vkCmdPipelineBarrier(c.cmd, stageComputeShader, stageComputeShader, 0, 1, up(&x.mb), 0, nil, 0, nil)
+	vkCmdPipelineBarrier(r.cmd, stageComputeShader, stageComputeShader, 0, 1, up(&x.mb), 0, nil, 0, nil)
 	b.n++
 	return nil
 }
@@ -590,38 +610,40 @@ func (b *Batch) Commit() error {
 		return b.err
 	}
 	b.open = false
-	c := b.c
-	if err := check(vkEndCommandBuffer(c.cmd), "vkEndCommandBuffer"); err != nil {
+	r := b.r
+	if err := check(vkEndCommandBuffer(r.cmd), "vkEndCommandBuffer"); err != nil {
 		b.err = err
 		return err
 	}
 	if b.n == 0 {
 		return nil // nothing recorded; submitting an empty buffer is a wasted drain
 	}
-	if err := c.submit(); err != nil {
+	if err := r.submit(); err != nil {
 		b.err = err
 		return err
 	}
-	// The sets are free the moment the queue is idle, which submit guarantees.
-	if c.bpool != 0 {
-		check(vkResetDescriptorPool(c.dev, c.bpool, 0), "vkResetDescriptorPool")
+	// The sets are free the moment the submission is done, which submit waits
+	// for.
+	if r.bpool != 0 {
+		check(vkResetDescriptorPool(r.c.dev, r.bpool, 0), "vkResetDescriptorPool")
 	}
 	return nil
 }
 
 // allocSet hands out one descriptor set from the batch pool, creating it on
 // first use.
-func (c *Ctx) allocSet(layout DescLayout) (DescSet, error) {
-	if c.bpool == 0 {
+func (r *rec) allocSet(layout DescLayout) (DescSet, error) {
+	c := r.c
+	if r.bpool == 0 {
 		ps := poolSize{kind: descStorageBuffer, count: batchSets * batchBufs}
 		dp := descPoolCI{sType: stDescPoolCI, maxSets: batchSets, nSizes: 1, pSizes: uintptr(up(&ps))}
-		if err := check(vkCreateDescriptorPool(c.dev, up(&dp), nil, up(&c.bpool)), "vkCreateDescriptorPool"); err != nil {
+		if err := check(vkCreateDescriptorPool(c.dev, up(&dp), nil, up(&r.bpool)), "vkCreateDescriptorPool"); err != nil {
 			return 0, err
 		}
 	}
-	x := &c.scr
+	x := &r.scr
 	x.lay = layout
-	x.da = descSetAI{sType: stDescSetAlloc, pool: uint64(c.bpool), n: 1, pSets: uintptr(up(&x.lay))}
+	x.da = descSetAI{sType: stDescSetAlloc, pool: uint64(r.bpool), n: 1, pSets: uintptr(up(&x.lay))}
 	if err := check(vkAllocateDescriptorSets(c.dev, up(&x.da), up(&x.set)), "vkAllocateDescriptorSets"); err != nil {
 		return 0, err
 	}
