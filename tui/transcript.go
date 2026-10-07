@@ -8,8 +8,9 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/glamour"
+	"charm.land/glamour/v2"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/samyfodil/jitllm/common/session"
 )
 
@@ -229,6 +230,9 @@ func (t *transcript) emptyState(w int) string {
 }
 
 // markdown renders a reply through glamour, in the window's palette.
+// glamour v1 overflowed a line by one cell per hyphen in it (reflow's word
+// wrap writes a breakpoint without counting it), and its second wrap then
+// stranded a word on a line of its own; v2 wraps with lipgloss.
 type markdown struct {
 	width int
 	r     *glamour.TermRenderer
@@ -247,10 +251,13 @@ func (md *markdown) render(text string, w int) string {
 		return text
 	}
 	// glamour indents every line by its document margin; the rule beside the
-	// reply is the margin here.
+	// reply is the margin here. The margin sits behind the line's colour
+	// codes, so it is cut by cells, not by bytes.
 	lines := strings.Split(strings.Trim(out, "\n"), "\n")
 	for i, l := range lines {
-		lines[i] = strings.TrimPrefix(l, "  ")
+		if strings.HasPrefix(ansi.Strip(l), "  ") {
+			lines[i] = ansi.TruncateLeft(l, 2, "")
+		}
 	}
 	return strings.Join(lines, "\n")
 }
