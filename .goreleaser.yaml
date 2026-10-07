@@ -78,9 +78,6 @@ builds:
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
 
-# One archive per program and target, named after the program:
-# jitllm_<version>_<os>_<arch> is the CLI, jitllmd_... the server,
-# jitllm-desktop_... and jitllm-tui_... the two apps.
 archives:
   - id: jitllm
     ids: [jitllm]
