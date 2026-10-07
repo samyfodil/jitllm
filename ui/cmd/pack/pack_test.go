@@ -45,7 +45,7 @@ func TestSysoIsAnObjectTheLinkerReads(t *testing.T) {
 
 func TestQuad(t *testing.T) {
 	for in, want := range map[string][4]uint16{
-		"1.2.3": {1, 2, 3, 0}, "v0.9.1-rc1": {0, 9, 1, 0}, "1.2.3.4": {1, 2, 3, 4},
+		"1.2.3": {1, 2, 3, 0}, "v0.9.1-rc1": {0, 9, 1, 0}, "1.2.3.4000": {1, 2, 3, 4000},
 	} {
 		got, err := quad(in)
 		if err != nil || got != want {
