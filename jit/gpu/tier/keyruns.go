@@ -40,8 +40,13 @@ func (g *GPU) setKeyRuns(sid uint64, full, windowed []nn.KeyRun) bool {
 		d.mu.Lock()
 		ss := d.sessOf(sid)
 		ss.bidir = append(ss.bidir[:0], full...)
+		ss.winRuns = append(ss.winRuns[:0], windowed...)
 		d.mu.Unlock()
-		if !d.setWindows(windowed) {
+		// Staged now, so a picture whose windows the device cannot hold is
+		// refused here; staged again at each of the session's tower calls
+		// (layersCall), since another session's picture may be staged in
+		// between.
+		if !d.setWindowsFor(sid) {
 			return false
 		}
 	}
@@ -82,14 +87,30 @@ func bidirCheck(runs []nn.KeyRun, pos, nrow int, p *nn.LayerPlan, paged bool) st
 	return ""
 }
 
-// setWindows stages runs -- [lo, hi) row pairs partitioning a non-causal
-// call's rows -- as each row's window, in the non-causal geometry's scratch
-// set, building the mask and its buffers on the first call. A device with no
-// non-causal block takes nothing; nil forgets the windows, so a windowed
-// block is refused rather than run under the last picture's.
-func (g *devTier) setWindows(runs []nn.KeyRun) bool {
+// setWindowsFor stages session sid's windows (devSess.winRuns) in lane0's
+// tower set, waiting for lane0 if another call holds it; see
+// setWindowsLocked. Callers must not hold g.mu.
+func (g *devTier) setWindowsFor(sid uint64) bool {
+	v := g.bareView(sid)
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	// A device with no tower has no set to stage windows in.
+	if !g.holdsTower() {
+		return true
+	}
+	v0 := v.borrowLane0()
+	defer v.returnLane0(v0)
+	return v0.setWindowsLocked(v0.winRuns)
+}
+
+// setWindowsLocked stages runs -- [lo, hi) row pairs partitioning a
+// non-causal call's rows -- as each row's window, in the non-causal
+// geometry's scratch set, building the mask and its buffers on the first
+// call. A device with no non-causal block takes nothing; nil forgets the
+// windows, so a windowed block is refused rather than run under the last
+// picture's. Callers hold g.mu, in a view over the lane holding the tower's
+// set (lane0).
+func (g *devTier) setWindowsLocked(runs []nn.KeyRun) bool {
 	home := g.geoCur
 	defer g.useGeom(home)
 	g.useGeom(geoNonCausal)

@@ -1,12 +1,11 @@
 # Device sessions: a tier holds one MODEL, a session holds one SEQUENCE
 
 **Status: built through step 3, with the capacity and the release made the
-session's too (last section).** A session's own calls are still serialised on a
-device: the scratch is one per capacity in use, not one per session, so
-concurrent forwards wait for each other rather than running in parallel. What
-runs together instead is a step ACROSS sessions (`model.StepRuns`, below): the
-server's step loop (`server/batch.go`) makes every generate on a session wholly
-on one device a row of its model's shared decode steps.
+session's too, and sessions stepping on one device at once (last section,
+"Sessions at once").** A step ACROSS sessions (`model.StepRuns`, below) still
+runs as one submission: the server's step loop (`server/batch.go`) makes every
+generate on a session wholly on one device a row of its model's shared decode
+steps.
 
 The user's framing, which is the requirement and not a preference: *"we can't
 refuse, jitllm is an inference os multimodel multi devices multi intances"*.
@@ -104,13 +103,16 @@ before the feature is worth having.
    which means step 1 must land with the concurrency gate still skipped, and say
    so rather than implying it is fixed.
 2. **Scratch per session.** Fixes concurrent forwards.
-   `TestConcurrentMultiDeviceDoesNotLeak` goes green.
+   `TestConcurrentMultiDeviceDoesNotLeak` goes green. Built as lanes, held by a
+   call rather than owned by a session ("Sessions at once" below).
 3. **Placement under a lock.** Fixes `SetDevice` racing itself -- the 1-block-vs-22
    result. A per-`GPU` placement mutex held across a State's whole offer
    sequence; today each `PrepLayer` takes and releases `g.mu`, so the sequence is
    not atomic.
 4. **The budget dimension.** Sessions per device, and what the placement policy
-   does when they do not fit.
+   does when they do not fit. Measured: one lane per session stepping beside
+   another ("Sessions at once"); the policy is not built -- a lane that does
+   not fit makes the sessions take turns.
 
 ## Gates
 
@@ -349,3 +351,75 @@ latent attention -- run in the ragged step (device-kv-paging.md, slice 5), so
 a Kimi-Linear step across sessions reaches both kinds end to end:
 `model.TestStepAcrossSessionsLatentMatchesEachAlone` on synth-kimilinear runs
 the hybrid checks above beside the latent ones.
+
+## Sessions at once
+
+Two `model.State`s attached to one tier -- the app's chat and an API request
+-- step on one device at the same time, each with exactly the answers it gives
+alone. The device's tier is three parts (`jit/gpu/tier/devsess.go`):
+
+    devShared   everything every session reads: blocks and their residency,
+                kernels and their caches, the paged KV pool and its tables, the
+                recurrent pools, the budget. Under g.mu.
+    devSess     one session's per-call state on the device: the submission's
+                arguments and staging, the ragged step, the embedding promise,
+                key runs, per-layer inputs, its queue.
+    lane        a scratch: every geometry set, the batched widths, the
+                partials, the recordings made over them. A call holds one for
+                its whole run.
+
+lane0 is the scratch placement builds. A call takes the lane its session ran
+in last, lane0, a free clone, or builds a clone of lane0 (charged as
+scratch); with no lane free and no room for another it waits for one, so a
+budget too small for two scratches serialises the sessions rather than
+sending one to the host. A clone borrows lane0's head and owns its logits; a
+change of lane0's shape retires every clone, and a session that detaches
+gives the free ones back. A vision tower's set is not cloned: a tower's range
+runs in lane0, borrowed. Measured (`model.TestSessionsStepAtOnce` logs it), a
+second session stepping at once costs one lane: stories15M 17.1 MB on CUDA,
+21.3 MB on Vulkan; Llama-3.2-1B 139 MB on CUDA, 155 MB on Vulkan (the prompt
+widths' batched scratches are most of it). That is the sessions-per-device
+budget dimension: per session, its KV pages plus one lane while it steps
+beside another.
+
+A step takes the device's call lock shared (`gpuSession.step`); placement,
+releases, migrations and the head take it exclusively. A submission runs on
+the session's own queue (`backend.Queued`) with g.mu let go; what it builds on
+the way takes g.mu for the build (`subLock`), and its counters are its own
+until it completes. What changes something every submission may read -- a
+buffer a recording names, a block's weights, a KV page another sequence's
+table names, a recurrent pool -- first waits for every submission in flight
+(`quiesce`, `jit/gpu/tier/inflight.go`), and every wait comes before a
+submission's prologue, never between the prologue and the submission: a wait
+there let another session's prologue send this session's history home under
+descriptors already built (it read 0.45 NMSE). A block a submission is about
+to read is held, no victim to another session's page-in (`holdPages`); a KV
+page released while submissions are in flight is fenced until they complete.
+A submission over what is the device's -- a tower, a linear block's recurrent
+pool, a streamed block, a DeepSeek V4 block, a step over several sessions'
+rows, history streamed from home -- runs alone.
+
+Gates, each run against a violation:
+
+    model.TestSessionsStepAtOnce     stories15M on cuda:0, vulkan:0 (NVIDIA)
+                   and vulkan:1 (Iris Xe): two States decode 48 tokens from two
+                   goroutines, ids and logits bit-identical to each alone;
+                   Stats.SubsBeside > 0 (submissions started while another was
+                   in flight). A lock across every submission: SubsBeside 0,
+                   fails.
+    model.TestSessionsOverlapOnCUDA  the wall: two at once against one alone,
+                   median of ten interleaved rounds 1.27-1.29x; with the lock,
+                   2.03x, fails at 1.6.
+    model.TestSessionsPageAtOnce     every block streamed through two slots,
+                   ~170 page-ins under the other session's submissions, ids and
+                   logits bit-identical to each alone with every block resident.
+                   Without the hold, a block about to be read is a victim: the
+                   step falls back and the logits differ.
+    model.TestSessionsEvictAtOnce    KV pages sent home while both step, held
+                   within the eviction gate's band. The wait moved past the
+                   prologue: 1.3e-2 to 2.1e-1, fails.
+
+NVIDIA's Vulkan driver runs one queue's dispatches at a time
+(`backend.TestQueuesRunSessionsAtOnce`), so there the gates hold the answers
+and the submissions' overlap, not the wall. Metal implements the queues and
+is not gated here: the four gates above are to be run on the M4.

@@ -73,3 +73,7 @@ func (b *Buffer) ReadOn(st *Stream, p unsafe.Pointer, n int) error {
 	}
 	return st.Sync()
 }
+
+// SyncLegacy waits for every launch and copy on the context's legacy stream,
+// and not for any other stream's.
+func SyncLegacy() error { return call(cuStreamSynchronize(0), "cuStreamSynchronize") }

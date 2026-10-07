@@ -378,10 +378,13 @@ the first device runs.
 - A table is written before the submission that reads it and changes only
   between submissions.
 - A freed page is reused only after the submission that last read it has
-  completed. Today that holds at release: sessions are serialised on a device
-  and each submission completes (its readback waits) before its call returns,
-  so the release sites fence at once. With concurrent sessions (slice 6) the
-  fence moves to the completion of every submission in flight.
+  completed. Sessions step on a device at once (slice 6), so a released page
+  is fenced at the ticket the next submission takes and freed once every
+  submission holding that ticket or an earlier one has completed -- at once
+  when none is in flight (`jit/gpu/tier/inflight.go`). A page sent home, a
+  pool grown, shrunk or compacted, and every table renumbering wait for the
+  submissions in flight first (quiesce); a call whose history has pages at
+  home streams them through free pages, and so runs alone on the device.
 - Ids are stable while a submission can read them, and no longer: a
   compaction between submissions renumbers live pages and rewrites the tables
   that name them, and drops the captured graph, which names the old buffers.
@@ -555,4 +558,8 @@ Later, once paging is in and at least as fast:
    (0 to 5.1e-5 against the batched head; decode's own kernel reading the
    step's activation, 2.8-3.3).
 6. **Replication and concurrency**: per-session routes and weight copies,
-   per-session workspaces.
+   per-session workspaces. Concurrency is built (device-sessions.md, "Sessions
+   at once"): workspaces are lanes, a call's own, and the pool's lifetimes
+   above hold with submissions in flight. Gates:
+   `model.TestSessionsStepAtOnce`, `TestSessionsPageAtOnce`,
+   `TestSessionsEvictAtOnce`. Replication is not.

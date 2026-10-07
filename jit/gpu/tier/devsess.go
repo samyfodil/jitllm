@@ -44,8 +44,29 @@ type devSess struct {
 	view, v0  *devTier
 	// inSub says the session's submission is running outside g.mu: what it
 	// builds on the way (a kernel, a grown staging buffer) takes g.mu for the
-	// build (subLock), and nothing it calls may quiesce.
-	inSub bool
+	// build (subLock; subHeld while it does), and nothing it calls may
+	// quiesce. Its counters go to acc meanwhile, added to the device's when it
+	// completes (layersOnce).
+	inSub, subHeld bool
+	acc            Stats
+	// prologueHeld says layersOnce is between its waits and its submission:
+	// what it read into the submission's descriptors must not change, so
+	// nothing it calls may let g.mu go (quiesce refuses).
+	prologueHeld bool
+	// q is the session's queue on a device that runs sessions at once
+	// (backend.Queued), made at its first submission; qTried says that was
+	// asked, so a device that refused is not asked every token. Without one
+	// the session's submissions take the device's Session.
+	q      backend.Queue
+	qTried bool
+	// bare is the session's view with no lane, for a call that reads no
+	// scratch (reserveKV, trimKV): such a call must not cost a clone.
+	bare *devTier
+	// winRuns is the windowed key runs SetKeyRuns gave this session, staged
+	// into the tower's set at each of its calls over a tower (setWindows):
+	// the set is the device's, and another session's picture may have been
+	// staged in it since.
+	winRuns []nn.KeyRun
 	// embPend is the prompt chunk EmbedRows promised and the next submission
 	// gathers (embed.go). Guarded by mu.
 	embPend *embPend
@@ -199,7 +220,116 @@ func (g *devTier) done() {
 		return
 	}
 	ds.cur.held = false
+	// A call may be waiting for a lane (takeLane), or for lane0 to run a
+	// tower's range (borrowLane0).
+	g.idle.Broadcast()
 	ds.cur = nil
+}
+
+// bareView is session sid's view for a call that reads no scratch: its
+// per-call state and an empty lane, so no lane is taken or cloned for it.
+// Callers must not hold g.mu.
+func (g *devTier) bareView(sid uint64) *devTier {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	ds := g.sessOf(sid)
+	if ds.bare == nil {
+		ds.bare = &devTier{devShared: g.devShared, devSess: ds, lane: &lane{}, Stats: &g.tot}
+	}
+	return ds.bare
+}
+
+// borrowLane0 is the session's view over lane0 for a range only lane0 runs (a
+// tower's), waiting until no other call holds lane0. The call keeps the lane
+// it holds as well; returnLane0 gives lane0 back. A call holding lane0
+// already gets its own view. Callers hold g.mu, outside any submission.
+func (g *devTier) borrowLane0() *devTier {
+	if g.lane == g.lane0 {
+		return g
+	}
+	// Waiting, lane0 is no new call's to take (freeLane), or a session
+	// stepping in it call after call would take it back every time.
+	g.lane0Want++
+	for g.lane0.held {
+		g.idle.Wait()
+	}
+	g.lane0Want--
+	g.lane0.held = true
+	return g.lane0View()
+}
+
+// returnLane0 ends what borrowLane0 began. Callers hold g.mu.
+func (g *devTier) returnLane0(v *devTier) {
+	if v == g {
+		return
+	}
+	g.lane0.held = false
+	g.idle.Broadcast()
+}
+
+// subLock takes g.mu for a build reached from inside this session's
+// submission -- a kernel compiled on first use, a staging buffer grown --
+// and reports whether it did; subUnlock gives it back. Outside a submission
+// the caller holds g.mu already and nothing is taken. The pair is written
+// defer g.subUnlock(g.subLock()).
+func (g *devTier) subLock() bool {
+	if !g.inSub || g.subHeld {
+		return false
+	}
+	g.mu.Lock()
+	g.subHeld = true
+	return true
+}
+
+// subUnlock gives back what subLock took.
+func (g *devTier) subUnlock(took bool) {
+	if took {
+		g.subHeld = false
+		g.mu.Unlock()
+	}
+}
+
+// runSub runs f as one of the session's submissions: on the session's own
+// queue where the device runs sessions at once (backend.Queued), so it runs
+// beside other sessions' submissions; on the device's Session otherwise.
+// Callers hold g.mu when the submission runs alone, and not otherwise; the
+// queue is made under g.mu by the caller (sessQueue).
+func (g *devTier) runSub(f func(backend.Session)) {
+	if g.q != nil {
+		g.dev.(backend.Queued).SessionOn(g.q, f)
+		return
+	}
+	g.dev.Session(f)
+}
+
+// sessQueue makes the session's queue if the device has them and it has not
+// been asked. A refusal leaves the session on the device's Session. Callers
+// hold g.mu.
+func (g *devTier) sessQueue() {
+	if g.qTried {
+		return
+	}
+	g.qTried = true
+	qd, ok := g.dev.(backend.Queued)
+	if !ok {
+		return
+	}
+	q, err := qd.NewQueue()
+	if err != nil {
+		g.LastErr = "no queue of its own for a session: " + err.Error()
+		return
+	}
+	g.q = q
+}
+
+// closeQueue closes the session's queue. Callers hold g.mu, with no
+// submission of the session's running.
+func (ds *devSess) closeQueue() {
+	if ds.q != nil {
+		ds.q.Close()
+		ds.q = nil
+	}
+	ds.qTried = false
 }
 
 // sessOf is session sid's state on this device, made at its first call.
@@ -215,17 +345,48 @@ func (g *devTier) sessOf(sid uint64) *devSess {
 
 // takeLane holds a lane for one of ds's calls: the lane it ran in last, if
 // free and current, then lane0, then any free clone, then a new clone. A clone
-// lane0 has moved past is dropped on the way. Callers hold g.mu.
+// lane0 has moved past is dropped on the way. When every lane is held and the
+// budget has no room for another, the call waits for one to come free: the
+// sessions go one after another, as they did when the scratch was the
+// device's, rather than one of them to the host. Callers hold g.mu.
+//
+// The waits are first come, first served (laneNext, laneServe): a session
+// that gives its lane back and calls again joins the line behind one already
+// waiting, rather than taking the lane back before the other wakes.
 func (g *devTier) takeLane(ds *devSess) *lane {
-	g.tidyLanes()
+	if g.laneNext == g.laneServe {
+		if l := g.freeLane(ds); l != nil {
+			return l
+		}
+	}
+	my := g.laneNext
+	g.laneNext++
+	g.LanesWaited++
+	for {
+		if my == g.laneServe {
+			if l := g.freeLane(ds); l != nil {
+				g.laneServe++
+				// The next in line may find a lane too.
+				g.idle.Broadcast()
+				return l
+			}
+		}
+		g.idle.Wait()
+	}
+}
+
+// freeLane holds a lane for ds if one is free or can be built, nil if not.
+// Callers hold g.mu.
+func (g *devTier) freeLane(ds *devSess) *lane {
 	pick := func(l *lane) *lane {
 		l.held = true
 		return l
 	}
-	if l := ds.last; l != nil && !l.held && g.liveLane(l) {
+	g.tidyLanes()
+	if l := ds.last; l != nil && !l.held && g.liveLane(l) && (l != g.lane0 || g.lane0Want == 0) {
 		return pick(l)
 	}
-	if !g.lane0.held {
+	if !g.lane0.held && g.lane0Want == 0 {
 		return pick(g.lane0)
 	}
 	for _, l := range g.lanes {
@@ -233,12 +394,17 @@ func (g *devTier) takeLane(ds *devSess) *lane {
 			return pick(l)
 		}
 	}
-	l, ok := g.dv.cloneLane()
-	if !ok {
-		return nil
+	// A clone that did not fit is not tried again until the device may have
+	// room (roomGen) or lane0 changed shape (laneGen).
+	if room := g.roomGen.Load(); !g.noClone || room != g.noCloneRoom || g.laneGen != g.noCloneGen {
+		if l, ok := g.dv.cloneLane(); ok {
+			g.noClone = false
+			g.lanes = append(g.lanes, l)
+			return pick(l)
+		}
+		g.noClone, g.noCloneRoom, g.noCloneGen = true, g.roomGen.Load(), g.laneGen
 	}
-	g.lanes = append(g.lanes, l)
-	return pick(l)
+	return nil
 }
 
 // liveLane reports that l is lane0 or one of its current clones. Callers hold
@@ -319,7 +485,6 @@ func (g *devTier) cloneLane() (*lane, bool) {
 	v := &devTier{devShared: g.devShared, devSess: g.devSess, lane: nl, Stats: g.Stats}
 	fail := func() (*lane, bool) {
 		g.dropLane(nl)
-		g.ScratchRefused++
 		return nil, false
 	}
 	sets := map[geoKey]geomSet{l0.geoCur: {bs: l0.bs, bbs: l0.bbs, promptW: l0.promptW, stepW: l0.stepW}}
@@ -452,8 +617,29 @@ func (g *devTier) forgetSess(sid uint64) {
 		}
 		freeStaleOf(l)
 	})
+	if ds := g.sess[sid]; ds != nil {
+		ds.closeQueue()
+	}
 	if sid != 0 {
 		delete(g.sess, sid)
+	}
+	// A clone exists for sessions stepping at once; with one fewer session it
+	// may be one too many, and a free one goes back to the budget. The next
+	// call that finds every lane taken builds one again.
+	kept := g.lanes[:0]
+	for _, l := range g.lanes {
+		if l.held {
+			kept = append(kept, l)
+			continue
+		}
+		g.dv.dropLane(l)
+	}
+	clear(g.lanes[len(kept):])
+	g.lanes = kept
+	for _, ds := range g.sess {
+		if ds.last != nil && !g.liveLane(ds.last) {
+			ds.last = nil
+		}
 	}
 }
 

@@ -962,10 +962,8 @@ func (g *devTier) dropKVLayer(kp *kvPool, li int) {
 // list, so what the session held there is room again -- the next sequence's
 // pages, or given back to the budget by kvCompact when something else needs
 // it: the point of a session yielding one block while another session keeps
-// it. Callers hold g.mu, between submissions (sessions are serialised on a
-// device and each submission completes before its call returns, so nothing in
-// flight reads the pages; with concurrent sessions the fence moves to
-// completion).
+// it. Callers hold g.mu, between submissions: the released pages are fenced
+// until every submission that could read them has completed (fence).
 func (g *devTier) pagedLeave(li int, sid uint64, bl *layer) {
 	if g.kvp == nil {
 		return
@@ -1288,12 +1286,9 @@ func (g *devTier) ReserveKVSeqs(bases, ends []int) bool {
 // reserveKVSeqs takes the pages session sid's sequences at bases need
 // for positions up to ends (nn.SeqKVDevice).
 func (g *devTier) reserveKVSeqs(sid uint64, bases, ends []int) bool {
-	v := g.as(sid)
-	if v == nil {
-		return false
-	}
-	defer v.done()
-	g = v
+	// No scratch is read: the session's pages and table run are all it
+	// touches, so it takes no lane.
+	g = g.bareView(sid)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !g.paged {

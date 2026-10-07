@@ -1397,8 +1397,8 @@ func (l *layer) kvOf(sid uint64) *kvPair {
 	return l.kv[sid]
 }
 
-// blockScratch is the per-call staging every layer shares, since only one runs
-// at a time.
+// blockScratch is the per-call staging every layer of a lane shares: a call
+// holds its lane (devsess.go), so one block runs in it at a time.
 type blockScratch struct {
 	// headShared says head, mvHead, hNorm, hNormB and headCap are another
 	// scratch's -- lane0's, borrowed by a clone (shareHead) -- and are not
@@ -5572,9 +5572,20 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 	if g.injectedFail() {
 		return false
 	}
+	// A tower's range runs in lane0, whose tower set is the device's own
+	// (visrows.go): a call holding a clone borrows lane0 for it.
+	g.mu.Lock()
+	if l := g.layers[lo]; lo < hi && l != nil && l.nonCausal && g.lane != g.lane0 {
+		v0 := g.borrowLane0()
+		g.mu.Unlock()
+		ok := v0.layersCall(sid, lo, hi, pos, n, x, cs, csSWA, head)
+		g.mu.Lock()
+		g.returnLane0(v0)
+		g.mu.Unlock()
+		return ok
+	}
 	// Reset per call, because the caller reads it immediately after a false to
 	// decide whether a host restart is sound.
-	g.mu.Lock()
 	g.recSteps = 0
 	// Gemma 4: the range's geometry's scratch set, and the caller's set again
 	// on the way out (gemma4.go). GPU.runsInto hands one geometry per call.
@@ -5596,7 +5607,13 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 	if l := g.layers[lo]; lo < hi && l != nil && l.nonCausal {
 		g.mu.Lock()
 		bs := g.bs
+		// The windows staged in the set are whichever session's picture
+		// came last: this session's go in again.
+		wok := g.setWindowsLocked(g.winRuns)
 		g.mu.Unlock()
+		if !wok {
+			return false
+		}
 		if bs == nil || n > bs.rows || head != nil {
 			g.LastErr = fmt.Sprintf("non-causal n=%d scratch=%v head=%v", n, bs != nil, head != nil)
 			return false
@@ -5953,6 +5970,29 @@ const scoreGrain = 128
 func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, cs, csSWA []float32, head *nn.Head) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	// Every wait comes first. The prologue below reads what other sessions
+	// change -- this session's pages, whether any are at home, the blocks --
+	// into the submission's descriptors, and a wait after it would let one of
+	// them change under the submission (another session's page-in or
+	// eviction). Alone on the device: wait for every submission in flight.
+	// Beside the others: wait for a quiesce in progress to have its turn. From
+	// here to the submission nothing lets g.mu go (prologueHeld).
+	// The question is asked again after every wait: another session's
+	// prologue may have sent this session's history home meanwhile.
+	var excl bool
+	for {
+		if excl = g.exclusiveRange(lo, hi, g.rag, bs) || g.evictedFor(sid, g.rag); excl {
+			// Running alone is right whatever changes while it waits.
+			g.quiesce()
+			break
+		}
+		if g.quiet == 0 {
+			break
+		}
+		g.idle.Wait()
+	}
+	g.prologueHeld = true
+	defer func() { g.prologueHeld = false }()
 	// An empty range is legal only with a head: the projection under a partial
 	// seam. Every refusal records why, since the State's answer to false is a
 	// silent restart on the host.
@@ -6430,9 +6470,36 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	if g.subFn == nil {
 		g.subFn = g.layersSession
 	}
-	t := g.beginSub()
-	g.dev.Session(g.subFn)
-	g.endSub(t)
+	// Read here, under g.mu: a page-in another session makes changes it.
+	g.sub.paging = g.pagesIn < len(g.layers)
+	g.sessQueue()
+	// The prologue streams this call's history only when some of it was at
+	// home before the prologue began (evictedFor), which made the call one
+	// to run alone; nothing can have gone home since, so this is a check of
+	// that reasoning and not a path.
+	if !excl && g.exclusiveRange(lo, hi, rag, bs) {
+		return refuse("a submission that must run alone was prepared to run beside others")
+	}
+	g.prologueHeld = false
+	if excl {
+		// Alone on the device, as every submission was before sessions ran
+		// at once: nothing else is in flight (the wait was before the
+		// prologue), and nothing starts while g.mu is held across it.
+		g.runSub(g.subFn)
+	} else {
+		// Beside any other session's: g.mu is let go for the submission, so
+		// the bookkeeping of the others goes on meanwhile. What the
+		// submission builds on the way takes g.mu for the build (subLock),
+		// and its counters are its own until it completes.
+		t := g.beginSub()
+		g.inSub, g.Stats = true, &g.acc
+		g.runUnlocked(g.subFn)
+		g.inSub, g.Stats = false, &g.tot
+		g.tot.add(g.acc)
+		g.acc = Stats{}
+		g.endSub(t)
+		g.freeStale()
+	}
 	err, direct := g.sub.err, g.sub.direct
 	g.sub = submitArgs{}
 	if err != nil {
@@ -6463,11 +6530,16 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 }
 
 // submitArgs is one layersOnce submission's state, handed to layersSession
-// through the devTier rather than captured by a closure: the function a
-// Session runs escapes, so a closure over the submission's locals was a heap
-// object -- with every variable it shared with its own closures -- on every
-// token. g.mu is held across the whole submission, so one set serves.
+// through the session's devSess rather than captured by a closure: the
+// function a Session runs escapes, so a closure over the submission's locals
+// was a heap object -- with every variable it shared with its own closures --
+// on every token. A session runs one submission at a time on a device, so one
+// set a session serves.
 type submitArgs struct {
+	// paging says a block of the device is paged out, read before the
+	// submission: a recording names device addresses a page-in allocates
+	// afresh.
+	paging                  bool
 	bs, hb                  *blockScratch
 	head                    *nn.Head
 	lo, hi, pos             int
@@ -8094,7 +8166,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		//   in a replay.
 		// - History streamed from home: its uploads and waits are per call.
 		if (R > 1 && rag == nil) || !parOK || g.NoGraph || g.graphOff || g.PerLayerSubmit ||
-			g.pagesIn < len(g.layers) || streamed || bs.pkv != nil && bs.pkv.st != nil {
+			a.paging || streamed || bs.pkv != nil && bs.pkv.st != nil {
 			te := time.Now()
 			emit()
 			g.TEmit += time.Since(te)
@@ -8549,12 +8621,9 @@ func (g *devTier) ReserveKV(pos int) bool {
 // captured graph, which deadlocks CUDA inside a Session. A restored prefix
 // arrives with no submission at all.
 func (g *devTier) reserveKV(sid uint64, pos int) bool {
-	v := g.as(sid)
-	if v == nil {
-		return false
-	}
-	defer v.done()
-	g = v
+	// No scratch is read: the session's pages are all it touches, so it takes
+	// no lane.
+	g = g.bareView(sid)
 	if pos <= 0 {
 		return true
 	}
@@ -8582,12 +8651,7 @@ func (g *devTier) TrimKV(pos int) bool {
 // positions or anyone's; kvCompact gives them to the budget when something
 // needs the room. They are room all the same, so it is announced.
 func (g *devTier) trimKV(sid uint64, pos int) bool {
-	v := g.as(sid)
-	if v == nil {
-		return false
-	}
-	defer v.done()
-	g = v
+	g = g.bareView(sid)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.kvp == nil || !g.kvp.trimSeq(seqID{sid, 0}, pos) {
@@ -9149,6 +9213,8 @@ func (g *devTier) actWinFor(ntok int) int {
 // it), then the other tiled forms, then the dp4a tile. The widest admissible
 // warp tile is a divisor calculation (mmaTile), not a search.
 func (g *devTier) batchMV(m mv, ntok, tok int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	// A float weight has no tensor-core kernel. Asking would fail, and a
 	// failure here switches MMA off for every other matvec (mmaOff).
 	if mt, nt, ok := g.mmaTile(m.rows, ntok); ok && !kernels.IsFloat(m.q) {
@@ -9192,6 +9258,8 @@ func (g *devTier) batchMV(m mv, ntok, tok int) (mv, bool) {
 // accumulators a lane) and narrower ones read the weights more times per chunk.
 // mvbench -mma has the per-shape isolated numbers.
 func (g *devTier) mmaTile(rows, ntok int) (int, int, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	if g.mmaOff || g.NoMMA {
 		return 0, 0, false
 	}

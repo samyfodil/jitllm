@@ -54,7 +54,8 @@ func (kp *kvPool) evictable(l *kvLayerPool, s seqID) int {
 // evictVictim is the sequence whose oldest resident page goes next: another
 // session's first -- its history is cold for this call -- then the current
 // session's, and only one with a page to spare in every layer that holds it.
-// Only a session of one sequence gives pages up: a batch's rows run together
+// A session stepping on the device keeps its pages (stepping). Only a session
+// of one sequence gives pages up: a batch's rows run together
 // and one row cannot stream while the others read their pages in place.
 // ok is false when nothing can leave.
 func (g *devTier) evictVictim(sid uint64, kp *kvPool) (seqID, bool) {
@@ -92,10 +93,23 @@ func (g *devTier) evictVictim(sid uint64, kp *kvPool) (seqID, bool) {
 	return best, found
 }
 
+// stepping reports that session other is in a call on this device -- its
+// pages taken and its table staged for a submission that has not completed --
+// and is not self, whose own call is the one asking. Its pages are not
+// evicted under it: the submission would read the dummy page where its
+// history was. Callers hold g.mu.
+func (g *devTier) stepping(other, self uint64) bool {
+	if other == self {
+		return false
+	}
+	ds := g.sess[other]
+	return ds != nil && ds.cur != nil
+}
+
 // evictableIn is how many pages eviction could free in layer l: every page
 // of every sequence evictVictim may choose, counted where it is spare in
 // every layer that holds it.
-func (g *devTier) evictableIn(kp *kvPool, l *kvLayerPool) int {
+func (g *devTier) evictableIn(sid uint64, kp *kvPool, l *kvLayerPool) int {
 	perSess := map[uint64]int{}
 	for s := range kp.ranges {
 		perSess[s.sid]++
@@ -185,7 +199,7 @@ func (g *devTier) evictForRoom(sid uint64, kp *kvPool, l *kvLayerPool, want int)
 	if short <= 0 {
 		return true
 	}
-	if g.evictableIn(kp, l) < short {
+	if g.evictableIn(sid, kp, l) < short {
 		return false
 	}
 	for len(l.free) < want+1 {

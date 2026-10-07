@@ -759,6 +759,13 @@ type Stats struct {
 	// PipelinePieces counts the pieces of pipelined prompt chunks this device
 	// ran (GPU.pipeline).
 	PipelinePieces int
+	// SubsBeside counts submissions that started while another was in flight
+	// on the device (beginSub): the selection check that sessions stepped at
+	// once rather than one after another.
+	SubsBeside int
+	// LanesWaited counts calls that found every lane taken and no room for
+	// another, and waited for one (takeLane).
+	LanesWaited int
 	// SessionRows counts rows this device ran in steps across sessions
 	// (gpuSession.LayersSessions).
 	SessionRows int
@@ -1037,6 +1044,8 @@ func (s *Stats) add(o Stats) {
 	s.KVWindowReleased += o.KVWindowReleased
 	s.KVStreamPasses += o.KVStreamPasses
 	s.PipelinePieces += o.PipelinePieces
+	s.SubsBeside += o.SubsBeside
+	s.LanesWaited += o.LanesWaited
 	s.SessionRows += o.SessionRows
 	s.SessionLinear += o.SessionLinear
 	s.LinearRowsScalar += o.LinearRowsScalar
@@ -1296,6 +1305,17 @@ type devShared struct {
 	lanes   []*lane
 	laneGen uint64
 	dv      *devTier
+	// noClone says the last clone did not fit, at roomGen noCloneRoom and
+	// laneGen noCloneGen: until one of them moves, a call with no free lane
+	// waits for one rather than building another (takeLane).
+	noClone                 bool
+	noCloneRoom, noCloneGen uint64
+	// laneNext and laneServe are the line of calls waiting for a lane: the
+	// next ticket to give out and the one served next (takeLane).
+	laneNext, laneServe uint64
+	// lane0Want counts calls waiting to borrow lane0 for a tower's range
+	// (borrowLane0).
+	lane0Want int
 	// clk, tickets, quiet and idle are the submissions in flight outside mu
 	// and the waits on them (inflight.go). idle's lock is mu.
 	clk     subClock
@@ -1365,9 +1385,15 @@ type devShared struct {
 	headSrc      *byte
 	headNormHost []float32
 	altNorms     []altNorm
-	// busy serialises calls from different sessions on this device. See
-	// docs/design/device-sessions.md.
-	busy sync.Mutex
+	// busy is the device's call lock: a session's step takes it shared, so
+	// steps of several sessions run at once, and a call that changes what
+	// every step reads (placement, a release, a migration) takes it
+	// exclusively (gpuSession.enter). See docs/design/device-sessions.md.
+	busy sync.RWMutex
+	// convTo is the convolutional blocks' launch target (convOnce), the
+	// device's and not a session's: their calls are one at a time
+	// (GPU.convMu).
+	convTo launchTo
 	// roomGen moves every time this device may have gained room: a refund, or
 	// a budget raised. A caller that gave blocks up reads it to know when
 	// asking for them back could succeed. See GPU.RoomGen.
@@ -1452,8 +1478,8 @@ type devShared struct {
 	// -tags jitllmfault.
 	calls int
 
-	// The whole-block path: layers uploaded by PrepLayer, scratch shared by all
-	// of them since only one block runs at a time. The map is keyed by the
+	// The whole-block path: layers uploaded by PrepLayer, run in the scratch
+	// of a lane (devsess.go), which a call holds for its whole run. The map is keyed by the
 	// model's block index and holds only this device's blocks, so a run on this
 	// card is exactly this card's Layers(lo, hi).
 	layers map[int]*layer
@@ -1569,8 +1595,12 @@ type GPU struct {
 	head *devTier
 	// runBuf is layersCall's runs slice between calls; see layersCall.
 	runBuf []run
-	// convTmp is ConvLayers' activation between two devices' runs.
+	// convTmp is ConvLayers' activation between two devices' runs, and convMu
+	// holds a ConvLayers call whole: the activation stays on each card between
+	// its submissions, in the scratch every convolutional block there shares
+	// (conv.go), so two sessions' calls go one after the other.
 	convTmp [2][]float32
+	convMu  sync.Mutex
 	// rowsErr is why the last LayersRows failed, naming the device: the
 	// devices' LastErr summed by Stats is whichever wrote last, not the one
 	// that refused.
@@ -2040,6 +2070,12 @@ func (g *devTier) Close() {
 		return
 	}
 	g.closed = true
+	// Every session's queue, before the device that owns them, once nothing
+	// runs on one.
+	g.quiesce()
+	for _, ds := range g.sess {
+		ds.closeQueue()
+	}
 	if hp, ok := g.dev.(backend.HostPinner); ok {
 		for i, b := range g.pin {
 			if b != nil {
@@ -2807,6 +2843,8 @@ func (g *devTier) gatedKernel(q kernels.Quant, k, rows, split int, groupSplit bo
 
 // reduceKernel compiles the second pass that sums a row's partial results.
 func (g *devTier) reduceKernel(rows, split int) backend.Kernel {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	key := [2]int{rows, split}
 	if c, ok := g.reduce[key]; ok {
 		return c
@@ -2853,6 +2891,8 @@ func (g *devTier) sizeMVPart(n int) bool {
 // sends a chunk down (narrower submissions, a row at a time) launches them
 // against nil -- a panic on Vulkan, address 0 on CUDA. Callers hold g.mu.
 func (g *devTier) regrow(dst *backend.Buf, have *int, n, unit int, drop, poison bool) bool {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	if *have >= n {
 		return true
 	}
@@ -3299,7 +3339,8 @@ const maxGraphs = 8
 // one buffer lets every block of a large streamed mixture fit where per-block
 // copies did not. It is safe under the conditions streaming already needs: the
 // suspension Syncs before the next fill lands, a streamed range refuses graph
-// capture, and sessions are serialised per device.
+// capture, and a streamed block's submission runs alone on the device
+// (exclusiveRange).
 //
 // A shape that does not match an existing bank gets its own, so a model whose
 // blocks differ is correct rather than refused.

@@ -407,7 +407,7 @@ func (g *GPU) layersRows(self uint64, lo, hi int, pos, slot []int, sid []uint64,
 }
 
 func (s *gpuSession) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
-	defer s.leave(s.inputsTo(s.enter()))
+	defer s.leave(s.inputsTo(s.step()))
 	return s.g.layersRows(s.sid, lo, hi, pos, slot, nil, seqLen, x, cs, csSWA, head)
 }
 
@@ -435,7 +435,7 @@ func (s *gpuSession) LayersSessions(lo, hi int, sess []nn.LayerDevice, pos []int
 		}
 		sid[i], slot[i] = o.sid, pos[i]
 	}
-	defer s.leave(s.inputsTo(s.enter()))
+	defer s.leave(s.inputsTo(s.step()))
 	// A session is one sequence whose slots are its positions, so the span a
 	// sequence takes is no matter: every row's sequence is its session's 0.
 	return s.g.layersRows(s.sid, lo, hi, pos, slot, sid, 0, x, cs, csSWA, head)
@@ -508,6 +508,8 @@ func (g *devTier) headMV() mv {
 // which prepRagged makes outside any session; false where the shape is
 // refused, and the batched twin serves.
 func (g *devTier) headOneMV(R int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	m := g.bs.mvHead
 	if g.NoRagHeadOne || m.kern == nil {
 		return mv{}, false
@@ -591,6 +593,8 @@ const (
 // fuses it only where its split writes the final row, and this kernel always
 // does, reducing its split in the group.
 func (g *devTier) groupKern(m mv, ntok, R int, epi groupEpi, act kernels.ActKind) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	if ntok < 2 || ntok > groupTokMax || m.slots > 0 || kernels.IsFloat(m.q) || g.NoRagGroup {
 		return mv{}, false
 	}
@@ -637,6 +641,8 @@ func (g *devTier) groupKern(m mv, ntok, R int, epi groupEpi, act kernels.ActKind
 // -- or nil where the three cannot share one (fuseQKV's conditions, less the
 // one on decode's own split: this kernel always reduces in the group).
 func (g *devTier) groupQKV(l *layer, ntok, R int) (segLaunch, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	if ntok < 2 || ntok > groupTokMax || g.NoRagGroup || g.NoRagFuse || g.NoSegFuse ||
 		l.mla || l.linear || l.nonCausal || l.wq == nil || l.wk == nil || l.wv == nil {
 		return segLaunch{}, false
@@ -709,6 +715,8 @@ type segShapeKey struct {
 // Tok x Rowt tile divides the grid, so without the split a narrow projection
 // (1024 rows) runs nearly as long as one fourteen times its work.
 func (g *devTier) dot4Split(m mv, ntok, tok, rowt, split int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	if split < 1 {
 		split = 1
 		for m.rows/rowt*(ntok/tok)*split < 1<<16 && split < 64 {
@@ -771,6 +779,8 @@ func (g *devTier) dot4Split(m mv, ntok, tok, rowt, split int) (mv, bool) {
 // is remembered. On a Volta-class card it is ~2.3x the dp4a twin (MT=2 NT=4,
 // swept).
 func (g *devTier) voltaMV(m mv, ntok int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	if g.NoVolta || !(g.mmaOff || g.NoMMA) || m.slots > 0 || !kernels.Volta70OK(m.q) {
 		return mv{}, false
 	}
@@ -871,6 +881,8 @@ var tileGemms = []kernels.TileGemm{
 // a refused compile per shape on every other device. A Metal refusal is
 // recorded once (tileOff): it is a property of the device, not the shape.
 func (g *devTier) tileMV(m mv, ntok int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	if g.tileOff || g.NoVolta || g.dev.API() != "msl" || m.slots > 0 || !kernels.Volta70OK(m.q) {
 		return mv{}, false
 	}
@@ -939,6 +951,8 @@ var voltaTiles = []kernels.VoltaTile{
 // keeping a double-buffered 128x128 block at 32 KiB. k is split only where the
 // grid is thin (kb0Split); a well-filled grid is fastest unsplit.
 func (g *devTier) voltaGemm(m mv, ntok int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	sub, _, _, _ := kernels.Layout(m.q)
 	kbN := max(32/sub, 1)
 	for _, tl := range voltaTiles {

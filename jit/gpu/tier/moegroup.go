@@ -328,6 +328,8 @@ func (g *devTier) sm70() bool {
 // kernels.GemmTile -- Metal's simdgroup_matrix -- asked by name as tileMV asks
 // for the dense one, and off once the device has refused a tile.
 func (g *devTier) tileMoE() bool {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	return !g.tileOff && !g.NoVolta && !g.NoVoltaMoE && g.dev.API() == "msl"
 }
 
@@ -402,6 +404,8 @@ func (v moeVoltaMV) groups(used int) int { return v.rowBlocks * used }
 // moeKern is ragKerns' lookup, compiling on a miss. A failed compile is kept
 // as nil, so the next ask is a lookup too.
 func (g *devTier) moeKern(key moeKernKey, why string, mk func() (*ir.Kernel, error)) backend.Kernel {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	if c, hit := g.ragKerns[key]; hit {
 		return c
 	}
@@ -435,6 +439,8 @@ func (g *devTier) moeKern(key moeKernKey, why string, mk func() (*ir.Kernel, err
 // the same activation conversions and the same grid order, so emitGroupedMoE
 // launches either one through moeVoltaMV.
 func (g *devTier) voltaGroupedMV(m mv, bank, np, unit int, bias bool, nsrc int) (moeVoltaMV, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	vk := moeVoltaKey{q: m.q, k: m.k, rows: m.rows, bank: bank, np: np, unit: unit, nsrc: nsrc, bias: bias}
 	if v, hit := g.moeVolta[vk]; hit {
 		return v, v.kern != nil
@@ -537,6 +543,8 @@ func (g *devTier) moeFloatHalf(m *moeGroup, p *nn.LayerPlan) bool {
 // passes in the scale-plane slot (kernels.MatVec), column j at j*k, as the
 // int8 one is read.
 func (g *devTier) groupedMV(m mv, bank, np int) (backend.Kernel, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	key := moeKernKey{kind: "grouped", q: m.q, k: m.k, rows: m.rows, bank: bank, np: np}
 	if c, hit := g.ragKerns[key]; hit {
 		return c, c != nil

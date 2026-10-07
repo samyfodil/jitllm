@@ -159,18 +159,14 @@ type sessReq struct {
 
 func (r *sessReq) call() {
 	// The legacy stream and a queue's non-blocking stream are not ordered
-	// against each other: with queues open, the session starts after
-	// everything already queued and has landed when it returns, so a queue's
-	// later work reads what it wrote. A failed synchronise is a sticky
-	// context error, which the session's own first call reports.
-	queues := r.c.hasQueues()
-	if queues {
-		cuda.Sync()
-	}
+	// against each other: with queues open, the session's work has landed
+	// when it returns, so a queue's later work reads what it wrote. Only the
+	// legacy stream is waited for, not the queues, which run on. A failed
+	// synchronise is a sticky context error the next call reports.
 	r.s = cudaSession{c: r.c}
 	r.f(&r.s)
-	if queues {
-		cuda.Sync()
+	if r.c.hasQueues() {
+		cuda.SyncLegacy()
 	}
 }
 
@@ -826,7 +822,7 @@ func (b *cudaBuf) WriteAt(off int, p []byte) error {
 		// stream that does not wait for the legacy one, could read the old
 		// ones.
 		if err == nil && queues {
-			err = cuda.Sync()
+			err = cuda.SyncLegacy()
 		}
 	})
 	return err
