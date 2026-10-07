@@ -800,6 +800,30 @@ runs 0.987 with IQR/median 0.134, over the 0.10 gate; one pass. Not a clean
 RULE 2 ratio: the self-control is dispersed and the comparison was not run
 twice.
 
+### Kimi-K3: everything stacked (k3-streaming, final)
+
+Same box, container and prompt, 64 tokens, runs back to back, one each. VRAM
+is the per-card peak from `nvidia-smi -l 2` in MiB.
+
+| run | prompt | decode s/token | tok/s | decode B/token | peak RSS | VRAM per card |
+|---|---|---|---|---|---|---|
+| `-devices cpu` | 59.4 s | 4.34 | 0.23 | 4.98 GB | 416 GB | -- |
+| `-devices cuda`, default (auto-stream, hybrid experts), trial off | 25.9 s | **2.44** | 0.41 | 4.86 GB | 407 GB | 13.3-15.0 G on all 8 |
+| `-devices cuda`, `JITLLM_EXPERTS=host` (hybrid forced) | 26.1 s | 2.85 | 0.35 | 5.38 GB | 418 GB | 13.4-15.0 G on all 8 |
+| `-devices cuda`, `JITLLM_EXPERTS=card` (sheets forced) | 39.8 s | 6.64 | 0.15 | 4.93 GB | 418 GB | 0.3-15.9 G |
+
+The cpu and sheets rows are from the binary before the last two commits
+(fd1989f0's predecessor); the two hybrid rows from the one after the spread fix.
+
+**Paired, in one process (the stream trial, ABBA runs of 16 tokens, 10 quads,
+900 tokens, warm quads 2-10):** A/A (the placement against itself through the
+same migrations) median **1.001**, IQR/median **0.111** -- over the 0.10 gate.
+Hybrid / host, pass 1 median **1.935** (IQR/median 0.218), pass 2 **1.921**
+(0.187). The two passes agree and the A/A sits at 1.00, but the A/A's own
+dispersion fails RULE 2's gate (the hybrid arm's runs spread 0.55-0.92 tok/s
+against the host's 0.37-0.41), so this is **not** a RULE 2 ratio. With 8-token
+runs the A/A read 0.993 at 0.118.
+
 ## ★ THE V100 BOARD (sweep5, one pass, main at c07936d + fixes)
 
 Host: the 8x V100 server, 2x Xeon E5-2680 v4, 8x Tesla V100-SXM2-16GB (sm_70), CUDA.

@@ -3010,6 +3010,20 @@ off-card one, and whether that beats the host is measured.
 - **Tuned constants.** The page-locked half and the direct-send threshold are
   measured per device after the group count, on one ladder tuner
   (`streamtune.go`), each pinned by its `Config` field.
+- **The paired comparison did not pass its self-control.** The stream trial
+  grew an A/A arm (`WithStreamTrialAA`): the placement against itself, every
+  change of arm a migration. On Kimi-K3 with 8-token runs it read 0.993 at
+  IQR/median 0.118, with 16-token runs 1.001 at 0.111 -- centred, so no slot
+  bias, but over the gate both times, because the hybrid arm's own runs spread
+  0.55-0.92 tok/s (the host arm holds 0.37-0.41). The A/B came out 1.935 and
+  1.921 in two passes. What would tighten it is the hybrid arm's variance: its
+  host expert reads at a long run are evictions of the 393 GiB budget, and a run
+  that lands on one is slow. No ratio is quoted (docs/perf/current.md).
+- **kimi-k3-in-c on this box is still not possible inside the floor.** It reads
+  the 1.56 TB safetensors checkpoint plus a 109 GB packed trunk from local disk
+  (O_DIRECT); the RAID has 237 GiB free and must keep 60 GiB, so at most ~177
+  GiB could be used. No reduced or streamed mode of it reads weights from
+  anywhere but that local tree. Nothing was deleted for it.
 
 ## GPU.Layers' head-on-another-device arm is dead code
 
