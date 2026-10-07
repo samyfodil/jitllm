@@ -4,6 +4,7 @@
 package config
 
 import (
+	"github.com/samyfodil/jitllm/common/api"
 	"github.com/samyfodil/jitllm/common/catalog"
 	"github.com/samyfodil/jitllm/common/session"
 
@@ -55,6 +56,10 @@ type Config struct {
 	// NoKVCache turns off the prompt cache kept on disk between runs.
 	NoKVCache bool `json:"no_kv_cache"`
 
+	// API serves jitllm's API (common/api) while the app runs, on APIAddr.
+	API     bool   `json:"api"`
+	APIAddr string `json:"api_addr"`
+
 	path string
 }
 
@@ -67,6 +72,7 @@ func DefaultConfig() *Config {
 		DeviceSpec: "auto",
 		MaxSeq:     4096,
 		Sampling:   session.DefaultSampling(),
+		APIAddr:    api.DefaultAddr,
 	}
 }
 

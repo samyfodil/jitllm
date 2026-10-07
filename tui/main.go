@@ -43,6 +43,11 @@ func main() {
 	defer e.Close()
 
 	r := newRoot(f, e, cfg, dirs)
+	defer func() {
+		if r.env.api != nil {
+			r.env.api.Close()
+		}
+	}()
 	probeMachine(r.env)
 	if flag.NArg() == 1 {
 		r.cur = scrChat

@@ -116,6 +116,9 @@ type Engine struct {
 
 	seq atomic.Uint64
 
+	// modelDir is Config.ModelDir until SetModelDir moves it.
+	modelDir atomic.Pointer[string]
+
 	// The host budget the models divide (budget.go), guarded by mu: total is
 	// read once, order is the models in load order, and priority gives the
 	// favored model all but an eighth.
@@ -145,6 +148,18 @@ func New(cfg Config) *Engine {
 		aliases:  map[string]string{},
 	}
 }
+
+// ModelDir is where ListModels scans and a bare name resolves.
+func (e *Engine) ModelDir() string {
+	if d := e.modelDir.Load(); d != nil {
+		return *d
+	}
+	return e.cfg.ModelDir
+}
+
+// SetModelDir moves ModelDir, for a front end whose model folder is a
+// setting the person can change while the engine runs.
+func (e *Engine) SetModelDir(dir string) { e.modelDir.Store(&dir) }
 
 // Config returns the configuration the Engine was built with, its defaults
 // filled in.
@@ -342,7 +357,7 @@ func (e *Engine) ResolvePath(p string) string {
 	if filepath.IsAbs(p) {
 		return p
 	}
-	return filepath.Join(e.cfg.ModelDir, p)
+	return filepath.Join(e.ModelDir(), p)
 }
 
 // LoadModel opens a container and, when devices were named, the tier that will
@@ -1369,7 +1384,7 @@ type ModelFileInfo struct {
 // their model is missing.
 func (e *Engine) ScanModels(dir string) ([]ModelFileInfo, string, error) {
 	if dir == "" {
-		dir = e.cfg.ModelDir
+		dir = e.ModelDir()
 	}
 	ents, err := os.ReadDir(dir)
 	if err != nil {

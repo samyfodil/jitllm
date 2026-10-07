@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/samyfodil/jitllm/common/api"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -55,6 +56,21 @@ type env struct {
 	// frame counts animation ticks; spin is the one spinner every page shows.
 	frame int
 	spin  spinner.Model
+	// api is the API this app serves, nil when it is off.
+	api *api.Server
+}
+
+// syncAPI starts, restarts or stops the API to match the settings, and
+// returns its status line. The API serves the terminal's own engine, and its
+// model folder is the first of the terminal's.
+func (env *env) syncAPI() string {
+	srv := env.e.Server()
+	if len(env.dirs) > 0 {
+		srv.SetModelDir(env.dirs[0])
+	}
+	var msg string
+	env.api, msg = api.Toggle(env.api, env.cfg.API, env.cfg.APIAddr, srv)
+	return msg
 }
 
 // Messages a page sends the root.

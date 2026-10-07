@@ -114,7 +114,7 @@ func (s *TelemetryService) GetServerInfo(ctx context.Context, req *connect.Reque
 	}
 	return connect.NewResponse(&v1.GetServerInfoResponse{Info: &v1.ServerInfo{
 		Version:           s.E.cfg.Version,
-		ModelDirectory:    s.E.cfg.ModelDir,
+		ModelDirectory:    s.E.ModelDir(),
 		StartedUnixMillis: s.E.started.UnixMilli(),
 		UptimeMillis:      millis(time.Since(s.E.started)),
 		AvailableBackends: backends,

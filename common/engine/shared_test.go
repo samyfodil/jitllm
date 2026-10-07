@@ -4,9 +4,12 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"testing"
 	"time"
 
+	"github.com/samyfodil/jitllm/common/api"
 	"github.com/samyfodil/jitllm/common/session"
 	"github.com/samyfodil/jitllm/server"
 )
@@ -48,5 +51,38 @@ func TestTheAppsModelIsTheServersModel(t *testing.T) {
 	pump(t, sh, 90*time.Second, "the turn", func() bool { return !sh.Store.Busy.Get() })
 	if tr := sh.Store.Turn(reply); tr.Tokens == 0 {
 		t.Fatalf("the chat produced no tokens after the server's request: %+v", tr)
+	}
+}
+
+// Served as the API, the app's engine lists the app's model over HTTP: the
+// front end's toggle serves this engine, not one of its own.
+func TestTheAPIServesTheAppsModel(t *testing.T) {
+	e, sh := loadFor(t, func(st *testStore) { st.DeviceSpec.Set("cpu") })
+	if !sh.Store.Loaded.Get() {
+		t.Fatalf("the model did not load: %s", sh.Store.Problem.Get().Title)
+	}
+	s, err := api.Start("127.0.0.1:0", e.Server())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	r, err := http.Get("http://" + s.Addr() + "/v1/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Body.Close()
+	var list struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	// The loaded model, under its id and under its file name, which the shim
+	// resolves to the same model.
+	lm := e.Server().Models()[0]
+	if len(list.Data) != 2 || list.Data[0].ID != lm.ID() || list.Data[1].ID != lm.Name() {
+		t.Fatalf("/v1/models lists %+v, want the app's model as %q and %q", list.Data, lm.ID(), lm.Name())
 	}
 }

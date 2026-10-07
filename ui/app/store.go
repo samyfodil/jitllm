@@ -134,6 +134,9 @@ type Store struct {
 	// --- settings ---
 	// KVCache is whether prompts are cached on disk between runs.
 	KVCache state.Signal[bool]
+	// API is whether the app serves jitllm's API, on APIAddr (ServeAPI).
+	API     state.Signal[bool]
+	APIAddr state.Signal[string]
 	// ModelDirs is the folders models are found in; the first is where
 	// downloads go. Write it through Shell.SetModelDirs, which keeps Cfg too.
 	ModelDirs state.Signal[[]string]
@@ -208,6 +211,8 @@ func NewStore() *Store {
 		ShowTuning: state.NewSignal(true),
 		Loads:      state.NewSignal([]Loading(nil)),
 		KVCache:    state.NewSignal(true),
+		API:        state.NewSignal(false),
+		APIAddr:    state.NewSignal(""),
 		ModelDirs:  state.NewSignal([]string(nil)),
 
 		Chats:   state.NewSignal([]ChatInfo{{}}),
