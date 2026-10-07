@@ -51,7 +51,12 @@ type ragStep struct {
 // softmaxes over its own count and ends in its own argmax. N sequences cost
 // one pass over the weights instead of N.
 func (g *devTier) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
-	return g.layersRows(lo, hi, &ragStep{pos: pos, slot: slot, seqLen: seqLen}, x, cs, csSWA, head)
+	v := g.as(0)
+	if v == nil {
+		return false
+	}
+	defer v.done()
+	return v.layersRows(lo, hi, &ragStep{pos: pos, slot: slot, seqLen: seqLen}, x, cs, csSWA, head)
 }
 
 // layersRows is LayersRows for rs's rows, each of its own session where
@@ -340,7 +345,7 @@ func (g *GPU) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA [
 // layersRows is LayersRows for session self, with each row's session, or nil
 // for self's.
 func (g *GPU) layersRows(self uint64, lo, hi int, pos, slot []int, sid []uint64, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
-	g.resetRecSteps()
+	g.resetRecSteps(self)
 	g.mu.Lock()
 	rs, ok := g.runsInto(g.runBuf, lo, hi)
 	g.runBuf = nil
@@ -369,12 +374,22 @@ func (g *GPU) layersRows(self uint64, lo, hi int, pos, slot []int, sid []uint64,
 			h = head
 		}
 		// A step of its own on each device: its rows' grouping is the
-		// device's. The ragStep is the device's own, its slices reused.
-		st := &r.dev.stepRS
+		// device's. The ragStep is the session's on that device, its slices
+		// reused.
+		v := r.dev.as(self)
+		if v == nil {
+			why = fmt.Sprintf("%s: no scratch for this session: %s", label(r.dev.dev, r.dev.ord), r.dev.stats().LastErr)
+			g.mu.Lock()
+			g.rowsErr = why
+			g.mu.Unlock()
+			return false
+		}
+		st := &v.stepRS
 		st.pos, st.slot, st.sid, st.self, st.seqLen = pos, slot, sid, self, seqLen
 		st.again = slices.ContainsFunc(rs[:i], func(o run) bool { return o.dev == r.dev })
 		c0, c1 := r.tables(cs, csSWA)
-		ok := r.dev.layersRows(r.lo, r.hi, st, x, c0, c1, h)
+		ok := v.layersRows(r.lo, r.hi, st, x, c0, c1, h)
+		v.done()
 		// The runs go too: a step that groups none (no linear block in its
 		// range, one session) would otherwise hand recDesc the last step's,
 		// whose rows index past this one's.
@@ -405,7 +420,7 @@ func (s *gpuSession) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, 
 // repeat); every row's K and V are written before any row attends, so a
 // chunk's rows see each other causally.
 func (s *gpuSession) LayersSessions(lo, hi int, sess []nn.LayerDevice, pos []int, x, cs, csSWA []float32, head *nn.Head) bool {
-	s.g.resetRecSteps()
+	s.g.resetRecSteps(s.sid)
 	// The session's own lists, reused: a session steps from one goroutine.
 	s.sidBuf = slices.Grow(s.sidBuf[:0], len(sess))[:len(sess)]
 	s.slotBuf = slices.Grow(s.slotBuf[:0], len(sess))[:len(sess)]
@@ -1092,6 +1107,12 @@ func (g *devTier) ResetRecRows(rows []int) bool {
 // session: a row a new sequence takes must not start from the last one's
 // summary. It is a write per buffer, outside any submission.
 func (g *devTier) resetRecRows(sid uint64, rows []int) bool {
+	v := g.as(sid)
+	if v == nil {
+		return false
+	}
+	defer v.done()
+	g = v
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	st, seated := g.recSeats[sid]

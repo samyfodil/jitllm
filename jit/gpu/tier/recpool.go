@@ -604,6 +604,12 @@ func (g *devTier) RecMark() {
 // recMark records the half each of session sid's linear blocks reads
 // (nn.RecRewinder).
 func (g *devTier) recMark(sid uint64) {
+	v := g.as(sid)
+	if v == nil {
+		return
+	}
+	defer v.done()
+	g = v
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	for _, l := range g.layers {
@@ -625,6 +631,12 @@ func (g *devTier) RecRewind() bool {
 // of the delta state, written in place through recNext), it is gone: false,
 // with nothing changed. Every block is checked before any is flipped.
 func (g *devTier) recRewind(sid uint64) bool {
+	v := g.as(sid)
+	if v == nil {
+		return false
+	}
+	defer v.done()
+	g = v
 	back, ok := g.rewindable(sid)
 	if !ok {
 		return false

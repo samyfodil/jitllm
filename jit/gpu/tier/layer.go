@@ -1399,6 +1399,10 @@ func (l *layer) kvOf(sid uint64) *kvPair {
 // blockScratch is the per-call staging every layer shares, since only one runs
 // at a time.
 type blockScratch struct {
+	// headShared says head, mvHead, hNorm, hNormB and headCap are another
+	// scratch's -- lane0's, borrowed by a clone (shareHead) -- and are not
+	// freed or refunded with this one.
+	headShared bool
 	// walked is g.layerGen+1 at prepBatch's last successful layer walk for
 	// this scratch: until a block is placed or released, the walk would find
 	// what it found then (0: never walked).
@@ -2279,6 +2283,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			return false
 		}
 	} else if g.bs == nil {
+		g.shapeChanged()
 		if g.bs = g.initScratch(sp, 1); g.bs == nil {
 			return false
 		}
@@ -5348,6 +5353,7 @@ func (g *devTier) headScratch(p *nn.LayerPlan) bool {
 	}
 	g.initKVCap(p)
 	g.bs = g.initScratch(p, 1)
+	g.shapeChanged()
 	return g.bs != nil
 }
 
@@ -5355,6 +5361,7 @@ func (g *devTier) headScratch(p *nn.LayerPlan) bool {
 // norm, its bias, the logits and the softcap -- and refunds it, leaving the
 // projection's resident to whoever holds it. Callers hold g.mu.
 func (g *devTier) dropHeadScratch(bs *blockScratch) {
+	g.shapeChanged()
 	// A head that was dropped (its resident failed) replaces the cap it
 	// compiled, and must not leak the one before.
 	if bs.headCap != nil {
@@ -5483,6 +5490,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	bs.hRaw = make([]byte, h.W.Rows*4)
 	bs.hOut = unsafe.Slice((*float32)(unsafe.Pointer(&bs.hRaw[0])), h.W.Rows)
 	bs.head, bs.mvHead = r, mv{kern: kern, red: red, rows: h.W.Rows, split: split}
+	g.shapeChanged()
 	g.headSrc, g.headNormHost = &h.W.Data[0], slices.Clone(h.Norm)
 	g.charge(uint64(len(f)*4 + h.W.Rows*4))
 	bs.headEmbeds, bs.embScale = h.Embeds, h.EmbdScale
@@ -5539,9 +5547,17 @@ func (g *devTier) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.He
 // draining. Those launches are captured once and replayed (a CUDA graph pays the
 // per-launch cost once); see graphKey for why a decode token's sequence is
 // stable enough to capture, and cuda/graph.go for the mechanism.
+//
+// It runs in session sid's view of the device, holding a lane for the call
+// (devsess.go); a call reached from inside another keeps the lane it holds.
 func (g *devTier) layersFor(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
-	ok := g.layersCall(sid, lo, hi, pos, n, x, cs, csSWA, head)
-	g.dropEmbed()
+	v := g.as(sid)
+	if v == nil {
+		return false
+	}
+	defer v.done()
+	ok := v.layersCall(sid, lo, hi, pos, n, x, cs, csSWA, head)
+	v.dropEmbed()
 	return ok
 }
 
@@ -8530,6 +8546,12 @@ func (g *devTier) ReserveKV(pos int) bool {
 // captured graph, which deadlocks CUDA inside a Session. A restored prefix
 // arrives with no submission at all.
 func (g *devTier) reserveKV(sid uint64, pos int) bool {
+	v := g.as(sid)
+	if v == nil {
+		return false
+	}
+	defer v.done()
+	g = v
 	if pos <= 0 {
 		return true
 	}
@@ -8557,6 +8579,12 @@ func (g *devTier) TrimKV(pos int) bool {
 // positions or anyone's; kvCompact gives them to the budget when something
 // needs the room. They are room all the same, so it is announced.
 func (g *devTier) trimKV(sid uint64, pos int) bool {
+	v := g.as(sid)
+	if v == nil {
+		return false
+	}
+	defer v.done()
+	g = v
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.kvp == nil || !g.kvp.trimSeq(seqID{sid, 0}, pos) {
@@ -8569,9 +8597,9 @@ func (g *devTier) trimKV(sid uint64, pos int) bool {
 // dropSession frees everything session sid holds on this device: its history
 // and its recurrent state on every block.
 func (g *devTier) dropSession(sid uint64) {
-	delete(g.hostFns, sid)
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	delete(g.hostFns, sid)
 	// The crossing sample is this session's too, and session ids never repeat,
 	// so a map left to grow is a leak of one small struct per closed State.
 	delete(g.mv, sid)
@@ -8583,14 +8611,9 @@ func (g *devTier) dropSession(sid uint64) {
 		// A captured launch sequence names the buffers just freed.
 		g.dropGraph()
 	}
-	// Its own recordings name nothing that will be read again either.
-	for k, r := range g.recs {
-		if k.sid == sid {
-			g.stale = append(g.stale, r)
-			delete(g.recs, k)
-		}
-	}
-	g.freeStale()
+	// Its own recordings name nothing that will be read again either, in
+	// whichever lane they were made, and its state on this device goes.
+	g.forgetSess(sid)
 	// Its seat in the recurrent pools, and a pool it was the last to hold.
 	g.recTidy()
 	// Its pages are free now and stay in the pool for the next session;
@@ -8653,6 +8676,12 @@ func (g *devTier) MigrateRec(li int, conv, state []float32, toDevice bool) bool 
 // reads half cur, the state as of the last completed token, at the session's
 // seat in the block's pool.
 func (g *devTier) migrateRec(sid uint64, li int, conv, state []float32, toDevice bool) bool {
+	v := g.as(sid)
+	if v == nil {
+		return false
+	}
+	defer v.done()
+	g = v
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	l := g.layers[li]
@@ -8766,6 +8795,12 @@ func (g *devTier) MigrateKV(li int, k, v []float32, pos int, toDevice bool) bool
 // paged history here -- a tower, whose keys live for one encode -- has
 // nothing to move.
 func (g *devTier) migrateKV(sid uint64, li int, k, v []float32, pos int, toDevice bool) bool {
+	sv := g.as(sid)
+	if sv == nil {
+		return false
+	}
+	defer sv.done()
+	g = sv
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	l := g.layers[li]
@@ -9253,11 +9288,15 @@ func (g *devTier) capped(p *nn.LayerPlan) nn.LayerPlan {
 func (g *devTier) ensureKVCap(pos int) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if !g.paged || g.kvCap >= g.maxSeqAsked || g.bs == nil {
+	// Per lane: a lane built before the growth still has the old bound,
+	// whichever lane grew first.
+	if !g.paged || g.bs == nil || g.kvCap >= g.maxSeqAsked && g.bs.p.MaxSeq >= g.maxSeqAsked {
 		return true
 	}
 	g.kvCap = g.maxSeqAsked
-	g.dropGraph()
+	// The recordings made in this lane name the scratch about to go; no
+	// other lane's changes.
+	g.dropLaneGraph()
 	// Every scratch set (gemma4.go) is built at the capacity, not only the
 	// one in use: a set left at the old bound refuses the next position.
 	home := g.geoCur
@@ -9300,6 +9339,7 @@ func (g *devTier) rebuildScratch(plan *nn.LayerPlan) bool {
 		g.dropBatch(w)
 	}
 	g.bs = fresh
+	g.shapeChanged()
 	// The reserved widths went with the old scratches: built again at the new
 	// shape, here, because a capacity growth rebuilds outside any placement.
 	g.reserveScratch(plan, 0)

@@ -58,7 +58,7 @@ func TestASubmissionIsCutAtItsRunTimeBudget(t *testing.T) {
 	}
 	// An unmeasured row count from probeRows up is probed with one block;
 	// a token is not.
-	d := &devTier{Config: &Config{}}
+	d := newDevice(&devShared{Config: &Config{}})
 	if got := d.submitSpan(probeRows); got != 1 {
 		t.Fatalf("an unmeasured %d-row submission may take %d blocks, want a 1-block probe", probeRows, got)
 	}

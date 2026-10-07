@@ -17,7 +17,7 @@ func TestDeclineSizeRefusesOnlyWhatNoDeviceHolds(t *testing.T) {
 	mk := func(lims ...uint64) *GPU {
 		g := &GPU{Config: &Config{}}
 		for _, l := range lims {
-			g.devs = append(g.devs, &devTier{Config: g.Config, limit: l})
+			g.devs = append(g.devs, newDevice(&devShared{Config: g.Config, limit: l}))
 		}
 		return g
 	}
@@ -55,7 +55,7 @@ func TestAutoStreamMarksOnlyWhatABaseFits(t *testing.T) {
 	const gib = 1 << 30
 	g := &GPU{Config: &Config{}}
 	for range 2 {
-		g.devs = append(g.devs, &devTier{Config: g.Config, limit: 14 * gib})
+		g.devs = append(g.devs, newDevice(&devShared{Config: g.Config, limit: 14 * gib}))
 	}
 	if !g.AutoStream(5, 16*gib, 15*gib, 896, 16, 93, 0) {
 		t.Fatal("a 1 GiB base on 14 GiB cards was not streamed")
@@ -85,7 +85,7 @@ func TestAutoStreamMarksOnlyWhatABaseFits(t *testing.T) {
 // the cache would overwrite with slots; on gpt-oss-20b that parted from the
 // host at the thirteenth token.
 func TestBiasedExpertsKeepThePlainBank(t *testing.T) {
-	g := &devTier{Config: &Config{}, limit: 1 << 40}
+	g := newDevice(&devShared{Config: &Config{}, limit: 1 << 40})
 	if n := g.cacheSlotsFor(&nn.LayerPlan{}, nil, 64, 4, 32, true); n != 4 {
 		t.Fatalf("a biased bank got a %d-sheet cache", n)
 	}

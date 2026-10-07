@@ -1225,6 +1225,12 @@ func (g *devTier) MigrateKVSeq(li, base int, k, v []float32, pos int, toDevice b
 // migrateKVSeq moves layer li's history for session sid's sequence at
 // base between host and device (nn.SeqKVDevice).
 func (g *devTier) migrateKVSeq(sid uint64, li, base int, k, v []float32, pos int, toDevice bool) bool {
+	sv := g.as(sid)
+	if sv == nil {
+		return false
+	}
+	defer sv.done()
+	g = sv
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !g.paged {
@@ -1252,6 +1258,12 @@ func (g *devTier) MigrateEnt(li, base int, ent []float32, n int, toDevice bool) 
 // sequence at base between host and device (nn.EntDevice): n entries of the
 // block's entry row, [n][row] float32.
 func (g *devTier) migrateEnt(sid uint64, li, base int, ent []float32, n int, toDevice bool) bool {
+	v := g.as(sid)
+	if v == nil {
+		return false
+	}
+	defer v.done()
+	g = v
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !g.paged {
@@ -1276,6 +1288,12 @@ func (g *devTier) ReserveKVSeqs(bases, ends []int) bool {
 // reserveKVSeqs takes the pages session sid's sequences at bases need
 // for positions up to ends (nn.SeqKVDevice).
 func (g *devTier) reserveKVSeqs(sid uint64, bases, ends []int) bool {
+	v := g.as(sid)
+	if v == nil {
+		return false
+	}
+	defer v.done()
+	g = v
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !g.paged {

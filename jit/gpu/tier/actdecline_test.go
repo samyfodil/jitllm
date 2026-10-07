@@ -33,7 +33,7 @@ func TestEveryActivationHasADeviceKernel(t *testing.T) {
 // TestDeclineReasonReachesLastErr: prepLayer must record its decline reason, or
 // a block sent to the host looks exactly like one the tier never saw.
 func TestDeclineReasonReachesLastErr(t *testing.T) {
-	g := &devTier{}
+	g := newDevice(&devShared{})
 	p := visionPlan()
 	p.Act = nn.ActSwiGLUOAI // a gated kind in an ungated block: still declined
 	// The recover is part of the assertion: with no device behind this

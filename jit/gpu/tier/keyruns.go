@@ -25,24 +25,27 @@ import (
 // SetKeyRuns records the runs for the Layers calls that follow on every device:
 // a run crossing a device seam is honoured on both sides.
 func (g *GPU) SetKeyRuns(full, windowed []nn.KeyRun) bool {
+	return g.setKeyRuns(0, full, windowed)
+}
+
+// setKeyRuns is SetKeyRuns for session sid. The full runs are the session's:
+// its calls' rows are its own sequence's. The windows are staged in the
+// tower's set, which is one per device (visrows.go) and runs one picture at a
+// time.
+func (g *GPU) setKeyRuns(sid uint64, full, windowed []nn.KeyRun) bool {
 	g.mu.Lock()
 	ds := g.devs
 	g.mu.Unlock()
 	for _, d := range ds {
 		d.mu.Lock()
-		d.bidir = append(d.bidir[:0], full...)
+		ss := d.sessOf(sid)
+		ss.bidir = append(ss.bidir[:0], full...)
 		d.mu.Unlock()
 		if !d.setWindows(windowed) {
 			return false
 		}
 	}
 	return true
-}
-
-// SetKeyRuns forwards to the tier: the runs are the call's, not the session's
-// history.
-func (s *gpuSession) SetKeyRuns(full, windowed []nn.KeyRun) bool {
-	return s.g.SetKeyRuns(full, windowed)
 }
 
 // bidirCount is row r's key count under the runs, at position pos+r: the end

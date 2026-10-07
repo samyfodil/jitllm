@@ -130,7 +130,7 @@ func (s *gpuSession) MigrateEnt(li, base int, ent []float32, n int, toDevice boo
 // RecSteps forwards the device's count; see devTier.recSteps. It takes no
 // session lock because the caller reads it immediately after its own Layers
 // call returned, on the same goroutine.
-func (s *gpuSession) RecSteps() int { return s.g.RecSteps() }
+func (s *gpuSession) RecSteps() int { return s.g.recStepsOf(s.sid) }
 
 // PipelineDepth forwards the GPU's answer (nn.Pipeliner).
 func (s *gpuSession) PipelineDepth() int { return s.g.PipelineDepth() }
@@ -178,6 +178,13 @@ func (s *gpuSession) Detach() {
 	}
 }
 
+// SetKeyRuns records the runs for this session's calls that follow; see
+// GPU.SetKeyRuns.
+func (s *gpuSession) SetKeyRuns(full, windowed []nn.KeyRun) bool {
+	defer s.leave(s.enter())
+	return s.g.setKeyRuns(s.sid, full, windowed)
+}
+
 // HeldBytes is this session's history on every device (nn.Session).
 func (s *gpuSession) HeldBytes() uint64 {
 	s.g.mu.Lock()
@@ -199,7 +206,7 @@ func (s *gpuSession) ReleaseLayers(lo, hi int) {
 // head, under this session's device locks like any other call.
 func (s *gpuSession) EmbedRows(ids []int32, dst []float32) bool {
 	defer s.leave(s.enter())
-	return s.g.EmbedRows(ids, dst)
+	return s.g.embedRows(s.sid, ids, dst)
 }
 
 func (s *gpuSession) PrepHead(h *nn.Head) bool {

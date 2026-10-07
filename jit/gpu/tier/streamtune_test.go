@@ -10,7 +10,7 @@ import (
 // stated Config.StreamGroups is never tuned.
 func TestGroupTunerClimbsToTheKnee(t *testing.T) {
 	cost := map[int]time.Duration{1: 180, 2: 120, 4: 100, 8: 130, 16: 200}
-	g := &devTier{Config: &Config{}}
+	g := newDevice(&devShared{Config: &Config{}})
 	for i := 0; i < 400; i++ {
 		n := g.streamGroups(3)
 		g.fillDone(cost[n] * time.Millisecond)
@@ -27,7 +27,7 @@ func TestGroupTunerClimbsToTheKnee(t *testing.T) {
 	if !g.ftune.half.settled() || g.StreamPinHalfTuned != 12<<20 && g.StreamPinHalfTuned != 8<<20 {
 		t.Fatalf("the half settled %v on %d", g.ftune.half.settled(), g.StreamPinHalfTuned)
 	}
-	f := &devTier{Config: &Config{StreamGroups: 2}}
+	f := newDevice(&devShared{Config: &Config{StreamGroups: 2}})
 	for i := 0; i < 50; i++ {
 		f.fillDone(cost[f.streamGroups(3)] * time.Millisecond)
 	}

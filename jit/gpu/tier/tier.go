@@ -1242,9 +1242,14 @@ func (g *devTier) refund(n uint64) {
 	g.settleRounding()
 }
 
-// devTier is one device's tier: everything that is a device address, an account
-// of device memory, or a cache keyed on either.
-type devTier struct {
+// devShared is what one device's tier holds for every session: everything
+// that is a device address, an account of device memory, or a cache keyed on
+// either -- the blocks and their residency, the compiled kernels, the paged
+// attention history and the recurrent pools, the budget. What one session's
+// calls write between and during their submissions is its devSess, and the
+// scratch they run in is a lane (devsess.go); a devTier is the three seen
+// together.
+type devShared struct {
 	// layerGen counts blocks placed and released, so work that depends only
 	// on which blocks are here can tell it is still current (prepBatch).
 	layerGen uint64
@@ -1276,17 +1281,21 @@ type devTier struct {
 	copyWG  sync.WaitGroup
 	packEnd int
 	*Config
-	Stats
 	mu sync.Mutex
-	// embPend is the prompt chunk EmbedRows promised and the next submission
-	// gathers (embed.go). Guarded by mu.
-	embPend *embPend
-	// bidir is the full key runs the next causal Layers calls honour
-	// (keyruns.go). Guarded by mu.
-	bidir []nn.KeyRun
-	// winSegs is setWindows' [lo, hi) pairs, kept so a picture's windows
-	// allocate nothing past the first. Guarded by mu.
-	winSegs []int
+	// tot is the device's counters (Stats). A view names them through its
+	// Stats pointer; see devTier.
+	tot Stats
+	// sess is every session's state on this device, the zero session's
+	// included, made at its first call (sessOf). lane0 is the scratch
+	// placement builds and lanes its clones, one more for each call that
+	// found every lane taken (takeLane); laneGen moves whenever lane0 changes
+	// shape, retiring the clones of the old one (devsess.go). dv is the
+	// device's own view: lane0's and the zero session's. Under mu.
+	sess    map[uint64]*devSess
+	lane0   *lane
+	lanes   []*lane
+	laneGen uint64
+	dv      *devTier
 	// tkv is the k/v pair every non-causal block shares and tkvRefs how many
 	// hold it (transientkv.go). Guarded by mu.
 	tkv     *kvPair
@@ -1301,8 +1310,7 @@ type devTier struct {
 	// scratches and the staging -- and explicit the running sum of what
 	// charge and refund moved, which a scratch window subtracts so a weight or
 	// a page charged inside it is not counted twice. winDepth nests windows
-	// (scratch.go). promptW is the prompt width reserved at placement, 0
-	// where none is; stepW the ragged step's.
+	// (scratch.go).
 	scratch  uint64
 	explicit int64
 	// cnt is dev's allocation count, nil where it keeps none: asserted once
@@ -1312,20 +1320,8 @@ type devTier struct {
 	// rounding is the driver's page rounding charged so far (settleRounding).
 	rounding uint64
 	winDepth int
-	promptW  int
-	// geoOther is the scratch set of the attention geometry not in use, and
-	// geoSWA says the set in use is the sliding layers' (Gemma 4); see
-	// gemma4.go. geoUsed says a split plan was ever placed here.
-	// pleHost is the rows' per-layer embedding inputs for the next call
-	// (SetLayerInputs) and pleStage their padded staging.
-	pleHost, pleStage []float32
-	geoSets           map[geoKey]geomSet
-	geoCur            geoKey
-	geoUsed           bool
-	stepW             int
-	// tokIDs is the rows' token ids for the next call (SetTokenIDs), which a
-	// DeepSeek V4 block routing by token reads (ds4.go).
-	tokIDs []int32
+	// geoUsed says a split plan was ever placed here (gemma4.go).
+	geoUsed bool
 	// reserving is set while reserveScratch probes widths, so prepBatch's
 	// refusal of a width over the budget is not counted as a prompt's.
 	reserving bool
@@ -1363,14 +1359,7 @@ type devTier struct {
 	headSrc      *byte
 	headNormHost []float32
 	altNorms     []altNorm
-	// recSteps counts the linear blocks whose emitLinear completed with the
-	// submission still good, for the current Layers call: the measured answer
-	// to "may a failed submission be restarted on the host". Positional proxies
-	// (the run's start index, or "a linear block is placed") are wrong in one
-	// direction or the other.
-	recSteps int
-	// busy serialises calls from different sessions on this device, because
-	// the scratch (g.bs, g.bbs and their geometry sets) is still one per device. See
+	// busy serialises calls from different sessions on this device. See
 	// docs/design/device-sessions.md.
 	busy sync.Mutex
 	// roomGen moves every time this device may have gained room: a refund, or
@@ -1397,59 +1386,42 @@ type devTier struct {
 	actWin int
 	// recCap caches whether sessions can capture: 0 unknown, 1 yes, -1 no.
 	recCap int
-	// sub is the submission layersOnce hands layersSession, subFn the
-	// Session body, built once, and subBytes its staging bytes; see
-	// submitArgs and stagingBytes.
-	sub      submitArgs
-	subFn    func(backend.Session)
-	subBytes stagingBytes
-	// launchTo is the submission's launch target; see launcher.
-	launchTo launchTo
-	// recDescW is recDesc's words between submissions.
-	recDescW []uint32
-	// stepRS is the ragStep GPU.layersRows hands this device, its slices
-	// reused from step to step.
-	stepRS ragStep
-	// mvc and mvcFn are matVec's call and Session body; see mvCall.
-	mvc   mvCall
-	mvcFn func(backend.Session)
-	// recSess and rec are recorderOf's cache.
-	recSess backend.Session
-	rec     backend.Recorder
-	used    uint64
-	limit   uint64
+	// mvc is matVec's call (mvCall), run on the device's view under mu; mvTo
+	// its launch target and mvPart its partial sums. They are matVec's own and
+	// not a lane's: a matvec a host block offers runs while a session's
+	// submission holds whichever lane it took.
+	mvc       mvCall
+	mvTo      launchTo
+	mvPart    backend.Buf
+	mvPartCap int
+	used      uint64
+	limit     uint64
 	// why is where limit came from, in words, for the report.
 	why string
 
 	// Per-call staging, grown as needed and reused: a decode matvec is issued
 	// ~127 times per token, and allocating device memory each time would cost
 	// more than the kernel.
-	aBuf, axBuf, outBuf, partBuf backend.Buf
-	aCap, axCap, outCap, partCap int
-	// f16Buf holds a batched activation as binary16 for the sm_70 tensor-core
-	// matvec (kernels.ActF16 writes it, voltaMV's kernels read it).
-	f16Buf    backend.Buf
-	f16Cap    int
-	xfBuf     backend.Buf // a float weight's activation
-	xfCap     int
-	reduce    map[[2]int]backend.Kernel
-	retunedAt int                           // len(layers) at the last retuneDecode
-	restrides map[[4]int]backend.Kernel     // kernels.Restride by shape; see copyKVAcrossStride
-	segKerns  map[string]backend.Kernel     // kernels.MatVecSegments by shapes; see fuseQKV
-	ragKerns  map[moeKernKey]backend.Kernel // a batched mixture's grouped matvecs (moegroup.go)
-	moeVolta  map[moeVoltaKey]moeVoltaMV    // their tensor-core twins; see voltaGroupedMV
-	ragK      map[ragKey]backend.Kernel     // a ragged step's matvecs; see ragMV
+	aBuf, axBuf, outBuf backend.Buf
+	aCap, axCap, outCap int
+	xfBuf               backend.Buf // a float weight's activation
+	xfCap               int
+	reduce              map[[2]int]backend.Kernel
+	retunedAt           int                           // len(layers) at the last retuneDecode
+	restrides           map[[4]int]backend.Kernel     // kernels.Restride by shape; see copyKVAcrossStride
+	segKerns            map[string]backend.Kernel     // kernels.MatVecSegments by shapes; see fuseQKV
+	ragKerns            map[moeKernKey]backend.Kernel // a batched mixture's grouped matvecs (moegroup.go)
+	moeVolta            map[moeVoltaKey]moeVoltaMV    // their tensor-core twins; see voltaGroupedMV
+	ragK                map[ragKey]backend.Kernel     // a ragged step's matvecs; see ragMV
 	// convK, conv and convN are the convolutional blocks' kernels, their
 	// shared scratch and how many hold it (conv.go).
-	convK     map[convKey]backend.Kernel
-	conv      convScratch
-	convN     int
-	ragSeg    map[segShapeKey]segLaunch // a few-sequence step's q/k/v; see groupQKV
-	argmaxK   backend.Kernel            // kernels.Argmax over the head's rows; see PrepHead
-	argmaxOut backend.Buf
-	rag       *ragStep // the rows of an in-flight LayersRows; see rows.go
-	hostA     []uint32
-	hostAX    []float32
+	convK   map[convKey]backend.Kernel
+	conv    convScratch
+	convN   int
+	ragSeg  map[segShapeKey]segLaunch // a few-sequence step's q/k/v; see groupQKV
+	argmaxK backend.Kernel            // kernels.Argmax over the head's rows; see PrepHead
+	hostA   []uint32
+	hostAX  []float32
 
 	// Host-side scratch, reused rather than allocated per matvec. It is per
 	// device even though it is host memory, because lastX/staged say "the
@@ -1530,15 +1502,6 @@ type devTier struct {
 	// because no kernel bakes a capacity.
 	paged bool
 	kvp   *kvPool
-	// pgSeqs is pagedAppendRows' and ReserveKVSeqs' staging, reused so a
-	// token allocates nothing.
-	pgSeqs []seqEnd
-	pgRows []pagedRow
-	bs     *blockScratch
-	// bbs is the batched-prefill scratch, one per chunk width: a prompt asks
-	// for the full chunk and then a narrower tail, and each width bakes its own
-	// row count into every kernel. See prepBatch.
-	bbs map[int]*blockScratch
 	// mmaOff records that this device has no integer matrix instruction, so the
 	// first refusal is the last: it is a property of the backend, not of a
 	// shape.
@@ -1548,21 +1511,6 @@ type devTier struct {
 	// voltaMoE is the grouped tensor-core mixture's probe (voltaOn): 0 not yet
 	// asked, 1 this device runs it, -1 it does not.
 	voltaMoE int8
-	// graphOff is the tier deciding, not the caller: this backend has no
-	// capture, or a capture failed once. Either way, do not keep asking.
-	graphOff bool
-	// recs is a map, not one slot, because a token can issue more than one
-	// sequence (blocks under {0,gl} and a head-only call under {gl,gl}); one
-	// slot would have them evict each other, a capture per call.
-	recs map[graphKey]backend.Recording
-	// recUsed is when each recording last ran, on the recTick clock, so the
-	// per-session bound (maxGraphs) retires the least recently used rather
-	// than every one. An entry whose recording is gone is pruned there.
-	recUsed map[graphKey]uint64
-	recTick uint64
-	// stale holds recordings that were retired from inside a Session and so
-	// could not be destroyed there; see dropGraph.
-	stale []backend.Recording
 }
 
 // GPU serves decode matvecs and whole blocks from one or more devices. It is a
@@ -1749,9 +1697,9 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 			why = "the caller set it"
 		}
 		cnt, _ := s.Dev.(backend.AllocCounter)
-		g.devs = append(g.devs, &devTier{
+		g.devs = append(g.devs, newDevice(&devShared{
 			Config:     cfg,
-			Stats:      Stats{Device: label(s.Dev, i)},
+			tot:        Stats{Device: label(s.Dev, i)},
 			dev:        s.Dev,
 			cnt:        cnt,
 			pool:       pool,
@@ -1764,7 +1712,7 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 			groupSplit: map[splitKey]bool{},
 			reduce:     map[[2]int]backend.Kernel{},
 			limit:      limit,
-		})
+		}))
 		// The zero-copy path is guarded on UnifiedMemory, not on the extension:
 		// a discrete card may also advertise VK_EXT_external_memory_host, and
 		// importing there would leave the weights behind PCIe for every matvec
@@ -1820,7 +1768,7 @@ func (d *devTier) stats() Stats {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.settleRounding() // see Bytes
-	s := d.Stats
+	s := d.tot
 	if d.kvp != nil {
 		for _, l := range d.kvp.layers {
 			for _, ids := range l.owned {
@@ -2040,9 +1988,33 @@ func (g *devTier) releaseEveryLayer() {
 // last Layers call on this device. Zero after a failure means nothing moved and
 // the caller may restart on the host; non-zero means it may not.
 func (g *devTier) RecSteps() int {
+	return g.recStepsOf(0)
+}
+
+// recStepsOf is RecSteps for session sid: its own last call's count.
+func (g *devTier) recStepsOf(sid uint64) int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.recSteps
+	if ds := g.sess[sid]; ds != nil {
+		return ds.recSteps
+	}
+	return 0
+}
+
+// setRecSteps sets session sid's count; see GPU.resetRecSteps.
+func (g *devTier) setRecSteps(sid uint64, n int) {
+	g.mu.Lock()
+	g.sessOf(sid).recSteps = n
+	g.mu.Unlock()
+}
+
+// setInputs hands session sid's per-layer inputs and token ids to this device
+// for its next call (gpuSession.inputsTo).
+func (g *devTier) setInputs(sid uint64, ple []float32, ids []int32) {
+	g.mu.Lock()
+	ds := g.sessOf(sid)
+	ds.pleHost, ds.tokIDs = ple, ids
+	g.mu.Unlock()
 }
 
 func (g *devTier) Close() {
@@ -2157,23 +2129,20 @@ func (g *devTier) Close() {
 // would deadlock (the same constraint as Alloc). A recording retired from
 // inside one goes on the stale list and is freed before the next session.
 func (g *devTier) dropGraph() {
-	// Every recording, not just the current one: a moved address invalidates
-	// all of them.
-	for k, r := range g.recs {
-		g.stale = append(g.stale, r)
-		delete(g.recs, k)
-	}
-	g.freeStale()
+	// Every recording, not just the current one, in every lane: a moved
+	// address invalidates all of them, whichever session made them.
+	g.eachLane(func(l *lane) {
+		for k, r := range l.recs {
+			l.stale = append(l.stale, r)
+			delete(l.recs, k)
+		}
+		freeStaleOf(l)
+	})
 }
 
-// freeStale destroys retired recordings. Callers must be outside a Session.
-func (g *devTier) freeStale() {
-	for i, r := range g.stale {
-		r.Free()
-		g.stale[i] = nil
-	}
-	g.stale = g.stale[:0]
-}
+// freeStale destroys this lane's retired recordings. Callers must be outside a
+// Session.
+func (g *devTier) freeStale() { freeStaleOf(g.lane) }
 
 // quantOf forwards to kernels.QuantOf rather than keeping a second per-format
 // list, which went stale when a format was added. It answers for the device
@@ -2250,7 +2219,7 @@ func (g *devTier) matVec(sid uint64, out []float32, t quant.Type, w []byte, x []
 	// Buffers are sized outside the session: Alloc takes its own ownership hop
 	// and cannot nest inside one.
 	fresh, ok := g.prepare(x, nrows, k, !kernels.IsFloat(q))
-	if !ok || !g.sizePart(nrows*split) || (kernels.IsFloat(q) && !g.sizeXF(k)) {
+	if !ok || !g.sizeMVPart(nrows*split) || (kernels.IsFloat(q) && !g.sizeXF(k)) {
 		return noRoom
 	}
 	t1 := time.Now()
@@ -2312,7 +2281,7 @@ func (g *devTier) matVecSession(sess backend.Session) {
 	}
 	dst := g.outBuf
 	if split > 1 {
-		dst = g.partBuf
+		dst = g.mvPart
 	}
 	// A float weight reads the float activation in the scale plane's slot
 	// (kernels.MatVec), written every call: it is k floats.
@@ -2323,15 +2292,15 @@ func (g *devTier) matVecSession(sess backend.Session) {
 		}
 		d = g.xfBuf
 	}
-	lc := launcher{to: &g.launchTo}
-	g.launchTo.s = sess
-	defer func() { g.launchTo.s = nil }()
+	lc := launcher{to: &g.mvTo}
+	g.mvTo.s = sess
+	defer func() { g.mvTo.s = nil }()
 	if c.err = lc.launch(c.kern, (nrows*split+127)/128, 128,
 		c.r.qs, d, c.r.sc, g.aBuf, g.axBuf, dst); c.err != nil {
 		return
 	}
 	if split > 1 {
-		if c.err = lc.launch(c.red, (nrows+127)/128, 128, g.partBuf, g.outBuf); c.err != nil {
+		if c.err = lc.launch(c.red, (nrows+127)/128, 128, g.mvPart, g.outBuf); c.err != nil {
 			return
 		}
 	}
@@ -2855,6 +2824,12 @@ func (g *devTier) sizeF16(n int) bool { return g.regrow(&g.f16Buf, &g.f16Cap, n,
 // the blocks never had): the graph that names the old address is dropped.
 func (g *devTier) sizePart(n int) bool { return g.regrow(&g.partBuf, &g.partCap, n, 4, true, true) }
 
+// sizeMVPart grows matVec's own partial sums (devShared.mvPart). No recording
+// names them.
+func (g *devTier) sizeMVPart(n int) bool {
+	return g.regrow(&g.mvPart, &g.mvPartCap, n, 4, false, true)
+}
+
 // regrow grows *dst from *have to n elements of unit bytes, dropping the
 // captured graph first when drop is set and poisoning the new buffer when
 // poison is.
@@ -3015,7 +2990,7 @@ func (g *devTier) Reserve(maxRows, maxK int) bool {
 	if n := 4 * 30720; n > parts {
 		parts = n
 	}
-	return g.sizeOut(maxRows) && g.sizePart(parts) &&
+	return g.sizeOut(maxRows) && g.sizePart(parts) && g.sizeMVPart(parts) &&
 		g.sizeAct(maxK/4, 3*(maxK/32))
 }
 

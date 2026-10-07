@@ -504,7 +504,7 @@ func TestASlotIsCountedAtTheFootprint(t *testing.T) {
 // its next use: Belady's optimum is most-recently-used, the opposite of LRU.
 // Page-in counts could not tell the two apart on a small model.
 func TestVictimIsTheBlockJustComputed(t *testing.T) {
-	g := &devTier{layers: map[int]*layer{}}
+	g := newDevice(&devShared{layers: map[int]*layer{}})
 	for li := 0; li < 5; li++ {
 		// bytes is what a page-out would reclaim; a block that frees nothing
 		// is not a candidate (see below).
@@ -551,7 +551,7 @@ func TestVictimIsTheBlockJustComputed(t *testing.T) {
 // its place whatever streams beside it; the budget's owner (trim) may still
 // take any unpinned one.
 func TestOnlyAStreamedBlockIsAStreamedVictim(t *testing.T) {
-	g := &devTier{layers: map[int]*layer{}, stream: map[int]bool{3: true}}
+	g := newDevice(&devShared{layers: map[int]*layer{}, stream: map[int]bool{3: true}})
 	for li := 0; li < 5; li++ {
 		g.layers[li] = &layer{ok: true, pg: &page{in: true, bytes: 1 << 20}}
 	}

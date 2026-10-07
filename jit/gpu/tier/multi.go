@@ -99,15 +99,13 @@ func (g *GPU) Err() string {
 // layersCall does for its own: a step refused before it ran must read zero,
 // not the count of whatever call came before it, or a caller deciding whether
 // the rows may run again (the server's step loop) would refuse a sound retry.
-func (g *GPU) resetRecSteps() {
+func (g *GPU) resetRecSteps(sid uint64) {
 	for i := 0; ; i++ {
 		d := g.dev(i)
 		if d == nil {
 			return
 		}
-		d.mu.Lock()
-		d.recSteps = 0
-		d.mu.Unlock()
+		d.setRecSteps(sid, 0)
 	}
 }
 
@@ -125,13 +123,19 @@ func (g *GPU) dev(i int) *devTier {
 // RecSteps is how many linear blocks advanced across every device during the
 // last Layers or rows call. See devTier.recSteps.
 func (g *GPU) RecSteps() int {
+	return g.recStepsOf(0)
+}
+
+// recStepsOf is RecSteps for session sid: the count is per session, as the
+// call it counts is.
+func (g *GPU) recStepsOf(sid uint64) int {
 	n := 0
 	for i := 0; ; i++ {
 		d := g.dev(i)
 		if d == nil {
 			return n
 		}
-		n += d.RecSteps()
+		n += d.recStepsOf(sid)
 	}
 }
 
@@ -1037,7 +1041,7 @@ func (g *GPU) layersFor(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32, 
 	hd := g.head
 	g.mu.Unlock()
 	if hd != nil {
-		hd.dropEmbed()
+		hd.dropEmbedOf(sid)
 	}
 	return ok
 }
@@ -1310,15 +1314,29 @@ func (g *GPU) PrepHead(h *nn.Head) bool {
 // first only when it also holds block 0; on any other placement the rows are
 // made real on the host at once and uploaded as always.
 func (g *GPU) EmbedRows(ids []int32, dst []float32) bool {
+	return g.embedRows(0, ids, dst)
+}
+
+// embedRows is EmbedRows for session sid: the promise is the session's, and
+// only its next submission gathers it.
+func (g *GPU) embedRows(sid uint64, ids []int32, dst []float32) bool {
 	g.mu.Lock()
 	hd := g.head
 	rs, ok := g.runs(0, 1)
 	g.mu.Unlock()
-	if hd == nil || !hd.EmbedRows(ids, dst) {
+	if hd == nil {
+		return false
+	}
+	v := hd.as(sid)
+	if v == nil {
+		return false
+	}
+	defer v.done()
+	if !v.EmbedRows(ids, dst) {
 		return false
 	}
 	if !ok || len(rs) == 0 || rs[0].dev != hd {
-		hd.takeEmbed(nil) // nil is no submission's x: this materializes
+		v.takeEmbed(nil) // nil is no submission's x: this materializes
 	}
 	return true
 }
