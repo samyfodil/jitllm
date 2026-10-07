@@ -34,7 +34,7 @@ The programs are `jitllm` (the CLI) and `jitllmd` (the server), installed by def
 curl -fsSL https://raw.githubusercontent.com/samyfodil/jitllm/main/scripts/install.sh | sh -s -- jitllm tui
 ```
 
-Run it again to update. To install by hand, the [Releases](https://github.com/samyfodil/jitllm/releases) page has one archive per program and platform, named `<program>_<version>_<os>_<arch>`: `jitllm`, `jitllmd`, `jitllm-desktop` and `jitllm-tui`, for `linux`, `darwin` and `windows` on `amd64` and `arm64` (`.zip` on Windows, `.tar.gz` elsewhere), with `checksums.txt` beside them. Unpack one and put the binary on your `PATH`. The server also ships as a container image; see [Docker](https://github.com/samyfodil/jitllm/blob/main/docs/docker.md).
+Run it again to update. To install by hand, the [latest release](https://github.com/samyfodil/jitllm/releases/latest) has one archive per program and platform, named `<program>_<version>_<os>_<arch>`: `jitllm`, `jitllmd`, `jitllm-desktop` and `jitllm-tui`, for `linux`, `darwin` and `windows` on `amd64` and `arm64` (`.zip` on Windows, `.tar.gz` elsewhere), with `checksums.txt` beside them. Unpack one and put the binary on your `PATH`. The server also ships as a container image; see [Docker](https://github.com/samyfodil/jitllm/blob/main/docs/docker.md).
 
 ## GPUs
 

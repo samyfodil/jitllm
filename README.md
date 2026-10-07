@@ -14,6 +14,8 @@
 **An operating system for LLM inference: generate the compute for your hardware,
 page models larger than memory, and move execution without losing the conversation.**
 
+[jitllm.org](https://jitllm.org) · [Documentation](https://jitllm.org/docs/) · [Latest release](https://github.com/samyfodil/jitllm/releases/latest)
+
 - **Every kernel JIT-generated at load time** for your CPU (AVX2, SSE, NEON)
   or GPU (CUDA, Vulkan, Metal), specialised to the model's shapes and weight
   formats. No precompiled kernels or interpreted compute fallback.
@@ -48,7 +50,7 @@ release, after checking each archive against the release's checksums: into
 `%LOCALAPPDATA%\Programs\jitllm`, which it adds to your `PATH`. Add the apps with
 `| sh -s -- all` (or `desktop`, `tui`), or `$env:JITLLM_PROGRAMS = "all"` before
 the Windows line. Each program is one self-contained binary and its own archive
-on the [Releases](https://github.com/samyfodil/jitllm/releases) page, for Linux,
+on the [Releases](https://github.com/samyfodil/jitllm/releases/latest) page, for Linux,
 macOS and Windows on x86-64 and arm64. GPUs need only their driver.
 
 To build from source instead, with **Go 1.26 or newer** and no C toolchain:
