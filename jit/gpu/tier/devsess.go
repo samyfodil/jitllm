@@ -63,6 +63,10 @@ type devSess struct {
 	// the assertion on every submission filled the runtime's type-assertion
 	// cache inside a timed decode, one allocation the first time.
 	qd backend.Queued
+	// runF is the submission runSub is running, and ranFn runSub's wrapper
+	// around it, a method value made once so a submission allocates nothing.
+	runF  func(backend.Session)
+	ranFn func(backend.Session)
 	// bare is the session's view with no lane, for a call that reads no
 	// scratch (reserveKV, trimKV): such a call must not cost a clone.
 	bare *devTier
@@ -299,11 +303,26 @@ func (g *devTier) subUnlock(took bool) {
 // Callers hold g.mu when the submission runs alone, and not otherwise; the
 // queue is made under g.mu by the caller (sessQueue).
 func (g *devTier) runSub(f func(backend.Session)) {
-	if g.q != nil {
-		g.qd.SessionOn(g.q, f)
-		return
+	if g.ranFn == nil {
+		g.ranFn = g.ran
 	}
-	g.dev.Session(f)
+	g.runF = f
+	if g.q != nil {
+		g.qd.SessionOn(g.q, g.ranFn)
+	} else {
+		g.dev.Session(g.ranFn)
+	}
+	g.runF = nil
+}
+
+// ran is the submission inside the backend's session, counting whether
+// another's was running there when it began (Stats.RanBeside).
+func (g *devTier) ran(s backend.Session) {
+	if g.onDev.Add(1) > 1 {
+		g.ranBeside.Add(1)
+	}
+	defer g.onDev.Add(-1)
+	g.runF(s)
 }
 
 // sessQueue makes the session's queue if the device has them and it has not

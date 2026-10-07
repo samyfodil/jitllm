@@ -763,6 +763,12 @@ type Stats struct {
 	// on the device (beginSub): the selection check that sessions stepped at
 	// once rather than one after another.
 	SubsBeside int
+	// RanBeside counts submissions whose device work began while another's
+	// was running on the device -- measured inside the backend's session, so
+	// a lock anywhere between the tier and the device, the backend's own
+	// included, keeps it at zero where SubsBeside, counted at the ticket,
+	// would not.
+	RanBeside int
 	// LanesWaited counts calls that found every lane taken and no room for
 	// another, and waited for one (takeLane).
 	LanesWaited int
@@ -1045,6 +1051,7 @@ func (s *Stats) add(o Stats) {
 	s.KVStreamPasses += o.KVStreamPasses
 	s.PipelinePieces += o.PipelinePieces
 	s.SubsBeside += o.SubsBeside
+	s.RanBeside += o.RanBeside
 	s.LanesWaited += o.LanesWaited
 	s.SessionRows += o.SessionRows
 	s.SessionLinear += o.SessionLinear
@@ -1259,6 +1266,11 @@ func (g *devTier) refund(n uint64) {
 // scratch they run in is a lane (devsess.go); a devTier is the three seen
 // together.
 type devShared struct {
+	// onDev is how many submissions are inside the backend's session on this
+	// device right now, and ranBeside how many began while another was
+	// (Stats.RanBeside); see runSub.
+	onDev     atomic.Int32
+	ranBeside atomic.Int64
 	// layerGen counts blocks placed and released, so work that depends only
 	// on which blocks are here can tell it is still current (prepBatch).
 	layerGen uint64
@@ -1805,6 +1817,7 @@ func (d *devTier) stats() Stats {
 	defer d.mu.Unlock()
 	d.settleRounding() // see Bytes
 	s := d.tot
+	s.RanBeside = int(d.ranBeside.Load())
 	if d.kvp != nil {
 		for _, l := range d.kvp.layers {
 			for _, ids := range l.owned {

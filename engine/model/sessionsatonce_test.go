@@ -17,7 +17,7 @@ import (
 // waits only where it must (jit/gpu/tier/inflight.go). These gates hold the
 // sessions to the answers each gives alone, and check the configuration was
 // selected: their steps overlapped, and the device saw a submission start
-// while another was in flight (tier.Stats.SubsBeside).
+// while another's was running on the device (tier.Stats.RanBeside).
 
 // atOnceGen is how many tokens each session decodes in a gate.
 const atOnceGen = 48
@@ -158,8 +158,8 @@ func overlaps(a, b atOnceRun) int {
 // States of stories15M, every block and the head on one device, decode from
 // two goroutines together, and each produces exactly the ids and logits it
 // produces alone on the same tier. Their steps overlap on the wall clock and
-// the device started submissions beside one another (SubsBeside): run with a
-// lock held across the submission, the ids still agree and SubsBeside stays
+// the device ran submissions beside one another (RanBeside): run with a
+// lock held across the submission, the ids still agree and RanBeside stays
 // at zero, so this fails.
 //
 // NVIDIA's Vulkan driver runs one submission's dispatches at a time across
@@ -197,10 +197,10 @@ func TestSessionsStepAtOnce(t *testing.T) {
 			for k := range runs {
 				sameRun(t, []string{"session 0", "session 1"}[k], runs[k], alone[k])
 			}
-			beside := after.SubsBeside - before.SubsBeside
+			beside := after.RanBeside - before.RanBeside
 			ov := overlaps(runs[0], runs[1])
 			t.Logf("%s: %d steps each, ids and logits identical to each alone; %d of session 0's steps "+
-				"overlapped session 1's, %d submissions started beside another in flight; the second "+
+				"overlapped session 1's, %d submissions ran on the device beside another's; the second "+
 				"session's lane is %d bytes of scratch (%d with it, %d without)",
 				g.Name(), atOnceGen, ov, beside, int64(after.ScratchBytes)-int64(before.ScratchBytes),
 				after.ScratchBytes, before.ScratchBytes)
@@ -220,7 +220,7 @@ func TestSessionsStepAtOnce(t *testing.T) {
 // so blocks page out and in under the other session's submissions -- produce
 // exactly the ids and logits each produces alone with every block resident.
 // PageIns and PageOuts during the run at once are the selection check that the
-// budget bound, and SubsBeside that the sessions stepped together.
+// budget bound, and RanBeside that the sessions stepped together.
 func TestSessionsPageAtOnce(t *testing.T) {
 	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune)
 	if err != nil {
@@ -299,7 +299,7 @@ func TestSessionsPageAtOnce(t *testing.T) {
 				sameRun(t, []string{"session 0", "session 1"}[k], got, alone[k])
 			}
 			ins, outs := after.PageIns-before.PageIns, after.PageOuts-before.PageOuts
-			beside := after.SubsBeside - before.SubsBeside
+			beside := after.RanBeside - before.RanBeside
 			t.Logf("%s: %d slot(s) for %d blocks, %d page-in(s) and %d page-out(s) while the sessions "+
 				"stepped at once, %d submissions beside another; ids and logits identical to each alone "+
 				"with every block resident", g.Name(), after.Slots, m.Cfg.NLayer, ins, outs, beside)
@@ -474,7 +474,7 @@ func evictAtOnce(t *testing.T, m *Model, spec string, together bool) evictArm {
 // relocating one with the same moves at the same steps. A move is a
 // structural change of what the other session's submissions read beside it
 // (blocks freed and rebuilt, KV pages migrated), so it is held to the same bar
-// as a step: SubsBeside says the two did run at once.
+// as a step: RanBeside says the two did run at once.
 func TestSessionsRelocateAtOnce(t *testing.T) {
 	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune)
 	if err != nil {
@@ -572,12 +572,12 @@ func TestSessionsRelocateAtOnce(t *testing.T) {
 				after := g.Stats()
 				sameRun(t, "the relocating session", runs[0], alone[0])
 				sameRun(t, "the session beside it", runs[1], alone[1])
-				beside := after.SubsBeside - before.SubsBeside
+				beside := after.RanBeside - before.RanBeside
 				t.Logf("%s, the other session on %d of %d blocks: %d steps each with the seam moved twice and a "+
 					"hop to a second tier mid-run, ids and logits identical to each alone; %d submissions started "+
 					"beside another in flight", g.Name(), bBlocks, nl, atOnceGen, beside)
 				if beside == 0 {
-					t.Fatal("no submission started while another was in flight: the sessions ran one after another")
+					t.Fatal("no submission ran on the device while another's did: the sessions ran one after another")
 				}
 			})
 		}
@@ -589,7 +589,7 @@ func TestSessionsRelocateAtOnce(t *testing.T) {
 // four sequences decoding at once from four goroutines -- produce exactly
 // the ids and logits each produces alone. Different models share no weights,
 // pages or scratch, only the card, its memory and its queues; sessions of one
-// model share its tier. SubsBeside on both tiers says each model's sessions
+// model share its tier. RanBeside on both tiers says each model's sessions
 // ran beside each other, and the spans that the two models' did too.
 func TestModelsAndSessionsAtOnce(t *testing.T) {
 	names := []string{"stories15M-q8_0.gguf", "SmolLM2-360M-Instruct-Q8_0.gguf"}
@@ -642,8 +642,8 @@ func TestModelsAndSessionsAtOnce(t *testing.T) {
 			}
 			for mi, g := range gs {
 				st := g.Stats()
-				beside := st.SubsBeside - before[mi].SubsBeside
-				t.Logf("%s on %s: %d submissions started beside another session's in flight, %d call(s) "+
+				beside := st.RanBeside - before[mi].RanBeside
+				t.Logf("%s on %s: %d submissions ran on the device beside another session's, %d call(s) "+
 					"waited for a lane, scratch %d bytes, budget used %d: %s", names[mi], g.Name(), beside,
 					st.LanesWaited-before[mi].LanesWaited, st.ScratchBytes, st.BudgetUsed, g.Err())
 				// With no room on the card for a second lane, a model's sessions
