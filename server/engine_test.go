@@ -520,8 +520,8 @@ func TestListSessionsFiltersByModelAndDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// No device id is the host's queue, which names its own reason.
-	if q.Msg.GetDeviceId() != HostGateID || !strings.Contains(q.Msg.GetNote(), "decode cores") ||
+	// No device id is the host's queue, which says how sessions share it.
+	if q.Msg.GetDeviceId() != HostGateID || !strings.Contains(q.Msg.GetNote(), "shared pool") ||
 		q.Msg.GetRunning() || q.Msg.GetWaiting() != 0 {
 		t.Fatalf("the idle host queue reads %+v", q.Msg)
 	}
@@ -577,66 +577,6 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(time.Millisecond)
-	}
-}
-
-// TestForceUnloadEndsAGenerateQueuedBehindAnother: the generate holds its
-// session's lock while it waits for the host gate, and close takes that lock,
-// so the unload has to CANCEL the wait first. With s.cancelGeneration()
-// removed from close the unload blocks forever and this fails on its bound.
-func TestForceUnloadEndsAGenerateQueuedBehindAnother(t *testing.T) {
-	e, _, _ := loadedEngine(t, smallModel, "small", LoadOptions{})
-	if _, err := e.CreateSession(SessionOptions{ModelID: "small", SessionID: "q", MaxSeq: 64}); err != nil {
-		t.Fatal(err)
-	}
-
-	host := e.gate(HostGateID)
-	if _, _, err := host.acquire(context.Background(), "holder", 0); err != nil {
-		t.Fatal(err)
-	}
-	released := false
-	defer func() {
-		if !released {
-			host.release("holder")
-		}
-	}()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- e.Generate(context.Background(), GenerateOptions{
-			SessionID: "q", Prompt: Prompt{Kind: PromptText, Text: story}, MaxTokens: 4,
-		}, func(Event) error { return nil })
-	}()
-	waitFor(t, "the generate to queue behind the holder", func() bool {
-		q, _, _ := host.snapshot()
-		return hasString(q, "q")
-	})
-
-	unloaded := make(chan int, 1)
-	go func() {
-		n, err := e.UnloadModel("small", true)
-		if err != nil {
-			t.Errorf("UnloadModel(force): %v", err)
-		}
-		unloaded <- n
-	}()
-	select {
-	case n := <-unloaded:
-		if n != 1 {
-			t.Fatalf("the unload closed %d session(s), want 1", n)
-		}
-	case <-time.After(30 * time.Second):
-		t.Fatal("a forced unload deadlocked against a generate waiting in the queue")
-	}
-	err := <-done
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("the queued generate ended with %v, want context.Canceled", err)
-	}
-	wantCode(t, "the cancelled wait on the wire", connectErr(err), connect.CodeCanceled)
-	host.release("holder")
-	released = true
-	if q, _, _ := host.snapshot(); len(q) != 0 {
-		t.Fatalf("the host queue still lists %v after everyone left", q)
 	}
 }
 
@@ -800,34 +740,6 @@ func TestABadGenerateIsTheCallersErrorNotTheServers(t *testing.T) {
 	// even when its generate fails.
 	if n := len(e.Sessions()); n != 1 {
 		t.Fatalf("%d sessions open after the refusals, want the one created above", n)
-	}
-}
-
-// TestAQueueTimeoutLeavesTheSessionUsable: a caller who stops waiting for a
-// busy host gets ResourceExhausted -- retry is correct -- and the session
-// generates normally once the host is free.
-func TestAQueueTimeoutLeavesTheSessionUsable(t *testing.T) {
-	e, _, c := loadedEngine(t, smallModel, "small", LoadOptions{})
-	ctx := context.Background()
-	if _, err := e.CreateSession(SessionOptions{ModelID: "small", SessionID: "s", MaxSeq: 64}); err != nil {
-		t.Fatal(err)
-	}
-	host := e.gate(HostGateID)
-	if _, _, err := host.acquire(ctx, "holder", 0); err != nil {
-		t.Fatal(err)
-	}
-	_, err := c.inference.Complete(ctx, req(&v1.GenerateRequest{
-		SessionId: "s", Prompt: text(story), MaxTokens: 2, QueueTimeoutMillis: 20,
-	}))
-	host.release("holder")
-	wantCode(t, "a generate that gave up waiting for the host", err, connect.CodeResourceExhausted)
-
-	r, err := c.inference.Complete(ctx, req(&v1.GenerateRequest{SessionId: "s", Prompt: text(story), MaxTokens: 2}))
-	if err != nil {
-		t.Fatalf("the session did not survive a queue timeout: %v", err)
-	}
-	if r.Msg.GetFinished().GetCompletionTokens() == 0 {
-		t.Fatal("the retried generate produced nothing")
 	}
 }
 
@@ -1275,7 +1187,7 @@ func TestDevicesAreTheProbesAnswer(t *testing.T) {
 	if d.GetName() != "fake card" || d.GetRef().GetBackend() != v1.Backend_BACKEND_CUDA ||
 		d.GetKind() != v1.DeviceKind_DEVICE_KIND_DISCRETE || d.GetTotalMemory().GetBytes() != 4<<30 ||
 		d.GetFreeMemory().GetBytes() != 3<<30 || d.GetPhysicalId() != "uuid-0" || d.GetAttachedSessions() != 0 ||
-		d.GetExecution() != v1.ExecutionMode_EXECUTION_MODE_SERIALISED || !d.GetAvailable() {
+		d.GetExecution() != v1.ExecutionMode_EXECUTION_MODE_PARALLEL || !d.GetAvailable() {
 		t.Fatalf("cuda:0 reads %+v", d)
 	}
 	_, err = c.device.GetDevice(ctx, req(&v1.GetDeviceRequest{DeviceId: "cuda:9"}))

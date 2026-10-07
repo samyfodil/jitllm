@@ -34,13 +34,13 @@ type Device struct {
 	// bytes twice and will thrash. The field is named for the action it
 	// governs rather than for the hardware, so the contract is unmissable.
 	CountsTowardHostBudget bool `protobuf:"varint,6,opt,name=counts_toward_host_budget,json=countsTowardHostBudget,proto3" json:"counts_toward_host_budget,omitempty"`
-	// How work on this device executes. SERIALISED today for every accelerator,
-	// because one scratch set is allocated per device and sessions share it.
+	// How work on this device executes: PARALLEL, sessions beside each other
+	// (see ExecutionMode).
 	Execution ExecutionMode `protobuf:"varint,7,opt,name=execution,proto3,enum=jitllm.v1.ExecutionMode" json:"execution,omitempty"`
-	// Free-text statement of why `execution` is what it is. Empty when PARALLEL.
+	// Free-text statement of how sessions share the device.
 	ExecutionNote string `protobuf:"bytes,8,opt,name=execution_note,json=executionNote,proto3" json:"execution_note,omitempty"`
 	// Sessions currently attached to this device, and how many of those are
-	// mid-generation. `running` never exceeds 1 while `execution` is SERIALISED.
+	// mid-generation, and the requests waiting for a row of a full step loop.
 	AttachedSessions int32 `protobuf:"varint,9,opt,name=attached_sessions,json=attachedSessions,proto3" json:"attached_sessions,omitempty"`
 	RunningSessions  int32 `protobuf:"varint,10,opt,name=running_sessions,json=runningSessions,proto3" json:"running_sessions,omitempty"`
 	QueuedRequests   int32 `protobuf:"varint,11,opt,name=queued_requests,json=queuedRequests,proto3" json:"queued_requests,omitempty"`

@@ -170,27 +170,6 @@ func TestHumanBytesAndCapacityDeclines(t *testing.T) {
 	}
 }
 
-// TestAGateSetIsAsSerialAsItsMostSerialGate, and a duplicate id is one gate:
-// taking the same semaphore twice in one request would deadlock it on itself.
-func TestAGateSetIsAsSerialAsItsMostSerialGate(t *testing.T) {
-	e := New(Config{ModelDir: t.TempDir(), Probe: noProbe, HostConcurrency: 2})
-	defer e.Close()
-	if m := e.gatesFor([]string{HostGateID}).mode(); m != ExecutionParallel {
-		t.Fatalf("a host gate of width 2 alone reads %v, want parallel", m)
-	}
-	gs := e.gatesFor([]string{"cuda:0", HostGateID, "cuda:0"})
-	if len(gs.gates) != 2 {
-		t.Fatalf("%d gates for two distinct ids", len(gs.gates))
-	}
-	if m := gs.mode(); m != ExecutionSerialised {
-		t.Fatalf("a set holding a serialised card reads %v", m)
-	}
-	if _, _, err := gs.acquire(context.Background(), "s", 0); err != nil {
-		t.Fatalf("acquiring a set with a repeated id: %v", err)
-	}
-	gs.release()
-}
-
 // TestAnSSEErrorFrameIsNamedAndTyped: the only failure report a stream has
 // once its status is 200.
 func TestAnSSEErrorFrameIsNamedAndTyped(t *testing.T) {

@@ -18,6 +18,7 @@ import (
 	"context"
 	"runtime"
 	"runtime/pprof"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -63,6 +64,7 @@ func WithNUMA(on bool) Option { return func(c *config) { c.numa = on } }
 // closely spins, because waking a parked worker at every region costs more
 // than the spin. It takes effect at each worker's next wait.
 func (p *Pool) SetSpinning(on bool) {
+	p = p.w()
 	if on {
 		p.spin.Store(int64(p.spinDef))
 	} else {
@@ -72,7 +74,7 @@ func (p *Pool) SetSpinning(on bool) {
 
 // Spinning reports whether the workers spin for the next region rather than
 // park at once.
-func (p *Pool) Spinning() bool { return p.spin.Load() > 0 }
+func (p *Pool) Spinning() bool { return p.w().spin.Load() > 0 }
 
 // WithSpin sets how long a worker spins before parking. Zero parks immediately.
 func WithSpin(d time.Duration) Option {
@@ -174,6 +176,25 @@ type Pool struct {
 	nodeSet [][]int
 	nodeIDs []int
 	nnext   []atomic.Int64
+
+	// crew is the pool whose workers a shared view (Shared) runs on; nil for a
+	// pool that owns its workers. A view has its own participant count and
+	// counters; the crew's lock makes its views take turns, a region each.
+	crew *Pool
+	// mu is held by a view's region on the crew, shared with every crew
+	// whose cores overlap this one's (Shared); key and views are the crew's
+	// registry entry and how many views are open.
+	mu    *sync.Mutex
+	key   string
+	views int
+}
+
+// w is the pool whose workers run p's regions.
+func (p *Pool) w() *Pool {
+	if p.crew != nil {
+		return p.crew
+	}
+	return p
 }
 
 // spinBudget is how long a worker re-reads seq before parking. It has to cover
@@ -232,7 +253,7 @@ func (p *Pool) Max() int {
 	if p == nil {
 		return 1
 	}
-	return len(p.cpus)
+	return len(p.w().cpus)
 }
 
 // SetParticipants caps how many participants drain a region without rebuilding
@@ -248,8 +269,8 @@ func (p *Pool) SetParticipants(n int) {
 	if n < 1 {
 		n = 1
 	}
-	if n > len(p.cpus) {
-		n = len(p.cpus)
+	if n > p.Max() {
+		n = p.Max()
 	}
 	p.part.Store(int64(n))
 }
@@ -387,7 +408,7 @@ func (p *Pool) drain(id int) {
 // the traffic does. A pool without WithNUMA, or a one-node host, is plain
 // DoLabeled.
 func (p *Pool) DoNodes(label string, total, chunk, block, first int, fn func(worker, lo, hi int)) {
-	if p == nil || p.cpuNode == nil || block <= 0 || chunk <= 0 {
+	if p == nil || p.w().cpuNode == nil || block <= 0 || chunk <= 0 {
 		p.DoLabeled(label, total, chunk, fn)
 		return
 	}
@@ -413,14 +434,14 @@ func (p *Pool) Nodes() int {
 	if p == nil {
 		return 0
 	}
-	return len(p.nodeIDs)
+	return len(p.w().nodeIDs)
 }
 
 // NodeIndex maps a node ID (as sched.NodeOf reports it) to DoNodes' index, or
 // -1 for a node the pool does not span.
 func (p *Pool) NodeIndex(node int) int {
 	if p != nil {
-		for i, n := range p.nodeIDs {
+		for i, n := range p.w().nodeIDs {
 			if n == node {
 				return i
 			}
@@ -571,6 +592,23 @@ func (p *Pool) dispatch(j job) {
 		j.call(0, 0, total)
 		return
 	}
+	part := int(p.part.Load())
+	if p.crew != nil {
+		// A view runs on its crew, one view's region at a time: the workers
+		// and the published job are the crew's. The participant count is the
+		// view's own, so each user's tuner keeps its answer.
+		c := p.crew
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.stopped.Load() {
+			p.nSerial.Add(1)
+			j.call(0, 0, total)
+			return
+		}
+		p.nParallel.Add(1)
+		c.publish(j, part)
+		return
+	}
 	// A stopped pool runs the region inline: a worker that observes the stop
 	// returns without acknowledging, so waiting on active would spin forever.
 	if p.stopped.Load() {
@@ -579,9 +617,16 @@ func (p *Pool) dispatch(j job) {
 		return
 	}
 	p.nParallel.Add(1)
+	p.publish(j, part)
+}
+
+// publish runs j on p's workers, at most part participants, and returns when
+// all of it is done.
+func (p *Pool) publish(j job, part int) {
+	total, chunk := j.total, j.chunk
 	// The tuned participant count is an upper bound; never use more
 	// participants than there are chunks.
-	limit := int(p.part.Load())
+	limit := part
 	if c := (total + chunk - 1) / chunk; c < limit {
 		limit = c
 	}
@@ -619,6 +664,10 @@ func (p *Pool) dispatch(j job) {
 // it guarantees only that no further region is dispatched.
 func (p *Pool) Close() {
 	if p == nil {
+		return
+	}
+	if p.crew != nil {
+		p.crew.release(p)
 		return
 	}
 	if !p.stopped.CompareAndSwap(false, true) {

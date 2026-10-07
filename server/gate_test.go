@@ -2,233 +2,169 @@ package server
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/samyfodil/jitllm/jit/gpu/backend"
 )
 
-// The gates on the gate. The serialisation is the one behaviour of this server
-// that a caller cannot see from the outside, so it is the one that most needs
-// a test that can fail.
-
-// TestADeviceRunsOneSessionAtATime.
-//
-// VIOLATION SIGNATURE. Change newGate's width for a device from
-// Config.DeviceConcurrency to 2 and this fails with
-//
-//	both sessions were inside the gate at once: overlap detected
-//
-// which is exactly the state the engine cannot survive -- two sessions sharing
-// one scratch set on one device.
-func TestADeviceRunsOneSessionAtATime(t *testing.T) {
-	e := New(Config{ModelDir: t.TempDir()})
-	gs1 := e.gatesFor([]string{"cuda:0"})
-	gs2 := e.gatesFor([]string{"cuda:0"})
-
-	var mu sync.Mutex
-	inside := 0
-	overlap := false
-
-	if _, _, err := gs1.acquire(context.Background(), "s1", 0); err != nil {
-		t.Fatalf("first acquire: %v", err)
+// A gate records the sessions running on a device and never holds one back:
+// a second session on the same card is recorded beside the first, and leaving
+// takes it off the record.
+func TestAGateRecordsAndNeverBlocks(t *testing.T) {
+	e := New(Config{ModelDir: t.TempDir(), Probe: noProbe})
+	defer e.Close()
+	a := e.gatesFor([]string{"cuda:0", HostGateID})
+	b := e.gatesFor([]string{"cuda:0", HostGateID, "cuda:0"})
+	if len(b.gates) != 2 {
+		t.Fatalf("%d gates for two distinct ids: a repeated id must be one gate", len(b.gates))
 	}
-	mu.Lock()
-	inside++
-	mu.Unlock()
-
-	got := make(chan struct{})
-	go func() {
-		gs2.acquire(context.Background(), "s2", 0)
-		mu.Lock()
-		inside++
-		if inside > 1 {
-			overlap = true
+	if d := a.acquire("a"); d != 0 {
+		t.Fatalf("the first session found %d already running", d)
+	}
+	done := make(chan int32, 1)
+	go func() { done <- b.acquire("b") }()
+	select {
+	case d := <-done:
+		if d != 1 {
+			t.Fatalf("the second session found %d running, want 1", d)
 		}
-		mu.Unlock()
-		close(got)
-	}()
-
-	select {
-	case <-got:
-		t.Fatal("the second session entered while the first held the device; " +
-			"both sessions were inside the gate at once: overlap detected")
-	case <-time.After(150 * time.Millisecond):
+	case <-time.After(5 * time.Second):
+		t.Fatal("a second session on the same card waited for the first")
 	}
-
-	// The queue is visible while it is happening, which is the whole point.
-	g := e.gate("cuda:0")
-	queue, running, waiting := g.snapshot()
-	if running != 1 || waiting != 1 {
-		t.Fatalf("queue reports running=%d waiting=%d, want 1 and 1 (queue %v)", running, waiting, queue)
+	q, running, waiting := e.gate("cuda:0").snapshot()
+	if running != 2 || waiting != 0 || len(q) != 2 {
+		t.Fatalf("the card records %v, running %d, waiting %d; want both running and none waiting", q, running, waiting)
 	}
-	if g.mode != ExecutionSerialised {
-		t.Fatalf("a device gate reports %v, want SERIALISED", g.mode)
+	a.release()
+	b.release()
+	if q, running, _ := e.gate("cuda:0").snapshot(); running != 0 || len(q) != 0 {
+		t.Fatalf("the card still records %v (%d running) after both left", q, running)
 	}
-
-	mu.Lock()
-	inside--
-	mu.Unlock()
-	gs1.release()
-
-	select {
-	case <-got:
-	case <-time.After(2 * time.Second):
-		t.Fatal("the second session never got in after the first released: it was refused, not queued")
-	}
-	if overlap {
-		t.Fatal("both sessions were inside the gate at once: overlap detected")
-	}
-	gs2.release()
 }
 
-// TestASecondSessionIsQueuedAndNeverRefused: a second session must wait,
-// never be refused.
-//
-// VIOLATION SIGNATURE. Make acquire return an error when the semaphore is full
-// instead of blocking, and this fails with
-//
-//	the second session was refused rather than queued: server: ...
-func TestASecondSessionIsQueuedAndNeverRefused(t *testing.T) {
-	e := New(Config{ModelDir: t.TempDir()})
-	a := e.gatesFor([]string{"cuda:0"})
-	b := e.gatesFor([]string{"cuda:0"})
-
-	if _, _, err := a.acquire(context.Background(), "a", 0); err != nil {
-		t.Fatalf("first acquire: %v", err)
-	}
-	done := make(chan error, 1)
-	var waited time.Duration
-	go func() {
-		w, _, err := b.acquire(context.Background(), "b", 0)
-		waited = w
-		done <- err
-	}()
-	time.Sleep(120 * time.Millisecond)
-	a.release()
-
-	select {
-	case err := <-done:
+// Two sessions of one model generate at the same time, and each one's answer
+// is the answer it gives alone. On the host they take turns on one shared pool
+// a region at a time (sched.Shared); on a device, with batching off, the tier
+// takes its scratch a step at a time. Interleaving is asserted from the token
+// times: each session produced a token while the other was mid-reply, which a
+// lock held across a whole generate makes impossible.
+func TestTwoSessionsGenerateAtOnce(t *testing.T) {
+	t.Run("host", func(t *testing.T) {
+		e, _, _ := loadedEngine(t, smallModel, "m", LoadOptions{})
+		twoAtOnce(t, e, "m")
+	})
+	t.Run("device", func(t *testing.T) {
+		if n, err := backend.CUDACount(); (err != nil || n == 0) && !hasVulkan() {
+			t.Skip("NO DEVICE: the device arm did not run")
+		}
+		path := modelPath(t, deviceModel)
+		e := New(Config{Probe: oneCardProbe, Version: "test", MaxBatchRows: 1})
+		t.Cleanup(e.Close)
+		lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "m", DeviceIDs: []string{"auto"}})
 		if err != nil {
-			t.Fatalf("the second session was refused rather than queued: %v", err)
+			t.Fatal(err)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("the second session never entered")
-	}
-	if waited < 50*time.Millisecond {
-		t.Fatalf("the wait was reported as %v, which cannot be right for a gate held 120ms; "+
-			"a queued_millis of ~0 tells a caller nothing happened when it did", waited)
-	}
-	b.release()
+		if lm.gpu == nil {
+			t.Skip("auto opened no device: the device arm did not run")
+		}
+		twoAtOnce(t, e, "m")
+	})
 }
 
-// TestDecliningToWaitIsNotARefusalOfTheSession.
-//
-// A queue timeout ends the WAIT, not the session: the caller may try again.
-func TestDecliningToWaitIsNotARefusalOfTheSession(t *testing.T) {
-	e := New(Config{ModelDir: t.TempDir()})
-	a := e.gatesFor([]string{"cuda:0"})
-	b := e.gatesFor([]string{"cuda:0"})
-	a.acquire(context.Background(), "a", 0)
-
-	_, _, err := b.acquire(context.Background(), "b", 30*time.Millisecond)
-	if !errors.Is(err, ErrQueueTimeout) {
-		t.Fatalf("timed-out wait returned %v, want ErrQueueTimeout", err)
-	}
-	// It must have cleaned up after itself: a caller that gave up must not
-	// still be counted as waiting, or the queue depth every later request
-	// reports is permanently wrong.
-	if _, _, waiting := e.gate("cuda:0").snapshot(); waiting != 0 {
-		t.Fatalf("after a timed-out wait the gate still reports %d waiting; the giver-up "+
-			"was never dequeued", waiting)
-	}
-	a.release()
-	if _, _, err := b.acquire(context.Background(), "b", time.Second); err != nil {
-		t.Fatalf("retry after a timeout failed: %v -- the timeout refused the SESSION, not the wait", err)
-	}
-	b.release()
+func hasVulkan() bool {
+	ds, err := backend.VulkanDevices()
+	return err == nil && len(ds) > 0
 }
 
-// TestTwoSessionsAcrossTwoDevicesDoNotDeadlock.
-//
-// Two sessions each needing cuda:0 and vulkan:1 would deadlock if they took
-// them in opposite orders; gatesFor sorts.
-//
-// VIOLATION SIGNATURE. Remove `sort.Strings(sorted)` from gatesFor and this
-// hangs, then fails with
-//
-//	deadlocked: neither session completed within 2s
-//
-// (the test uses its own timeout rather than the package one so the failure is
-// a message rather than a panic dump).
-func TestTwoSessionsAcrossTwoDevicesDoNotDeadlock(t *testing.T) {
-	e := New(Config{ModelDir: t.TempDir()})
-	done := make(chan struct{}, 2)
-	for i, ids := range [][]string{{"cuda:0", "vulkan:1"}, {"vulkan:1", "cuda:0"}} {
-		go func(i int, ids []string) {
-			for n := 0; n < 40; n++ {
-				gs := e.gatesFor(ids)
-				if _, _, err := gs.acquire(context.Background(), "s", 0); err != nil {
-					t.Errorf("session %d acquire: %v", i, err)
-					break
-				}
-				time.Sleep(time.Millisecond)
-				gs.release()
+func twoAtOnce(t *testing.T, e *Engine, modelID string) {
+	t.Helper()
+	prompts := [2]string{"Once upon a time", "The little dog ran to the park and"}
+	// Inside the device model's 128-position context with either prompt.
+	const n = 100
+	type run struct {
+		ids   []int32
+		times []time.Time
+		err   error
+		fin   *Finished
+	}
+	gen := func(sid, prompt string) run {
+		var r run
+		r.err = e.Generate(context.Background(), GenerateOptions{
+			SessionID: sid, Prompt: Prompt{Kind: PromptText, Text: prompt}, MaxTokens: n, IgnoreEOS: true,
+		}, func(ev Event) error {
+			if ev.Kind == EventFinished {
+				r.fin = ev.Finished
 			}
-			done <- struct{}{}
-		}(i, ids)
+			if ev.Kind == EventToken && ev.Token.ID >= 0 {
+				r.ids = append(r.ids, ev.Token.ID)
+				r.times = append(r.times, time.Now())
+			}
+			return nil
+		})
+		return r
 	}
-	for n := 0; n < 2; n++ {
-		select {
-		case <-done:
-		case <-time.After(4 * time.Second):
-			t.Fatal("deadlocked: neither session completed within 2s")
+	for i := range 2 {
+		if _, err := e.CreateSession(SessionOptions{ModelID: modelID, SessionID: string(rune('a' + i)), MaxSeq: 256}); err != nil {
+			t.Fatal(err)
 		}
 	}
-}
+	var solo [2]run
+	for i := range 2 {
+		if solo[i] = gen(string(rune('a'+i)), prompts[i]); solo[i].err != nil || len(solo[i].ids) != n {
+			t.Fatalf("solo %d: %d tokens, %v, finished %+v", i, len(solo[i].ids), solo[i].err, solo[i].fin)
+		}
+	}
 
-// TestPartialAcquireReleasesWhatItTook.
-//
-// A session that gets cuda:0 and then times out on vulkan:1 must not keep
-// cuda:0: holding one card for a request that will not run stalls it for
-// everyone.
-//
-// VIOLATION SIGNATURE. Delete the `gs.release()` on the error path in
-// gateSet.acquire and this fails with
-//
-//	cuda:0 is still held after a failed acquire: running=1
-func TestPartialAcquireReleasesWhatItTook(t *testing.T) {
-	e := New(Config{ModelDir: t.TempDir()})
-	// Hold vulkan:1 so the second gate of the pair cannot be taken.
-	blocker := e.gatesFor([]string{"vulkan:1"})
-	blocker.acquire(context.Background(), "blocker", 0)
+	var both [2]run
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range 2 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			both[i] = gen(string(rune('a'+i)), prompts[i])
+		}(i)
+	}
+	finished := make(chan struct{})
+	go func() { wg.Wait(); close(finished) }()
+	close(start)
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Minute):
+		t.Fatal("two generates at once did not finish")
+	}
 
-	gs := e.gatesFor([]string{"cuda:0", "vulkan:1"})
-	if _, _, err := gs.acquire(context.Background(), "s", 40*time.Millisecond); !errors.Is(err, ErrQueueTimeout) {
-		t.Fatalf("acquire returned %v, want ErrQueueTimeout", err)
+	for i := range 2 {
+		if both[i].err != nil {
+			t.Fatalf("session %d beside the other: %v", i, both[i].err)
+		}
+		if len(both[i].ids) != n {
+			t.Fatalf("session %d beside the other produced %d tokens, want %d", i, len(both[i].ids), n)
+		}
+		for k := range n {
+			if both[i].ids[k] != solo[i].ids[k] {
+				t.Fatalf("session %d token %d is %d beside the other and %d alone: the sessions wrote each other's state",
+					i, k, both[i].ids[k], solo[i].ids[k])
+			}
+		}
 	}
-	if _, running, _ := e.gate("cuda:0").snapshot(); running != 0 {
-		t.Fatalf("cuda:0 is still held after a failed acquire: running=%d", running)
+	// Interleaved: each session produced a token strictly inside the other's
+	// reply. Held for a whole generate, one reply would end before the other's
+	// first token.
+	inside := func(x, y run) bool {
+		for _, at := range x.times {
+			if at.After(y.times[0]) && at.Before(y.times[n-1]) {
+				return true
+			}
+		}
+		return false
 	}
-	blocker.release()
-}
-
-// TestTheHostIsSerialisedByDefault.
-//
-// Every JIT runs its own pool of decode cores, so two host sessions
-// oversubscribe them. The default must be 1, and it must be a knob.
-func TestTheHostIsSerialisedByDefault(t *testing.T) {
-	e := New(Config{ModelDir: t.TempDir()})
-	if g := e.gate(HostGateID); g.mode != ExecutionSerialised {
-		t.Fatalf("the host gate is %v by default, want SERIALISED", g.mode)
-	}
-	if note := e.gate(HostGateID).note; note == "" {
-		t.Fatal("the host gate reports no reason; a limit a caller cannot see the reason for " +
-			"reads as a slow server")
-	}
-	wide := New(Config{ModelDir: t.TempDir(), HostConcurrency: 4})
-	if g := wide.gate(HostGateID); g.mode != ExecutionParallel {
-		t.Fatalf("with HostConcurrency 4 the host gate is %v, want PARALLEL -- the limit is a "+
-			"configuration, not a constant", g.mode)
+	if !inside(both[0], both[1]) || !inside(both[1], both[0]) {
+		t.Fatalf("the two generates did not interleave: a [%v..%v], b [%v..%v]",
+			both[0].times[0].Format(time.StampMicro), both[0].times[n-1].Format(time.StampMicro),
+			both[1].times[0].Format(time.StampMicro), both[1].times[n-1].Format(time.StampMicro))
 	}
 }

@@ -40,7 +40,7 @@ type Session struct {
 	KvBytes   *ByteSize     `protobuf:"bytes,8,opt,name=kv_bytes,json=kvBytes,proto3" json:"kv_bytes,omitempty"`
 	Execution ExecutionMode `protobuf:"varint,9,opt,name=execution,proto3,enum=jitllm.v1.ExecutionMode" json:"execution,omitempty"`
 	// Zero while running or when nothing is ahead. Positive while this session
-	// is waiting for the device's scratch.
+	// is waiting for a row of its model's step loop.
 	QueuePosition      int32 `protobuf:"varint,10,opt,name=queue_position,json=queuePosition,proto3" json:"queue_position,omitempty"`
 	Generating         bool  `protobuf:"varint,11,opt,name=generating,proto3" json:"generating,omitempty"`
 	CreatedUnixMillis  int64 `protobuf:"varint,12,opt,name=created_unix_millis,json=createdUnixMillis,proto3" json:"created_unix_millis,omitempty"`
@@ -829,8 +829,8 @@ type GetDeviceQueueResponse struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	DeviceId  string                 `protobuf:"bytes,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
 	Execution ExecutionMode          `protobuf:"varint,2,opt,name=execution,proto3,enum=jitllm.v1.ExecutionMode" json:"execution,omitempty"`
-	// Sessions attached, in queue order. The head is the one holding the
-	// scratch when `running` is true.
+	// Sessions running on the device, then requests waiting for a row of a
+	// step loop, in arrival order.
 	SessionIds    []string `protobuf:"bytes,3,rep,name=session_ids,json=sessionIds,proto3" json:"session_ids,omitempty"`
 	Running       bool     `protobuf:"varint,4,opt,name=running,proto3" json:"running,omitempty"`
 	Waiting       int32    `protobuf:"varint,5,opt,name=waiting,proto3" json:"waiting,omitempty"`

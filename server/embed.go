@@ -28,8 +28,7 @@ type EmbedOptions struct {
 	// Inputs are PromptText or PromptIDs, embedded in order.
 	Inputs []Prompt
 	// Dimensions is the vector width asked for. Zero means the model's own.
-	Dimensions   int
-	QueueTimeout time.Duration
+	Dimensions int
 }
 
 // EmbedResult is one vector per input, in input order.
@@ -99,10 +98,8 @@ func (e *Engine) Embed(ctx context.Context, o EmbedOptions) (*EmbedResult, error
 	}
 
 	gs := e.gatesFor([]string{HostGateID})
-	waited, depth, err := gs.acquire(ctx, e.nextID("emb"), o.QueueTimeout)
-	if err != nil {
-		return nil, err
-	}
+	var waited time.Duration
+	depth := gs.acquire(e.nextID("emb"))
 	defer gs.release()
 
 	emb, err := lm.takeEmbedder()

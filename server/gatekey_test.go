@@ -1,35 +1,33 @@
 package server
 
 import (
-	"context"
-	"errors"
 	"strconv"
 	"testing"
-	"time"
 
 	"github.com/samyfodil/jitllm/jit/gpu/backend"
 )
 
-// serialises reports whether a session of b waits while a session of a holds
-// its gates. The host gate is widened by the caller, so only device gates can
-// make it wait.
+// serialises reports whether a session of b is recorded on a device gate a
+// session of a is on: whether the two would share a card. The host gate,
+// which every model with a partial seam is on, is left out.
 func serialises(t *testing.T, e *Engine, a, b *LoadedModel) bool {
 	t.Helper()
-	ga := e.gatesFor(a.gateIDs())
-	if _, _, err := ga.acquire(context.Background(), "a", 0); err != nil {
-		t.Fatalf("acquire %v: %v", a.gateIDs(), err)
-	}
+	ga := e.gatesFor(deviceGates(a))
+	ga.acquire("a")
 	defer ga.release()
-	gb := e.gatesFor(b.gateIDs())
-	_, _, err := gb.acquire(context.Background(), "b", 100*time.Millisecond)
-	if err == nil {
-		gb.release()
-		return false
+	gb := e.gatesFor(deviceGates(b))
+	defer gb.release()
+	return gb.acquire("b") > 0
+}
+
+func deviceGates(lm *LoadedModel) []string {
+	var out []string
+	for _, id := range lm.gateIDs() {
+		if id != HostGateID {
+			out = append(out, id)
+		}
 	}
-	if !errors.Is(err, ErrQueueTimeout) {
-		t.Fatalf("acquire %v: %v", b.gateIDs(), err)
-	}
-	return true
+	return out
 }
 
 // TestOverlappingSpecsShareTheCardTheyShare: the gates are keyed on the
@@ -41,7 +39,7 @@ func serialises(t *testing.T, e *Engine, a, b *LoadedModel) bool {
 // VIOLATION SIGNATURE. Key gateIDs on the spec text (lm.deviceIDs) and this
 // fails with "cuda and cuda:1 ran on card 1 at once".
 func TestOverlappingSpecsShareTheCardTheyShare(t *testing.T) {
-	e := New(Config{ModelDir: t.TempDir(), HostConcurrency: 4})
+	e := New(Config{ModelDir: t.TempDir()})
 	const a, b, c = "uuid:card-a", "uuid:card-b", "uuid:card-c"
 	every := &LoadedModel{deviceIDs: []string{"cuda"}, gateKeys: []string{a, b, c}}
 	one := &LoadedModel{deviceIDs: []string{"cuda:1"}, gateKeys: []string{b}}
@@ -77,7 +75,7 @@ func TestRealOverlappingSpecsShareAGate(t *testing.T) {
 	if n, err := backend.CUDACount(); err != nil || n == 0 {
 		t.Skipf("NO CUDA DEVICE (%d, %v): this gate proved nothing", n, err)
 	}
-	e := New(Config{Probe: oneCardProbe, Version: "test", HostConcurrency: 4, MaxBatchRows: 1})
+	e := New(Config{Probe: oneCardProbe, Version: "test", MaxBatchRows: 1})
 	t.Cleanup(e.Close)
 	load := func(id, spec string) *LoadedModel {
 		t.Helper()

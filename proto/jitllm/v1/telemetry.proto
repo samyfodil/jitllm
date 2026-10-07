@@ -58,7 +58,7 @@ message ModelStats {
   int64 tokens_prefilled = 5;
   // The model's step loop, which runs its device sessions' generates as rows
   // of shared decode steps. Absent for a model with no device, whose
-  // generates run one at a time on the host's gate.
+  // generates interleave on the host's shared pool a region at a time.
   BatchStats batch = 6;
 }
 

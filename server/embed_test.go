@@ -325,7 +325,7 @@ func TestEmbedMatchesTheEmbedder(t *testing.T) {
 // two embedders on one model to run together. Every vector must still be the
 // embedder's, at its own index.
 func TestEmbedConcurrentRequestsAreCorrect(t *testing.T) {
-	e, lm, url := embedServer(t, embedGateModels[0], Config{HostConcurrency: 2})
+	e, lm, url := embedServer(t, embedGateModels[0], Config{})
 	// Long inputs and several per request, so two requests' embeds overlap
 	// on the host rather than slipping between each other's round trips.
 	var long []string
@@ -510,7 +510,7 @@ func TestEmbedRefusesWhatCannotEmbed(t *testing.T) {
 // it, and closes it, before the model; embeds racing the unload either finish
 // with the right vector or are refused as not found.
 func TestUnloadWaitsForEmbedsInFlight(t *testing.T) {
-	e, lm, _ := embedServer(t, embedGateModels[0], Config{HostConcurrency: 2})
+	e, lm, _ := embedServer(t, embedGateModels[0], Config{})
 	want, _, _ := embedReference(t, lm.m, embedTexts[:1])
 
 	held, err := lm.takeEmbedder()

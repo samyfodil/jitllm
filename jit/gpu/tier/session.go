@@ -72,11 +72,10 @@ func (s *gpuSession) enter() []*devTier {
 	for _, d := range ds {
 		d.busy.Lock()
 		if d.cur != s.sid {
-			// The captured graph belongs to the session that recorded it: it
-			// bakes in buffer pointers, so replaying it would read the other
-			// session's KV cache. Dropping on a switch costs a re-capture; a
-			// session running several tokens in a row keeps its graph. The
-			// capacity and its scratch are the session's too (switchTo).
+			// The captured graphs belong to the session that recorded them: they
+			// bake in its pages, so they are keyed by session (graphKey.sid) and
+			// kept across a switch, and two sessions taking turns a token at a
+			// time each replay their own (switchTo).
 			d.mu.Lock()
 			d.switchTo(s.sid)
 			d.mu.Unlock()

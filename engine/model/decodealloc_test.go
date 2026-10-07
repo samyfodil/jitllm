@@ -256,7 +256,7 @@ func stepAllocs(t *testing.T, m *Model, g *tier.GPU, mode stepMode) {
 	if err := prefaultExperts(m); err != nil {
 		t.Fatal(err)
 	}
-	c0 := g.Stats()
+	c0, d0 := g.Stats(), g.DevStats()
 	r0 := m.container.Reads()
 	w := countAllocs(func() {
 		for k := range n {
@@ -272,9 +272,18 @@ func stepAllocs(t *testing.T, m *Model, g *tier.GPU, mode stepMode) {
 	if mode == stepSolo {
 		want = 0 // one run is no step across sessions
 	}
-	if got := c1.SessionRows - c0.SessionRows; got != want {
-		t.Fatalf("%d row(s) stepped across sessions, want %d: the arm did not run the step it names (%v)",
-			got, want, runs[0].State.StepRefusal())
+	// Each device counts the rows it ran, so on a tier over several devices
+	// every device holding blocks counts the whole step and the rest none.
+	d1, placed := g.DevStats(), g.Placed()
+	for i := range d1 {
+		w := want
+		if i >= len(placed) || placed[i] == 0 {
+			w = 0
+		}
+		if got := d1[i].SessionRows - d0[i].SessionRows; got != w {
+			t.Fatalf("device %d (%d blocks) stepped %d row(s) across sessions, want %d: the arm did not run the step it names (%v)",
+				i, placed[i], got, w, runs[0].State.StepRefusal())
+		}
 	}
 	// An AltUp model's head reads the streams' mean on the host (altup.go),
 	// and DeepSeek V4's their collapse (ds4.go): none of their steps takes
