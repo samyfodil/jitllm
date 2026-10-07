@@ -246,6 +246,7 @@ func bindCUDA() error {
 	cuMemHostAlloc = ffi.Fn3[CUresult, *unsafe.Pointer, uint64, uint32](lib, "cuMemHostAlloc")
 	cuMemFreeHost = ffi.Fn1[CUresult, unsafe.Pointer](lib, "cuMemFreeHost")
 	loadGraphs(lib)
+	loadQueues(lib)
 	loadEvents(lib)
 	loadUUID(lib)
 	return nil
