@@ -812,8 +812,9 @@ is the per-card peak from `nvidia-smi -l 2` in MiB.
 | `-devices cuda`, `JITLLM_EXPERTS=host` (hybrid forced) | 26.1 s | 2.85 | 0.35 | 5.38 GB | 418 GB | 13.4-15.0 G on all 8 |
 | `-devices cuda`, `JITLLM_EXPERTS=card` (sheets forced) | 39.8 s | 6.64 | 0.15 | 4.93 GB | 418 GB | 0.3-15.9 G |
 
-The cpu and sheets rows are from the binary before the last two commits
-(fd1989f0's predecessor); the two hybrid rows from the one after the spread fix.
+The cpu and sheets rows are from the binary at 0ebf9b8c; the two hybrid rows
+and the trials from the one at 050ac402 (the spread fix), whose forced-hybrid
+run the earlier binary could not prefill.
 
 **Paired, in one process (the stream trial, ABBA runs of 16 tokens, 10 quads,
 900 tokens, warm quads 2-10):** A/A (the placement against itself through the
