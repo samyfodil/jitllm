@@ -184,7 +184,7 @@ svg { display: block; }
 .head > div { max-width: 38rem; }
 @media (min-width: 1024px) { .head { margin-bottom: 2.5rem; } }
 code { font-size: 0.9em; }
-p code, .desc code { color: var(--text); background: var(--surface-2); padding: 0.1em 0.35em; }
+p code, .desc code { color: var(--text); background: var(--surface-2); padding: 0.1em 0.35em; overflow-wrap: anywhere; }
 
 .manifesto { border-bottom: 1px solid var(--line); }
 .eyebrow { font: 12px/1.4 var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }

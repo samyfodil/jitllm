@@ -28,25 +28,51 @@ Serve it as an **OpenAI- and Anthropic-compatible API** with streaming and tool
 calling from one standalone binary, `jitllmd`, or embed it as a Go library. There
 are [desktop](#desktop-app) and [terminal](#terminal-app) apps too.
 
-## Quick start
+## Install
 
-Build with **Go 1.26 or newer**.
+Linux and macOS:
 
 ```sh
-git clone https://github.com/samyfodil/jitllm.git
-cd jitllm
+curl -fsSL https://raw.githubusercontent.com/samyfodil/jitllm/main/scripts/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/samyfodil/jitllm/main/scripts/install.ps1 | iex
+```
+
+This installs the CLI, `jitllm`, and the server, `jitllmd`, from the latest
+release, after checking each archive against the release's checksums: into
+`~/.local/bin` (`/usr/local/bin` as root), or on Windows into
+`%LOCALAPPDATA%\Programs\jitllm`, which it adds to your `PATH`. Add the apps with
+`| sh -s -- all` (or `desktop`, `tui`), or `$env:JITLLM_PROGRAMS = "all"` before
+the Windows line. Each program is one self-contained binary and its own archive
+on the [Releases](https://github.com/samyfodil/jitllm/releases) page, for Linux,
+macOS and Windows on x86-64 and arm64. GPUs need only their driver.
+
+To build from source instead, with **Go 1.26 or newer** and no C toolchain:
+
+```sh
+git clone https://github.com/samyfodil/jitllm.git && cd jitllm
 go build ./cmd/jitllm
 (cd server && go build -o ../jitllmd ./cmd/jitllmd)
+(cd ui && CGO_ENABLED=0 go build -o ../jitllm-desktop .)
+(cd tui && go build -o ../jitllm-tui .)
+```
 
+## Quick start
+
+```sh
 # Fetch a small instruct model from the catalog and convert it (about 386 MB).
 mkdir -p models
-./jitllm convert -o models smollm2-360m-instruct models/smollm2.jlm
+jitllm convert -o models smollm2-360m-instruct models/smollm2.jlm
 
 # Ask it something from the command line.
-./jitllm run -chat -n 128 models/smollm2.jlm "Why is the sky blue?"
+jitllm run -chat -n 128 models/smollm2.jlm "Why is the sky blue?"
 
 # Or serve it.
-./jitllmd serve -addr 127.0.0.1:8080 -models ./models \
+jitllmd serve -addr 127.0.0.1:8080 -models ./models \
   -load smollm2.jlm -id smollm2 -devices auto
 ```
 
@@ -68,25 +94,20 @@ and the [server reference](docs/server.md) for endpoints and daemon commands.
 ### Docker
 
 ```sh
-docker build -t jitllm .
 docker volume create jitllm-models
-docker run --rm -v jitllm-models:/models --entrypoint jitllm jitllm convert smollm2-360m-instruct
-docker run -d -p 8080:8080 -v jitllm-models:/models jitllm -load SmolLM2-360M-Instruct-Q8_0.jlm -id smollm2
+docker run --rm -v jitllm-models:/models --entrypoint jitllm ghcr.io/samyfodil/jitllm convert smollm2-360m-instruct
+docker run -d -p 8080:8080 -v jitllm-models:/models ghcr.io/samyfodil/jitllm -load SmolLM2-360M-Instruct-Q8_0.jlm -id smollm2
 ```
 
 Add `--gpus all` (with the NVIDIA Container Toolkit) to run on an NVIDIA GPU. The image is
-built for linux/amd64 and linux/arm64; release images are published as
-`ghcr.io/samyfodil/jitllm`. See [docs/docker.md](docs/docker.md).
+`jitllmd` with the `jitllm` CLI beside it, for linux/amd64 and linux/arm64;
+`docker build -t jitllm .` builds it from a checkout. See [docs/docker.md](docs/docker.md).
 
 ### Desktop app
 
 Model downloads, conversion, text and image chat, and a live view of where each
-block of the model sits, in one window:
-
-```sh
-(cd ui && CGO_ENABLED=0 go build -o ../jitllm-desktop .)
-./jitllm-desktop
-```
+block of the model sits, in one window. Install it with `| sh -s -- desktop` (or
+take its archive from the Releases page) and run `jitllm-desktop`.
 
 <p align="center">
 <picture><source media="(prefers-color-scheme: light)" srcset="website/public/shots/chat-light.png"><img src="website/public/shots/chat-dark.png" width="400" alt="The desktop app's Chat screen: a reply with its thinking folded, sampling controls, and the rate and bandwidth of the reply"></picture>
@@ -101,12 +122,8 @@ block of the model sits, in one window:
 
 The same screens in a terminal, over SSH too, sharing the desktop app's settings
 and chats. The arrow keys move the model's blocks between the CPU and the GPU,
-and the conversation keeps its history across the move:
-
-```sh
-(cd tui && go build -o ../jitllm-tui .)
-./jitllm-tui models/smollm2.jlm
-```
+and the conversation keeps its history across the move. Install it with
+`| sh -s -- tui` and run `jitllm-tui models/smollm2.jlm`.
 
 <p align="center">
 <img src="website/public/shots/tui-chat.png" width="400" alt="The terminal app's Chat screen: Qwen3-30B-A3B answering at 16.2 tokens a second, the engine panel beside it">

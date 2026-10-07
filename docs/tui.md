@@ -6,6 +6,9 @@ chat, models, discover, the engine and settings, over the same engine as
 and shares its settings and saved chats with the desktop app through
 [common/](../common/), so a chat started in one is in the other's list.
 
+Install it from a release with `scripts/install.sh tui` ([README](../README.md#install)),
+or build it:
+
 ```sh
 (cd tui && go build -o ../jitllm-tui .)
 ./jitllm-tui [-chat=true|false] [-device auto] [-ctx 8192] [-models DIR] [-mouse] [model.jlm]

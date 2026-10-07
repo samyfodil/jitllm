@@ -7,12 +7,18 @@ The terminal app is the desktop app's screens in a terminal: chat, models, disco
 
 ## Install and run
 
-It is a separate Go module:
+Install it with the [install script](/docs/install/#install-a-release):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/samyfodil/jitllm/main/scripts/install.sh | sh -s -- tui
+jitllm-tui models/smollm2.jlm
+```
+
+On Windows, set `$env:JITLLM_PROGRAMS = "tui"` before the PowerShell line. Its archive, `jitllm-tui_<version>_<os>_<arch>`, is also on the [Releases](https://github.com/samyfodil/jitllm/releases) page. It is a separate Go module; to build it from source:
 
 ```sh
 cd jitllm/tui
 go build -o "$(go env GOPATH)/bin/jitllm-tui" .
-jitllm-tui models/smollm2.jlm
 ```
 
 With no model it opens on the Models screen. The flags override a setting for this run only:

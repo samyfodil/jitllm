@@ -61,7 +61,8 @@ func main() {
 See the [model API](../engine/model/) and the [device tier](../jit/gpu/tier/).
 
 The desktop app (model downloads, conversion, text and image chat, memory and
-device views) is a separate module in [ui/](../ui/):
+device views) is a separate module in [ui/](../ui/). Install it from a release
+with `scripts/install.sh desktop` ([README](../README.md#install)), or build it:
 
 ```sh
 (cd ui && CGO_ENABLED=0 go build -o ../jitllm-desktop .)

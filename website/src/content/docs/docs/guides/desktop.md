@@ -7,12 +7,18 @@ The desktop app is a window on the same engine as `jitllm` and `jitllmd`. It run
 
 ## Install and run
 
-It is a separate Go module, so the engine keeps its single dependency:
+Install it with the [install script](/docs/install/#install-a-release):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/samyfodil/jitllm/main/scripts/install.sh | sh -s -- desktop
+jitllm-desktop
+```
+
+On Windows, set `$env:JITLLM_PROGRAMS = "desktop"` before the PowerShell line. Its archive, `jitllm-desktop_<version>_<os>_<arch>`, is also on the [Releases](https://github.com/samyfodil/jitllm/releases) page. It is a separate Go module, so the engine keeps its single dependency; to build it from source:
 
 ```sh
 cd jitllm/ui
 CGO_ENABLED=0 go build -o "$(go env GOPATH)/bin/jitllm-desktop" .
-jitllm-desktop
 ```
 
 Drop a `.jlm` or a `.gguf` anywhere on the window to open or convert it, or drop a picture to attach it to the next message.
