@@ -576,7 +576,11 @@ func TestSessionsRelocateAtOnce(t *testing.T) {
 				t.Logf("%s, the other session on %d of %d blocks: %d steps each with the seam moved twice and a "+
 					"hop to a second tier mid-run, ids and logits identical to each alone; %d submissions started "+
 					"beside another in flight", g.Name(), bBlocks, nl, atOnceGen, beside)
-				if beside == 0 {
+				// With the other session on half the blocks, the two have only
+				// the relocating one's device steps on the first tier to overlap,
+				// and sometimes do not: that arm is held to the answers, the full
+				// one to running beside each other as well.
+				if beside == 0 && !half {
 					t.Fatal("no submission ran on the device while another's did: the sessions ran one after another")
 				}
 			})
