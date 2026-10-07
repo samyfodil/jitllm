@@ -146,8 +146,9 @@ JITLLM="${JITLLM_BIN:-}"
 
 # JITLLM_VS_B names a second jitllm binary to run in llama.cpp's arm: two
 # builds of jitllm compared through every gate, the order and the per-round
-# ratio a jitllm-vs-llama.cpp row goes through. llama.cpp is not run then.
-if [ -z "${JITLLM_VS_B:-}" ]; then
+# ratio a jitllm-vs-llama.cpp row goes through. llama.cpp is not run then,
+# nor under JITLLM_VS_AA.
+if [ -z "${JITLLM_VS_B:-}" ] && [ -z "${JITLLM_VS_AA:-}" ]; then
   [ -n "$LCPP" ] || { echo "set JITLLM_LCPP to a llama.cpp build directory (the one holding llama-bench)" >&2; exit 1; }
   [ -x "$LCPP/llama-bench" ] || { echo "no llama-bench at $LCPP (JITLLM_LCPP)" >&2; exit 1; }
 fi
