@@ -1147,6 +1147,12 @@ type Model struct {
 	// writes only what moved (see sameSpan), so when the model fits the writes
 	// stop after the first token and concurrent sessions only ever read.
 	bind sync.Mutex
+	// hostUse[li] counts the live States that run block li on the host, under
+	// bind. A State placing a block gives its host page back only when the
+	// count is zero: placement is per State and the binding per Model, so
+	// another State running the block on the host would otherwise find it
+	// unbound between its pageIn and its matvecs.
+	hostUse []int32
 	// pages is the page budget as the caller set it, and the devices on the
 	// host's own memory whose holdings come off it (hostheld.go).
 	pages pageAsk
@@ -2306,6 +2312,18 @@ func (m *Model) PagerReadWait() time.Duration {
 		return 0
 	}
 	return m.container.ReadWait()
+}
+
+// hostRuns adds d to hostUse over blocks [lo, hi).
+func (m *Model) hostRuns(lo, hi int, d int32) {
+	m.bind.Lock()
+	defer m.bind.Unlock()
+	if m.hostUse == nil {
+		m.hostUse = make([]int32, len(m.layers))
+	}
+	for li := max(lo, 0); li < min(hi, len(m.layers)); li++ {
+		m.hostUse[li] += d
+	}
 }
 
 // releaseLayer drops a block's host residency: the container's page and every
