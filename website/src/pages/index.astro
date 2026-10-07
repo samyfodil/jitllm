@@ -363,6 +363,35 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '')
         </div>
       </section>
 
+      <section id="terminal" class="col sec">
+        <div class="head">
+          <div>
+            <h2 class="h2">And in a terminal</h2>
+            <p class="desc">The same screens over SSH, sharing the desktop app's settings and chats. Move the model's blocks between the CPU and the GPU with the arrow keys; the conversation keeps its history.</p>
+          </div>
+          <a class="more" href={`${base}/docs/guides/terminal/`}>The terminal app <span aria-hidden="true">→</span></a>
+        </div>
+        <div class="panel shots" data-shots>
+          <div class="bench-tabs seg" role="tablist" aria-label="Terminal app screens"><button type="button" role="tab" id="tui-tab-chat" aria-controls="tui-chat" aria-selected="true">Chat</button><button type="button" role="tab" id="tui-tab-engine" aria-controls="tui-engine" aria-selected="false">Engine</button><button type="button" role="tab" id="tui-tab-models" aria-controls="tui-models" aria-selected="false">Models</button><button type="button" role="tab" id="tui-tab-discover" aria-controls="tui-discover" aria-selected="false">Discover</button></div>
+          <figure class="shot" id="tui-chat" role="tabpanel" aria-labelledby="tui-tab-chat">
+            <img src={`${base}/shots/tui-chat.png`} width="1430" height="880" loading="lazy" alt="The jitllm terminal app, Chat screen" />
+            <figcaption>Qwen3-30B-A3B answering at 16.3 tokens a second on a laptop with a 4 GB GPU, the engine beside the conversation.</figcaption>
+          </figure>
+          <figure class="shot" id="tui-engine" role="tabpanel" aria-labelledby="tui-tab-engine" hidden>
+            <img src={`${base}/shots/tui-engine.png`} width="1430" height="880" loading="lazy" alt="The jitllm terminal app, Engine screen" />
+            <figcaption>Every block and where it runs, the rate over time, memory and the pager. The arrow keys move the seam.</figcaption>
+          </figure>
+          <figure class="shot" id="tui-models" role="tabpanel" aria-labelledby="tui-tab-models" hidden>
+            <img src={`${base}/shots/tui-models.png`} width="1430" height="880" loading="lazy" alt="The jitllm terminal app, Models screen" />
+            <figcaption>The models in your folders, each one's header read without loading it.</figcaption>
+          </figure>
+          <figure class="shot" id="tui-discover" role="tabpanel" aria-labelledby="tui-tab-discover" hidden>
+            <img src={`${base}/shots/tui-discover.png`} width="1430" height="880" loading="lazy" alt="The jitllm terminal app, Discover screen" />
+            <figcaption>The catalog ranked for this machine, from fastest to smartest, with whether each model fits.</figcaption>
+          </figure>
+        </div>
+      </section>
+
       <section id="api" class="band">
         <div class="col sec">
           <div class="head">
@@ -430,7 +459,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '')
             <h4>Project</h4>
             <a href="https://github.com/samyfodil/jitllm">GitHub</a>
             <a href="https://github.com/samyfodil/jitllm/issues">Issues</a>
-            <a href="https://github.com/samyfodil/jitllm#performance-and-contributing">Contributing</a>
+            <a href="https://github.com/samyfodil/jitllm/blob/main/CONTRIBUTING.md">Contributing</a>
           </div>
           <div>
             <h4>Read</h4>

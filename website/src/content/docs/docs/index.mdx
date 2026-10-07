@@ -55,6 +55,7 @@ Every architecture, kernel and path keeps all five, and each has a test that enf
 | `jitllm` | Converts models, runs prompts, embeds text, benchmarks and inspects hardware. The engine runs in the process. |
 | `jitllmd` | The server. Serves the OpenAI, Anthropic and Connect APIs on one address, and is a client of a running server. |
 | `jitllm-desktop` | A desktop app for downloading models, chatting with text and images, and watching memory and devices. |
+| `jitllm-tui` | The same in a terminal: chat, models, downloads, and every block of the model moved between CPU and GPU with the arrow keys. |
 | Go packages | The same engine as a library: `model.Open`, a `State`, and `Prefill`/`Forward`. See [Embed it in Go](/docs/guides/go/). |
 
-All three binaries and the library share one engine and one model format, [`.jlm`](/docs/reference/jlm/). Convert a GGUF or Hugging Face model once and use the result everywhere.
+Every binary and the library share one engine and one model format, [`.jlm`](/docs/reference/jlm/). Convert a GGUF or Hugging Face model once and use the result everywhere.

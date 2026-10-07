@@ -64,6 +64,15 @@ The desktop app is a third module. It runs the engine in process and brings mode
 jitllm-desktop
 ```
 
+## The terminal app
+
+The terminal app is a fourth module with the desktop app's screens in a terminal, over SSH too, sharing its settings and chats. See [The terminal app](/docs/guides/terminal/).
+
+```sh
+(cd tui && go build -o "$(go env GOPATH)/bin/jitllm-tui" .)
+jitllm-tui
+```
+
 ## Next
 
 - [Quickstart](/docs/get-started/): fetch a model and serve it.

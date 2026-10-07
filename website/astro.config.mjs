@@ -82,6 +82,7 @@ export default defineConfig({
             { label: 'Memory and paging', slug: 'docs/guides/memory' },
             { label: 'Embed it in Go', slug: 'docs/guides/go' },
             { label: 'The desktop app', slug: 'docs/guides/desktop' },
+            { label: 'The terminal app', slug: 'docs/guides/terminal' },
             { label: 'Troubleshooting', slug: 'docs/guides/troubleshooting' },
           ],
         },
