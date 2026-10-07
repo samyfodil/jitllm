@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -464,4 +465,121 @@ func evictAtOnce(t *testing.T, m *Model, spec string, together bool) evictArm {
 		}
 	}
 	return r
+}
+
+// TestSessionsRelocateAtOnce: one session relocates while another decodes
+// beside it on the same device -- its seam moves half its blocks home and
+// back, then the whole sequence hops to a second tier with its history --
+// and both produce exactly the ids and logits each produces alone, the
+// relocating one with the same moves at the same steps. A move is a
+// structural change of what the other session's submissions read beside it
+// (blocks freed and rebuilt, KV pages migrated), so it is held to the same bar
+// as a step: SubsBeside says the two did run at once.
+func TestSessionsRelocateAtOnce(t *testing.T) {
+	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	prompts := atOncePrompts(m)
+	const seq = 256
+	nl := m.Cfg.NLayer
+	// half puts the session beside the relocating one on the first half of
+	// the blocks only, so the relocating session's seam move frees the second
+	// half outright and its way back prepares them again -- allocations and
+	// uploads beside the other's submissions, not only its own history going.
+	for _, half := range []bool{false, true} {
+		for _, spec := range []string{"cuda:0", "vulkan:0", "metal"} {
+			t.Run(fmt.Sprintf("%s/half=%v", spec, half), func(t *testing.T) {
+				g := atOnceTier(t, spec, nil)
+				g2 := atOnceTier(t, spec, nil)
+				place := func(prompt []int32, blocks int) (*State, int32) {
+					if blocks == nl {
+						return atOnceState(t, m, g, seq, prompt)
+					}
+					st := m.NewState(seq)
+					t.Cleanup(func() { st.Close() })
+					if err := st.SetDeviceLayers(g, blocks); err != nil {
+						t.Fatal(err)
+					}
+					lg, err := st.Prefill(prompt)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return st, Greedy(lg)
+				}
+				bBlocks := nl
+				if half {
+					bBlocks = nl / 2
+				}
+				// moves is the relocating session's run: at step 8 half its blocks
+				// go home, at 16 they come back, at 24 it hops to g2.
+				moves := func(st *State, next int32, r *atOnceRun) error {
+					for i := range atOnceGen {
+						switch i {
+						case 8:
+							if got := st.SetGPULayers(nl / 2); got != nl/2 {
+								return fmt.Errorf("the seam moved to %d blocks, asked %d", got, nl/2)
+							}
+						case 16:
+							if got := st.SetGPULayers(nl); got != nl {
+								return fmt.Errorf("the seam came back to %d blocks, asked %d", got, nl)
+							}
+						case 24:
+							if err := st.SetDevice(g2); err != nil {
+								return err
+							}
+							if st.GPULayers() != nl {
+								return fmt.Errorf("%d of %d blocks on the second tier: %s", st.GPULayers(), nl, g2.Err())
+							}
+						}
+						if err := r.decode(st, next, 1); err != nil {
+							return err
+						}
+						next = r.ids[len(r.ids)-1]
+					}
+					return nil
+				}
+				var alone [2]atOnceRun
+				st, next := atOnceState(t, m, g, seq, prompts[0])
+				if err := moves(st, next, &alone[0]); err != nil {
+					t.Fatal(err)
+				}
+				st.Close()
+				st, next = place(prompts[1], bBlocks)
+				if err := alone[1].decode(st, next, atOnceGen); err != nil {
+					t.Fatal(err)
+				}
+				st.Close()
+
+				before := g.Stats()
+				a, na := atOnceState(t, m, g, seq, prompts[0])
+				b, nb := place(prompts[1], bBlocks)
+				var runs [2]atOnceRun
+				var errs [2]error
+				var wg sync.WaitGroup
+				start := make(chan struct{})
+				wg.Add(2)
+				go func() { defer wg.Done(); <-start; errs[0] = moves(a, na, &runs[0]) }()
+				go func() { defer wg.Done(); <-start; errs[1] = runs[1].decode(b, nb, atOnceGen) }()
+				close(start)
+				wg.Wait()
+				for k, err := range errs {
+					if err != nil {
+						t.Fatalf("session %d: %v", k, err)
+					}
+				}
+				after := g.Stats()
+				sameRun(t, "the relocating session", runs[0], alone[0])
+				sameRun(t, "the session beside it", runs[1], alone[1])
+				beside := after.SubsBeside - before.SubsBeside
+				t.Logf("%s, the other session on %d of %d blocks: %d steps each with the seam moved twice and a "+
+					"hop to a second tier mid-run, ids and logits identical to each alone; %d submissions started "+
+					"beside another in flight", g.Name(), bBlocks, nl, atOnceGen, beside)
+				if beside == 0 {
+					t.Fatal("no submission started while another was in flight: the sessions ran one after another")
+				}
+			})
+		}
+	}
 }
