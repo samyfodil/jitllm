@@ -1,8 +1,9 @@
 ---
 // Starlight's header title, replaced by the landing page's pixel wordmark.
 import Wordmark from './Wordmark.astro'
+const base = import.meta.env.BASE_URL.replace(/\/$/, '')
 ---
-<a href="/" class="site-title" aria-label="jitllm home"><Wordmark /></a>
+<a href={`${base}/`} class="site-title" aria-label="jitllm home"><Wordmark /></a>
 
 <style>
   .site-title { display: flex; align-items: center; text-decoration: none; }

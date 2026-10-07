@@ -1,5 +1,8 @@
 ---
 import Versus from '../components/Versus.astro'
+// BASE_URL is the site's path prefix: empty at a domain's root, /jitllm on a
+// GitHub project page.
+const base = import.meta.env.BASE_URL.replace(/\/$/, '')
 ---
 <!doctype html>
 <html lang="en" data-theme="tokyo-night">
@@ -13,7 +16,7 @@ import Versus from '../components/Versus.astro'
     <meta property="og:title" content="jitllm — an operating system for LLM inference" />
     <meta property="og:description" content="Compiled for your machine, scheduled across every core and GPU, paged through memory. OpenAI and Anthropic APIs, one Go executable." />
     <meta name="twitter:card" content="summary" />
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href={`${base}/favicon.svg`} type="image/svg+xml" />
     <script is:inline>
       // Apply the saved theme before first paint so the page never flashes.
       try {
@@ -24,8 +27,8 @@ import Versus from '../components/Versus.astro'
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/themes.css" />
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href={`${base}/themes.css`} />
+    <link rel="stylesheet" href={`${base}/styles.css`} />
   </head>
   <body>
     <a class="skip" href="#os">Skip to content</a>
@@ -43,7 +46,7 @@ import Versus from '../components/Versus.astro'
           <a href="#install">Install</a>
           <a href="#api">API</a>
           <a href="#models">Models</a>
-          <a href="/docs/">Docs</a>
+          <a href={`${base}/docs/`}>Docs</a>
         </nav>
         <div class="bar-tools">
           <button class="icon-btn" type="button" data-theme-open aria-haspopup="dialog" aria-label="Change theme" title="Change theme">
@@ -67,7 +70,7 @@ import Versus from '../components/Versus.astro'
           <a href="#install">Install</a>
           <a href="#api">API</a>
           <a href="#models">Models</a>
-          <a href="/docs/">Docs</a>
+          <a href={`${base}/docs/`}>Docs</a>
           <a href="https://github.com/samyfodil/jitllm">GitHub ↗</a>
         </div>
       </nav>
@@ -171,7 +174,7 @@ import Versus from '../components/Versus.astro'
           <div class="board" id="board-ttft" role="tabpanel" aria-labelledby="tab-ttft" data-board="ttft" hidden></div>
           <div class="board" id="board-m4" role="tabpanel" aria-labelledby="tab-m4" data-board="m4" hidden></div>
         </div>
-        <p class="method">jitllm <code>speed -p 512 -n 128 -r 2</code> against <code>llama-bench -p 512 -n 128 -ngl 99 -r 3</code> on the file jitllm converted from; vLLM 0.18.1, generated tokens over wall clock. Q4_K_M unless named. One pass per host. <a href="/docs/reference/benchmarks/">Hosts, method and the CPU board</a>.</p>
+        <p class="method">jitllm <code>speed -p 512 -n 128 -r 2</code> against <code>llama-bench -p 512 -n 128 -ngl 99 -r 3</code> on the file jitllm converted from; vLLM 0.18.1, generated tokens over wall clock. Q4_K_M unless named. One pass per host. <a href={`${base}/docs/reference/benchmarks/`}>Hosts, method and the CPU board</a>.</p>
       </section>
 
       <section id="compare" class="col sec" aria-labelledby="compare-title">
@@ -180,7 +183,7 @@ import Versus from '../components/Versus.astro'
             <h2 class="h2" id="compare-title">How it compares</h2>
             <p class="desc">Pick an engine. Every feature is checked against that project's own documentation and source, and links to it.</p>
           </div>
-          <a class="more" href="/docs/compare/">The full comparison <span aria-hidden="true">→</span></a>
+          <a class="more" href={`${base}/docs/compare/`}>The full comparison <span aria-hidden="true">→</span></a>
         </div>
         <Versus />
       </section>
@@ -212,7 +215,7 @@ import Versus from '../components/Versus.astro'
             <h2 class="h2">Five principles, each held by a test</h2>
             <p class="desc">Every architecture, kernel and path keeps all five.</p>
           </div>
-          <a class="more" href="/docs/#five-principles">What they mean <span aria-hidden="true">→</span></a>
+          <a class="more" href={`${base}/docs/#five-principles`}>What they mean <span aria-hidden="true">→</span></a>
         </div>
         <ul class="models principles">
           <li><b>JIT</b><span>Every kernel is emitted at run time for the device in front of it.</span></li>
@@ -230,7 +233,7 @@ import Versus from '../components/Versus.astro'
               <h2 class="h2">The kernel</h2>
               <p class="desc">Four subsystems between your application and the hardware.</p>
             </div>
-            <a class="more" href="/docs/concepts/how-it-works/">How it works <span aria-hidden="true">→</span></a>
+            <a class="more" href={`${base}/docs/concepts/how-it-works/`}>How it works <span aria-hidden="true">→</span></a>
           </div>
           <div class="rail" data-rail>
             <article class="card">
@@ -280,7 +283,7 @@ import Versus from '../components/Versus.astro'
             <h2 class="h2 jlm-title">Convert once. Page cheaply forever.</h2>
             <p class="lede">An OS loads programs from a format built for loading. <code>.jlm</code> is that for models: GGUF or Hugging Face weights, with their quantization preserved, laid out once so evicting and reloading them during inference never repeats the preparation.</p>
             <p class="lede">One file carries the weights, configuration, tokenizer, chat templates and optional vision tower, for the CLI, the server, the desktop app and the Go library alike.</p>
-            <a class="more" href="/docs/reference/jlm/">The format <span aria-hidden="true">→</span></a>
+            <a class="more" href={`${base}/docs/reference/jlm/`}>The format <span aria-hidden="true">→</span></a>
           </div>
           <ul class="points">
             <li><span class="pix sm" data-pixel="box" aria-hidden="true"></span><div><b>No repacking on page-in</b><p>Quantized weights are stored in the layout the GPU backends share, so a reload is a read.</p></div></li>
@@ -296,7 +299,7 @@ import Versus from '../components/Versus.astro'
             <h2 class="h2">Install jitllm</h2>
             <p class="desc">Build from source with Go 1.26 or newer. GPU backends use the libraries and drivers already on the machine; jitllm finds them at runtime.</p>
           </div>
-          <a class="more" href="/docs/install/">Full guide <span aria-hidden="true">→</span></a>
+          <a class="more" href={`${base}/docs/install/`}>Full guide <span aria-hidden="true">→</span></a>
         </div>
         <div class="two">
           <div class="panel step">
@@ -333,28 +336,28 @@ import Versus from '../components/Versus.astro'
             <h2 class="h2">A desktop app on the same engine</h2>
             <p class="desc">Chat, choose a model, convert it, and watch where every block of it sits. The engine runs inside the app's own process.</p>
           </div>
-          <a class="more" href="/docs/guides/desktop/">The desktop app <span aria-hidden="true">→</span></a>
+          <a class="more" href={`${base}/docs/guides/desktop/`}>The desktop app <span aria-hidden="true">→</span></a>
         </div>
         <div class="panel shots" data-shots>
           <div class="bench-tabs seg" role="tablist" aria-label="Desktop app screens"><button type="button" role="tab" id="shot-tab-chat" aria-controls="shot-chat" aria-selected="true">Chat</button><button type="button" role="tab" id="shot-tab-models" aria-controls="shot-models" aria-selected="false">Models</button><button type="button" role="tab" id="shot-tab-machine" aria-controls="shot-machine" aria-selected="false">Machine</button><button type="button" role="tab" id="shot-tab-discover" aria-controls="shot-discover" aria-selected="false">Discover</button></div>
           <figure class="shot" id="shot-chat" role="tabpanel" aria-labelledby="shot-tab-chat">
-            <img class="shot-dark" src="/shots/chat-dark.png" width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Chat screen" />
-            <img class="shot-light" src="/shots/chat-light.png" width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Chat screen" />
+            <img class="shot-dark" src={`${base}/shots/chat-dark.png`} width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Chat screen" />
+            <img class="shot-light" src={`${base}/shots/chat-light.png`} width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Chat screen" />
             <figcaption>Qwen3-30B-A3B, a 30B mixture of experts, answering on a laptop with a 4 GB GPU: one block on the card, the rest on the CPU, its experts paged from disk.</figcaption>
           </figure>
           <figure class="shot" id="shot-models" role="tabpanel" aria-labelledby="shot-tab-models" hidden>
-            <img class="shot-dark" src="/shots/models-dark.png" width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Models screen" />
-            <img class="shot-light" src="/shots/models-light.png" width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Models screen" />
+            <img class="shot-dark" src={`${base}/shots/models-dark.png`} width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Models screen" />
+            <img class="shot-light" src={`${base}/shots/models-light.png`} width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Models screen" />
             <figcaption>The models in your folders, with what each one is and whether it fits, fits on the GPU or pages from disk.</figcaption>
           </figure>
           <figure class="shot" id="shot-machine" role="tabpanel" aria-labelledby="shot-tab-machine" hidden>
-            <img class="shot-dark" src="/shots/machine-dark.png" width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Machine screen" />
-            <img class="shot-light" src="/shots/machine-light.png" width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Machine screen" />
+            <img class="shot-dark" src={`${base}/shots/machine-dark.png`} width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Machine screen" />
+            <img class="shot-light" src={`${base}/shots/machine-light.png`} width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Machine screen" />
             <figcaption>Where the 30B is: a block on the GPU, 47 on the host, its pages filling a 10.31 GiB budget, and every page the pager has read.</figcaption>
           </figure>
           <figure class="shot" id="shot-discover" role="tabpanel" aria-labelledby="shot-tab-discover" hidden>
-            <img class="shot-dark" src="/shots/discover-smartest-dark.png" width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Discover screen" />
-            <img class="shot-light" src="/shots/discover-smartest-light.png" width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Discover screen" />
+            <img class="shot-dark" src={`${base}/shots/discover-smartest-dark.png`} width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Discover screen" />
+            <img class="shot-light" src={`${base}/shots/discover-smartest-light.png`} width="1440" height="900" loading="lazy" alt="The jitllm desktop app, Discover screen" />
             <figcaption>Models this machine runs well, ranked for it, with an expected rate and whether each fits, before anything is downloaded. From the app's mock mode.</figcaption>
           </figure>
         </div>
@@ -367,7 +370,7 @@ import Versus from '../components/Versus.astro'
               <h2 class="h2">System calls your apps already make</h2>
               <p class="desc">Applications reach the OS through APIs they already speak. Point a client at <code>http://127.0.0.1:8080/v1</code> and use the model's id as its name.</p>
             </div>
-            <a class="more" href="/docs/guides/serve/">API guide <span aria-hidden="true">→</span></a>
+            <a class="more" href={`${base}/docs/guides/serve/`}>API guide <span aria-hidden="true">→</span></a>
           </div>
           <div class="three">
             <div class="panel api">
@@ -395,7 +398,7 @@ import Versus from '../components/Versus.astro'
             <h2 class="h2">Bring the models you want</h2>
             <p class="desc">Convert from GGUF or Hugging Face once, then run the <code>.jlm</code> anywhere jitllm runs.</p>
           </div>
-          <a class="more" href="/docs/reference/models/">All models <span aria-hidden="true">→</span></a>
+          <a class="more" href={`${base}/docs/reference/models/`}>All models <span aria-hidden="true">→</span></a>
         </div>
         <ul class="models">
           <li><b>Llama</b><span>Llama 2 · Llama 3 · Llama 4 · Mistral · Ministral · SmolLM</span></li>
@@ -431,12 +434,12 @@ import Versus from '../components/Versus.astro'
           </div>
           <div>
             <h4>Read</h4>
-            <a href="/docs/get-started/">Quickstart</a>
-            <a href="/docs/guides/serve/">Serve an API</a>
-            <a href="/docs/guides/devices/">Devices and placement</a>
-            <a href="/docs/guides/memory/">Memory and paging</a>
-            <a href="/docs/guides/go/">Embed in Go</a>
-            <a href="/docs/reference/benchmarks/">Benchmarks</a>
+            <a href={`${base}/docs/get-started/`}>Quickstart</a>
+            <a href={`${base}/docs/guides/serve/`}>Serve an API</a>
+            <a href={`${base}/docs/guides/devices/`}>Devices and placement</a>
+            <a href={`${base}/docs/guides/memory/`}>Memory and paging</a>
+            <a href={`${base}/docs/guides/go/`}>Embed in Go</a>
+            <a href={`${base}/docs/reference/benchmarks/`}>Benchmarks</a>
           </div>
         </div>
       </div>
@@ -455,9 +458,9 @@ import Versus from '../components/Versus.astro'
       </div>
     </div>
 
-    <script is:inline src="/app.js"></script>
-    <script is:inline src="/machine.js"></script>
-    <script is:inline src="/numbers.js"></script>
+    <script is:inline src={`${base}/app.js`}></script>
+    <script is:inline src={`${base}/machine.js`}></script>
+    <script is:inline src={`${base}/numbers.js`}></script>
       <script is:inline>
       // The desktop screenshots' tabs.
       for (const root of document.querySelectorAll('[data-shots]')) {

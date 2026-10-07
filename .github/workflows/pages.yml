@@ -1,0 +1,57 @@
+name: pages
+
+# Builds the website (website/, Astro + Starlight) and publishes it to GitHub
+# Pages. The repository's Pages source must be set to "GitHub Actions".
+on:
+  push:
+    branches: [main]
+    paths: ["website/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions: {}
+
+# One deploy at a time; a newer push waits rather than cancelling one mid-way.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      # base_path is /jitllm on a project page and empty on a custom domain;
+      # astro.config.mjs prefixes every root-absolute link with it.
+      - id: pages
+        uses: actions/configure-pages@v6
+      - run: npm ci
+      - run: npm run build
+        env:
+          SITE: ${{ steps.pages.outputs.origin }}
+          BASE_PATH: ${{ steps.pages.outputs.base_path }}
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: website/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write # publish the artifact
+      id-token: write # prove the deployment came from this workflow
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

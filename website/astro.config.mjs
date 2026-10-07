@@ -1,11 +1,41 @@
 // @ts-check
 import { defineConfig } from 'astro/config'
 import starlight from '@astrojs/starlight'
+import { satteri } from '@astrojs/markdown-satteri'
 
 // The landing page is src/pages/index.astro, a plain page with its own CSS and
 // scripts (public/). Starlight owns only what is under src/content/docs, which
 // lives at /docs.
+
+// SITE and BASE_PATH are set by the Pages workflow: BASE_PATH is /jitllm on a
+// GitHub project page and empty on a custom domain or a local build.
+const base = (process.env.BASE_PATH ?? '').replace(/\/$/, '')
+
+// The docs link to the site's own pages and pictures from its root ("/docs/...",
+// "/shots/..."); this prefixes them with the base in Markdown links, raw HTML
+// and MDX components alike. Starlight appends its own plugins to this processor.
+const prefix = (v) => (typeof v === 'string' && v.startsWith('/') && !v.startsWith('//') ? base + v : v)
+const prefixAttrs = (node) => {
+  for (const a of node.attributes) if (a.name === 'href' || a.name === 'src') a.value = prefix(a.value)
+  return node
+}
+const basePlugin = {
+  name: 'jitllm-base',
+  element: {
+    filter: ['a', 'img'],
+    visit(node, ctx) {
+      for (const k of ['href', 'src']) if (node.properties?.[k]) ctx.setProperty(node, k, prefix(node.properties[k]))
+    },
+  },
+  mdxJsxFlowElement: { filter: ['LinkCard', 'img', 'a'], visit: (node) => prefixAttrs({ ...node, attributes: node.attributes.map((a) => ({ ...a })) }) },
+  mdxJsxTextElement: { filter: ['a', 'img'], visit: (node) => prefixAttrs({ ...node, attributes: node.attributes.map((a) => ({ ...a })) }) },
+  raw: (node) => ({ ...node, value: node.value.replace(/\b(href|src)="\/(?!\/)/g, `$1="${base}/`) }),
+}
+
 export default defineConfig({
+  site: process.env.SITE,
+  base: base || undefined,
+  markdown: { processor: satteri({ hastPlugins: base ? [basePlugin] : [] }) },
   integrations: [
     starlight({
       title: 'jitllm',
@@ -21,7 +51,7 @@ export default defineConfig({
         ThemeSelect: './src/components/ThemeSelect.astro',
       },
       head: [
-        { tag: 'link', attrs: { rel: 'stylesheet', href: '/themes.css' } },
+        { tag: 'link', attrs: { rel: 'stylesheet', href: `${base}/themes.css` } },
         { tag: 'link', attrs: { rel: 'preconnect', href: 'https://fonts.googleapis.com' } },
         { tag: 'link', attrs: { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: true } },
         {
