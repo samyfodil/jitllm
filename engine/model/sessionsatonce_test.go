@@ -583,3 +583,83 @@ func TestSessionsRelocateAtOnce(t *testing.T) {
 		}
 	}
 }
+
+// TestModelsAndSessionsAtOnce: two models on one device, each through a tier
+// of its own as the app and the server load them, and two sessions of each --
+// four sequences decoding at once from four goroutines -- produce exactly
+// the ids and logits each produces alone. Different models share no weights,
+// pages or scratch, only the card, its memory and its queues; sessions of one
+// model share its tier. SubsBeside on both tiers says each model's sessions
+// ran beside each other, and the spans that the two models' did too.
+func TestModelsAndSessionsAtOnce(t *testing.T) {
+	names := []string{"stories15M-q8_0.gguf", "SmolLM2-360M-Instruct-Q8_0.gguf"}
+	var ms []*Model
+	for _, n := range names {
+		m, err := Open(jlmOf(t, testmodels.Path(n)), noTune)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer m.Close()
+		ms = append(ms, m)
+	}
+	const seq = 256
+	for _, spec := range []string{"cuda:0", "vulkan:0", "metal"} {
+		t.Run(spec, func(t *testing.T) {
+			var gs []*tier.GPU
+			for range ms {
+				gs = append(gs, atOnceTier(t, spec, nil))
+			}
+			// The four sequences: model k's prompt p.
+			type seqOf struct{ m, p int }
+			var all []seqOf
+			for mi := range ms {
+				for p := range 2 {
+					all = append(all, seqOf{mi, p})
+				}
+			}
+			prompt := func(s seqOf) []int32 { return atOncePrompts(ms[s.m])[s.p] }
+			alone := make([]atOnceRun, len(all))
+			for i, s := range all {
+				st, next := atOnceState(t, ms[s.m], gs[s.m], seq, prompt(s))
+				if err := alone[i].decode(st, next, atOnceGen); err != nil {
+					t.Fatal(err)
+				}
+				st.Close()
+			}
+			var before []tier.Stats
+			for _, g := range gs {
+				before = append(before, g.Stats())
+			}
+			var sts []*State
+			var next []int32
+			for _, s := range all {
+				st, n := atOnceState(t, ms[s.m], gs[s.m], seq, prompt(s))
+				sts, next = append(sts, st), append(next, n)
+			}
+			runs := atOnce(t, sts, next, atOnceGen)
+			for i, s := range all {
+				sameRun(t, fmt.Sprintf("%s session %d", names[s.m], s.p), runs[i], alone[i])
+			}
+			for mi, g := range gs {
+				st := g.Stats()
+				beside := st.SubsBeside - before[mi].SubsBeside
+				t.Logf("%s on %s: %d submissions started beside another session's in flight, %d call(s) "+
+					"waited for a lane, scratch %d bytes, budget used %d: %s", names[mi], g.Name(), beside,
+					st.LanesWaited-before[mi].LanesWaited, st.ScratchBytes, st.BudgetUsed, g.Err())
+				// With no room on the card for a second lane, a model's sessions
+				// take turns by design (tier takeLane), which LanesWaited counts;
+				// never beside each other with no wait is the sessions serialised.
+				if beside == 0 && st.LanesWaited == before[mi].LanesWaited {
+					t.Fatalf("%s's two sessions never ran beside each other, and no call waited for a lane", names[mi])
+				}
+			}
+			// The two models' sequences overlap on the wall clock: one model's
+			// tier did not wait for the other's.
+			if ov := overlaps(runs[0], runs[2]); ov == 0 {
+				t.Fatal("no step of one model overlapped the other's: the models ran one after another")
+			} else {
+				t.Logf("%d of %s's steps overlapped %s's", ov, names[0], names[1])
+			}
+		})
+	}
+}
