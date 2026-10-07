@@ -1051,3 +1051,14 @@ func (q *Queue) release() {
 		q.s.queue = 0
 	}
 }
+
+// HasQueues reports whether a session queue is open on this context.
+func (c *Ctx) HasQueues() bool {
+	c.qmu.RLock()
+	defer c.qmu.RUnlock()
+	return len(c.qs) > 0
+}
+
+// WaitOwn blocks until the context's own queue has run everything committed
+// to it, without waiting for the session queues.
+func (c *Ctx) WaitOwn() error { return c.sub.wait() }

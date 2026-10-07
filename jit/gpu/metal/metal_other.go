@@ -61,6 +61,8 @@ func (c *Ctx) NewQueue() (*Queue, error)                 { return nil, errNoMeta
 func (q *Queue) NewBatch() *Batch                        { return nil }
 func (q *Queue) Wait() error                             { return errNoMetal }
 func (q *Queue) Close()                                  {}
+func (c *Ctx) HasQueues() bool                           { return false }
+func (c *Ctx) WaitOwn() error                            { return errNoMetal }
 func (b *Batch) Encode(*Kernel, int, int, ...*Buf) error { return errNoMetal }
 func (b *Batch) Commit() error                           { return errNoMetal }
 

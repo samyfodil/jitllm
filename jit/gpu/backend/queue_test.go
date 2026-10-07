@@ -176,3 +176,107 @@ func queuesAtOnce(t *testing.T, d backend.Device, qd backend.Queued) {
 		t.Fatal("no session on one queue overlapped one on the other: they ran one after another")
 	}
 }
+
+// TestQueuedSessionSeesTheDevicesOwnWork: what a Session outside any queue
+// ran -- the device's own line, a table write or a copy in the tier -- has
+// landed before a queued session's next work reads it. Queues do not order
+// against the device's own line on CUDA (the legacy stream against a
+// non-blocking one) or Metal (two command queues), so without the wait the
+// queued copy reads the buffer as it was. The write is the end of a long
+// chain, so it is still running when the queued session starts.
+func TestQueuedSessionSeesTheDevicesOwnWork(t *testing.T) {
+	gpuLock(t)
+	ran := 0
+	for _, d := range backend.Open() {
+		defer d.Close()
+		qd, ok := d.(backend.Queued)
+		if !ok {
+			continue
+		}
+		ran++
+		t.Run(d.API()+"/"+d.Name(), func(t *testing.T) { seesOwnWork(t, d, qd) })
+	}
+	if ran == 0 {
+		t.Skip("no backend here runs sessions on queues")
+	}
+}
+
+func seesOwnWork(t *testing.T, d backend.Device, qd backend.Queued) {
+	b := ir.New("spinw", [3]int{32, 1, 1})
+	pIn := b.Param("pIn", ir.F32)
+	pTrip := b.Param("pTrip", ir.U32)
+	pOut := b.Param("pOut", ir.F32)
+	i := b.Min(ir.U32, b.TID(), b.Const(ir.U32, 31))
+	x0 := b.Load(ir.F32, pIn, i, 0)
+	one := b.Load(ir.F32, pIn, b.Const(ir.U32, 32), 0)
+	b.LoopN(b.Load(ir.U32, pTrip, b.Const(ir.U32, 0), 0))
+	x := b.Phi(ir.F32, x0)
+	b.SetPhi(x, b.Fma(x, one, one))
+	b.EndLoop()
+	b.Store(pOut, i, x, 0)
+	spin, err := d.Compile(b.Done())
+	if err != nil {
+		t.Skipf("compile: %v", err)
+	}
+	defer spin.Close()
+	c := ir.New("copy", [3]int{32, 1, 1})
+	cIn := c.Param("cIn", ir.F32)
+	cOut := c.Param("cOut", ir.F32)
+	j := c.Min(ir.U32, c.TID(), c.Const(ir.U32, 31))
+	c.Store(cOut, j, c.Load(ir.F32, cIn, j, 0), 0)
+	cp, err := d.Compile(c.Done())
+	if err != nil {
+		t.Skipf("compile: %v", err)
+	}
+	defer cp.Close()
+	alloc := func(n int, p []byte) backend.Buf {
+		buf, err := d.Alloc(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(buf.Free)
+		if p != nil {
+			if err := buf.Write(p); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return buf
+	}
+	in := make([]byte, 33*4)
+	binary.LittleEndian.PutUint32(in[32*4:], math.Float32bits(1))
+	tb := make([]byte, 4)
+	binary.LittleEndian.PutUint32(tb, spinTrip)
+	bin, btrip := alloc(len(in), in), alloc(4, tb)
+	mid, out := alloc(32*4, make([]byte, 32*4)), alloc(32*4, nil)
+	q, err := qd.NewQueue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+	for round := range 4 {
+		// The device's own line writes spinTrip into mid at the end of a long
+		// chain, and returns without waiting for it.
+		d.Session(func(s backend.Session) {
+			if err := s.Launch(spin, 1, 32, bin, btrip, mid); err != nil {
+				t.Fatal(err)
+			}
+		})
+		got := make([]byte, 32*4)
+		qd.SessionOn(q, func(s backend.Session) {
+			if err := s.Launch(cp, 1, 32, mid, out); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Read(out, got); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if v := math.Float32frombits(binary.LittleEndian.Uint32(got)); v != spinTrip {
+			t.Fatalf("round %d: the queued session read %v from the buffer the device's own line was "+
+				"writing %d into: it ran before that work landed", round, v, spinTrip)
+		}
+		// Clear it for the next round, ordered after everything.
+		if err := mid.Write(make([]byte, 32*4)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

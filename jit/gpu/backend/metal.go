@@ -256,6 +256,15 @@ func (d *mtlDev) Session(f func(Session)) {
 	s.err = nil
 	f(s)
 	s.finish()
+	// The context's own queue does not order against a session's queue: what
+	// this Session committed (a table write, a copy) must have landed before
+	// a queued session's next command buffer reads it, as on CUDA's legacy
+	// stream. Without queues, in-order commit is enough.
+	if d.c.HasQueues() {
+		if err := d.c.WaitOwn(); s.err == nil {
+			s.err = err
+		}
+	}
 	d.mu.Lock()
 	d.free = append(d.free, s)
 	d.mu.Unlock()
