@@ -77,6 +77,25 @@ Add `--gpus all` (with the NVIDIA Container Toolkit) to run on an NVIDIA GPU. Th
 built for linux/amd64 and linux/arm64; release images are published as
 `ghcr.io/samyfodil/jitllm`. See [docs/docker.md](docs/docker.md).
 
+### Desktop app
+
+Model downloads, conversion, text and image chat, and a live view of where each
+block of the model sits, in one window:
+
+```sh
+(cd ui && CGO_ENABLED=0 go build -o ../jitllm-desktop .)
+./jitllm-desktop
+```
+
+<p align="center">
+<picture><source media="(prefers-color-scheme: light)" srcset="website/public/shots/chat-light.png"><img src="website/public/shots/chat-dark.png" width="400" alt="The desktop app's Chat screen: a reply with its thinking folded, sampling controls, and the rate and bandwidth of the reply"></picture>
+<picture><source media="(prefers-color-scheme: light)" srcset="website/public/shots/machine-light.png"><img src="website/public/shots/machine-dark.png" width="400" alt="The Machine screen: which blocks run on the GPU and which on the CPU, the KV cache, and the pages held in each memory"></picture>
+</p>
+<p align="center">
+<picture><source media="(prefers-color-scheme: light)" srcset="website/public/shots/discover-smartest-light.png"><img src="website/public/shots/discover-smartest-dark.png" width="400" alt="The Discover screen: the catalog ranked for this machine, with an expected rate and whether each model fits"></picture>
+<picture><source media="(prefers-color-scheme: light)" srcset="website/public/shots/models-light.png"><img src="website/public/shots/models-dark.png" width="400" alt="The Models screen: the converted models, each with whether it fits on the GPU, fits in memory or pages from disk"></picture>
+</p>
+
 ## Supported models
 
 `convert` reads 65 GGUF architecture names (57 graphs), 30 Hugging Face safetensors
