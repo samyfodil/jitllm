@@ -1,8 +1,10 @@
 name: release
 
-# A v* tag builds every archive into a DRAFT release, runs the shipped
-# archives on three hosts, and publishes the draft only if all three decoded
-# a real model correctly. The container image is pushed to ghcr.io under the
+# A v* tag builds a DRAFT release with one archive per program -- the CLI
+# (jitllm), the server (jitllmd), the desktop app and the terminal app -- for
+# Linux, macOS and Windows on amd64 and arm64, runs the shipped archives on
+# three hosts, and publishes the draft only if all three decoded a real model
+# correctly. The container image is pushed to ghcr.io under the
 # version with the draft, and tagged latest only when the draft is published.
 on:
   push:
@@ -33,6 +35,9 @@ jobs:
           cache-dependency-path: |
             go.sum
             server/go.sum
+            common/go.sum
+            ui/go.sum
+            tui/go.sum
       # The image's arm64 half runs its apt step under QEMU; the binaries in
       # it are the ones goreleaser cross-built above it.
       - uses: docker/setup-qemu-action@v4
@@ -93,20 +98,29 @@ jobs:
         with:
           name: dist
           path: dist
-      - name: verify checksum and unpack
+      # Every program ships as its own archive: the CLI, the server and the
+      # two apps. Each is checked against checksums.txt and unpacked; the CLI
+      # is the one that then decodes a model.
+      - name: verify checksums and unpack
         run: |
           set -euo pipefail
           cd dist
-          archive=$(ls ./*_"${{ matrix.target }}".tar.gz)
-          grep " ${archive#./}\$" checksums.txt > want.txt
-          if command -v sha256sum >/dev/null; then sha256sum -c want.txt; else shasum -a 256 -c want.txt; fi
-          mkdir ../bin && tar -xzf "$archive" -C ../bin
+          mkdir ../bin
+          for prog in jitllm jitllmd jitllm-desktop jitllm-tui; do
+            archive=$(ls ./"$prog"_*_"${{ matrix.target }}".tar.gz)
+            grep " ${archive#./}\$" checksums.txt > want.txt
+            if command -v sha256sum >/dev/null; then sha256sum -c want.txt; else shasum -a 256 -c want.txt; fi
+            tar -xzf "$archive" -C ../bin
+            test -x "../bin/$prog"
+          done
           ls -l ../bin
       - name: signature (macos)
         if: runner.os == 'macOS'
         run: |
-          codesign -dv --verbose=2 bin/jitllm 2>&1
-          codesign -d --entitlements - bin/jitllm 2>&1 || true
+          for prog in jitllm jitllmd jitllm-desktop jitllm-tui; do
+            codesign -dv --verbose=2 "bin/$prog" 2>&1
+            codesign -d --entitlements - "bin/$prog" 2>&1 || true
+          done
       - name: hardware
         run: bin/jitllm hardware
       - uses: actions/cache@v6

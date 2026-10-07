@@ -29,10 +29,6 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
-    ignore:
-      # Builds, but nothing has ever run the arm64 kernels on Windows.
-      - goos: windows
-        goarch: arm64
 
   # The daemon: its own module (server/go.mod) so the engine keeps one
   # dependency; `dir` builds it from there.
@@ -49,20 +45,78 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
-    ignore:
-      - goos: windows
-        goarch: arm64
 
+  # The desktop app (ui/go.mod). On Windows it is linked as a GUI program, so
+  # starting it opens no console window beside it.
+  - id: jitllm-desktop
+    dir: ui
+    main: .
+    binary: jitllm-desktop
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - '{{ if eq .Os "windows" }}-H=windowsgui{{ end }}'
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+  # The terminal app (tui/go.mod).
+  - id: jitllm-tui
+    dir: tui
+    main: .
+    binary: jitllm-tui
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+# One archive per program and target, named after the program:
+# jitllm_<version>_<os>_<arch> is the CLI, jitllmd_... the server,
+# jitllm-desktop_... and jitllm-tui_... the two apps.
 archives:
-  - id: default
-    ids: [jitllm, jitllmd]
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - id: jitllm
+    ids: [jitllm]
+    name_template: "jitllm_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats: [tar.gz]
     format_overrides:
       - goos: windows
         formats: [zip]
-    files:
+    files: &docs
       - README.md
+      - LICENSE
+      - COPYRIGHT
+  - id: jitllmd
+    ids: [jitllmd]
+    name_template: "jitllmd_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: *docs
+  - id: jitllm-desktop
+    ids: [jitllm-desktop]
+    name_template: "jitllm-desktop_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: *docs
+  - id: jitllm-tui
+    ids: [jitllm-tui]
+    name_template: "jitllm-tui_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: *docs
 
 # The container image: jitllmd serving, with the jitllm CLI beside it, for
 # linux/amd64 and linux/arm64 under one multi-platform tag (dockers_v2 builds
@@ -112,7 +166,7 @@ snapshot:
 notarize:
   macos:
     - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
-      ids: [jitllm, jitllmd]
+      ids: [jitllm, jitllmd, jitllm-desktop, jitllm-tui]
       sign:
         certificate: "{{ .Env.MACOS_SIGN_P12 }}"
         password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
@@ -141,8 +195,9 @@ release:
   github:
     owner: samyfodil
     name: jitllm
-  # The workflow publishes the draft only after the shipped archives have run
-  # on Linux amd64, Linux arm64 and macOS arm64.
+  # The workflow publishes the draft only after the shipped CLI archives have
+  # run on Linux amd64, Linux arm64 and macOS arm64, and every archive of those
+  # targets has passed its checksum and unpacked.
   draft: true
   replace_existing_draft: true
   prerelease: auto

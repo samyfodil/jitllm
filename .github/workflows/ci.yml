@@ -48,7 +48,7 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           set -euo pipefail
-          for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64 windows/amd64; do
+          for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64 windows/amd64 windows/arm64; do
             for mod in . server common ui tui; do
               echo "::group::$target $mod"
               (cd "$mod" && GOOS=${target%/*} GOARCH=${target#*/} go build ./...)

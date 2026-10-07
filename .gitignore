@@ -64,3 +64,6 @@ local-*
 /website/dist/
 /website/.astro/
 /website/node_modules/
+
+# goreleaser --snapshot output
+/dist/
