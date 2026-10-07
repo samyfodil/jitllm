@@ -284,6 +284,7 @@ type streamBank struct {
 	// hin, hw and hout its input, weights and output, reused every token.
 	host          func(sel []uint32, w, in, out []float32) error
 	hybrid        bool // the experts run on the host (runHost), not sent
+	li            int  // the block, for the session's host side (hostFor)
 	hin, hw, hout []float32
 	hsel          []uint32
 	// pred is this block's selection as the previous block's probe predicted
@@ -486,8 +487,12 @@ func (st *streamBank) runHostRows(g *devTier, s backend.Session, sel, w, in, out
 			return err
 		}
 	}
+	host := g.hostFor(st)
+	if host == nil {
+		return fmt.Errorf("tier: this session offered no host side for a hybrid block")
+	}
 	for r := 0; r < rows; r++ {
-		if err := st.host(st.hsel[r*(k+1):r*(k+1)+k], st.hw[r*k:(r+1)*k],
+		if err := host(st.hsel[r*(k+1):r*(k+1)+k], st.hw[r*k:(r+1)*k],
 			st.hin[r*n:(r+1)*n], st.hout[r*n:(r+1)*n]); err != nil {
 			return err
 		}
@@ -496,6 +501,13 @@ func (st *streamBank) runHostRows(g *devTier, s backend.Session, sel, w, in, out
 	g.THybrid += time.Since(t0)
 	g.HybridRows += rows
 	return err
+}
+
+// hostFor is the current session's host side for st's block, nil when this
+// session never offered one. Never the placing session's: that State may be
+// closed, and its generated code with it. Callers hold g.mu.
+func (g *devTier) hostFor(st *streamBank) func(sel []uint32, w, in, out []float32) error {
+	return g.hostFns[g.cur][st.li]
 }
 
 // runHost is the hybrid suspension: in (the experts' input, n wide -- the
@@ -523,7 +535,11 @@ func (st *streamBank) runHost(g *devTier, s backend.Session, in, w, out backend.
 	if err := s.Read(w, f32b(st.hw)); err != nil {
 		return err
 	}
-	if err := st.host(st.sel, st.hw[:k], st.hin, st.hout); err != nil {
+	host := g.hostFor(st)
+	if host == nil {
+		return fmt.Errorf("tier: this session offered no host side for a hybrid block")
+	}
+	if err := host(st.sel, st.hw[:k], st.hin, st.hout); err != nil {
 		return err
 	}
 	err := s.WriteAt(out, 0, f32b(st.hout))
@@ -2087,6 +2103,22 @@ func declineWeights(w *nn.LayerWeights) string {
 // card with room still gets the block and only when no device has room does
 // anybody swap.
 func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage bool) (placed bool) {
+	// The host side of a hybrid block is the offering session's: a placed
+	// block is shared by every session that attaches, and each runs its experts
+	// on its own State (runHost looks it up by the current session). Recorded
+	// before anything can decline, so a block another session placed still
+	// learns this one's.
+	if w != nil && w.HostExperts != nil {
+		g.mu.Lock()
+		if g.hostFns == nil {
+			g.hostFns = map[uint64]map[int]func(sel []uint32, w, in, out []float32) error{}
+		}
+		if g.hostFns[g.cur] == nil {
+			g.hostFns[g.cur] = map[int]func(sel []uint32, w, in, out []float32) error{}
+		}
+		g.hostFns[g.cur][li] = w.HostExperts
+		g.mu.Unlock()
+	}
 	// Shapes this tier cannot express are declined first and by name (RULE 8a):
 	// each would run wrong if skipped, so the block goes to the host whole. They
 	// are checked before any allocation so a decline takes no VRAM from the next
@@ -2800,7 +2832,7 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 			if l.stream == nil {
 				l.stream = &streamBank{sel: make([]uint32, slots),
 					ensure: w.Ensure, sel2: w.EnsureExperts,
-					pre: w.PrefetchExperts, host: w.HostExperts, w: *w, hybrid: true, nExpert: bank}
+					pre: w.PrefetchExperts, host: w.HostExperts, w: *w, hybrid: true, nExpert: bank, li: li}
 				g.StreamBlocks++
 			}
 			continue
@@ -2839,7 +2871,7 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 				// contributes zeros.
 				l.stream = &streamBank{sel: make([]uint32, slots),
 					ensure: w.Ensure, sel2: w.EnsureExperts,
-					pre: w.PrefetchExperts, host: w.HostExperts, w: *w}
+					pre: w.PrefetchExperts, host: w.HostExperts, w: *w, li: li}
 				l.stream.nExpert = bank
 				// An auto-streamed block runs its experts on the host unless
 				// told otherwise: on Kimi-K3 over the V100s that decoded 1.43x
@@ -8496,6 +8528,7 @@ func (g *devTier) TrimKV(pos int) bool {
 // dropSession frees everything session sid holds on this device: its history
 // and its recurrent state on every block.
 func (g *devTier) dropSession(sid uint64) {
+	delete(g.hostFns, sid)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	// The crossing sample is this session's too, and session ids never repeat,

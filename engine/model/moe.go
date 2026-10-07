@@ -806,6 +806,12 @@ func (s *State) hostExperts(li int, sel []uint32, w, in, out []float32) error {
 	}
 	s.hostOnly = true
 	defer func() { s.hostOnly = false }()
+	// A bank not split into expert pages lives in the block's own page, which
+	// nothing else on the host has reason to keep in: read the selected
+	// sheets' ranges of it (a no-op for a bank in expert pages).
+	if err := s.m.pageInSelected(li, sel); err != nil {
+		return err
+	}
 	if err := s.m.ensureExperts(li, s.hyOrd, &s.expHold); err != nil {
 		s.expHold.release()
 		return err

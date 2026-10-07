@@ -1252,6 +1252,9 @@ type devTier struct {
 	// (sizeAutoCaches). It is set on every device, so a block that moves
 	// keeps it. Under mu.
 	autoStream map[int]expertMode
+	// hostFns is each session's host side for its hybrid blocks, by block
+	// (hostFor); a session's go when it detaches. Under mu.
+	hostFns map[uint64]map[int]func(sel []uint32, w, in, out []float32) error
 	// gtune measures the streamed fill's group count (streamtune.go).
 	gtune *groupTuner
 	// sheetStage is the streamed fill's gather buffer per (matrix, plane);

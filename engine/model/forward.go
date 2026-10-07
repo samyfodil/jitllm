@@ -1649,6 +1649,11 @@ func (s *State) offerRange(lo, hi int) {
 				if bank > 0 && as.AutoStream(li, total, bank, c.NExpert, c.NExpertUsed, c.NLayer, s.m.meanBase()) {
 					if took = adm.PrepLayer(li, &plan, &w); took {
 						s.autoStreamed++
+					} else if ep, ok := ld.(nn.ExpertPlacer); ok && !(named && place.Experts != "") && s.m.opt.experts == "" {
+						// It cannot stream either (a float bank with no host
+						// side, Gemma 4's dense MLP): the mark goes, or the block
+						// could never come back resident once there is room.
+						ep.PlaceExperts(li, "")
 					}
 				}
 			}

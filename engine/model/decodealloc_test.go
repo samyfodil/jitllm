@@ -545,3 +545,52 @@ func anyPackedBlock(m *Model) bool {
 	}
 	return m.output.packed != nil
 }
+
+// TestOffCardDecodeDoesNotAllocate is TestDecodeDoesNotAllocate's device arms
+// on mixture blocks whose experts run off the card: on the host (hybrid), and
+// sent to the card every token. A warm token of either makes no engine heap
+// allocation, and each arm counts its path having run inside the window.
+func TestOffCardDecodeDoesNotAllocate(t *testing.T) {
+	for _, name := range []string{"synth-kimik3.gguf", "kimik3/Kimi-K3-0.40B.Q8_0.gguf"} {
+		t.Run(name, func(t *testing.T) {
+			for _, where := range []string{"host", "card"} {
+				// An F32 bank has no sheet layout to send (only hybrid needs none).
+				if where == "card" && strings.HasPrefix(name, "synth") {
+					continue
+				}
+				t.Run(where, func(t *testing.T) {
+					m, err := Open(jlmOf(t, testmodels.Path(name)), noTune, WithExperts(where), WithStreamTrial(false))
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer m.Close()
+					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices("cuda:0")}, testTierOpts(t)...)...)
+					if err != nil || g == nil {
+						noDevice(t, "cuda:0", err)
+					}
+					defer g.Close()
+					t.Run("decode", func(t *testing.T) { decodeAllocs(t, m, g) })
+					if where == "host" {
+						t.Run("step", func(t *testing.T) { stepAllocs(t, m, g, stepAll) })
+					}
+					// The selection check, on a state of its own: the windows'
+					// states are gone and their counts with them.
+					st := m.NewState(8)
+					defer st.Close()
+					st.SetDeviceLayers(g, m.Cfg.NLayer)
+					s0 := g.Stats()
+					for _, id := range []int32{5, 6} {
+						if _, err := st.Forward(id); err != nil {
+							t.Fatal(err)
+						}
+					}
+					s1 := g.Stats()
+					if where == "host" && s1.HybridRuns == s0.HybridRuns || where == "card" && s1.StreamFills == s0.StreamFills {
+						t.Fatalf("experts %s: %d hybrid block-steps, %d fills -- the path under test never ran",
+							where, s1.HybridRuns-s0.HybridRuns, s1.StreamFills-s0.StreamFills)
+					}
+				})
+			}
+		})
+	}
+}
