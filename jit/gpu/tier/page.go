@@ -619,8 +619,16 @@ func (g *devTier) ReleasesHostPage(li int) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	l, ok := g.layers[li]
-	if !ok || l.stream != nil {
+	if !ok {
 		return false
+	}
+	if l.stream != nil {
+		// A streamed block's base is on the card and its experts are read from
+		// their own pages (a bank in expert pages hands sheets out through
+		// Sheet), so the host's copy of its block page is dead weight -- 1.2
+		// GiB a block on Kimi-K3. A bank kept in the block page (a float bank)
+		// is read from there, and that page stays.
+		return l.stream.w.Down.Packed != nil && l.stream.w.Down.Packed.Sheet != nil
 	}
 	any := false
 	for _, pp := range l.tensors() {

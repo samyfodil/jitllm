@@ -1685,7 +1685,11 @@ func (s *State) offerRange(lo, hi int) {
 			// Under bind, as pageIn binds: another State may be binding or
 			// reading this block's spans while this one places it.
 			s.m.bind.Lock()
-			releaseLayer(s.m.container, li, l)
+			keep := false
+			if eh, ok := ld.(nn.ExpertHolder); ok {
+				keep = !eh.HoldsExperts(li)
+			}
+			releaseLayer(s.m.container, li, l, keep)
 			s.m.bind.Unlock()
 		} else if buf := s.m.container.Page(li); len(buf) > 0 {
 			// The page stays (a streamed block's host side reads it), so no
@@ -2226,9 +2230,11 @@ func (m *Model) bankWeight(t tensor) nn.Weight {
 		// the router and shared expert the same upload reads.
 		var lb jlm.Lease
 		if b := int(t.e.Block); b >= 0 && b < int(c.H.NBlocks) {
-			var err error
-			if lb, err = c.Hold(b, nil); err != nil {
-				return nn.Packed{}, func() {}, err
+			// Held only when in, as ensureExperts does: claiming the
+			// frame of a block whose base is on the card held its size of
+			// host budget empty for every sheet sent.
+			if l, ok := c.HoldFilled(b); ok {
+				lb = l
 			}
 		}
 		off, size := c.PageBounds(p)

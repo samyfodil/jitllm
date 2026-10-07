@@ -1570,6 +1570,22 @@ func (g *GPU) ReleasesHostPage(li int) bool {
 	return d.ReleasesHostPage(li)
 }
 
+// HoldsExperts is nn.ExpertHolder: whether the device holding block li holds
+// its routed bank, so the host may give the bank's expert pages back. A
+// streamed or hybrid block holds none of it.
+func (g *GPU) HoldsExperts(li int) bool {
+	g.mu.Lock()
+	d := g.own[li]
+	g.mu.Unlock()
+	if d == nil {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	l, ok := d.layers[li]
+	return ok && l.stream == nil
+}
+
 // RopeRows reads back the rotary table the first device's width-row batched
 // scratch built last: row r at r*NRot, the layout nn.Rope.Table writes. It is
 // for a gate that checks the table itself, since logit tolerances hide a table

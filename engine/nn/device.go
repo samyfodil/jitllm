@@ -1268,6 +1268,11 @@ type SessionStepper interface {
 // work at once instead of in turn.
 type Pipeliner interface{ PipelineDepth() int }
 
+// ExpertHolder says whether the device holding block li holds its routed
+// bank, so the host may give the bank's expert pages back with the block's
+// page. A block whose experts run off the card (streamed, hybrid) does not.
+type ExpertHolder interface{ HoldsExperts(li int) bool }
+
 // HostPageReleaser says a placed block's host page can be given back.
 type HostPageReleaser interface{ ReleasesHostPage(li int) bool }
 

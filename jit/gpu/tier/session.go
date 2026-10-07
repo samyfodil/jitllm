@@ -245,3 +245,6 @@ func (s *gpuSession) HeadDeviceName() (string, bool) { return s.g.HeadDeviceName
 func (s *gpuSession) HeadWith(li int) bool           { return s.g.HeadWith(li) }
 func (s *gpuSession) Pin(li int, on bool) bool       { return s.g.Pin(li, on) }
 func (s *gpuSession) Stream(li int, on bool) bool    { return s.g.Stream(li, on) }
+
+// HoldsExperts forwards to the tier (nn.ExpertHolder).
+func (s *gpuSession) HoldsExperts(li int) bool { return s.g.HoldsExperts(li) }

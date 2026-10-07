@@ -113,7 +113,9 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 					t.Fatal("no region of the window ran node-affine: this arm measured the plain host decode twice")
 				}
 			})
-			m, err := Open(jlmOf(t, p), noTune)
+			// The stream trial pinned off with the tuners: it migrates blocks
+			// between its runs, and a migration's page-ins are not a decode.
+			m, err := Open(jlmOf(t, p), noTune, WithStreamTrial(false))
 			if err != nil {
 				t.Fatal(err)
 			}
