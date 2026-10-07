@@ -8412,7 +8412,7 @@ func (g *devTier) ReleaseLayers(lo, hi int) {
 	g.afterRelease()
 }
 
-// leaveLayers is ReleaseLayers for one session: the current one's history
+// leaveLayers is ReleaseLayers for one session: session sid's history
 // on blocks [lo, hi) goes, and a block goes with it only when no other
 // session has history there -- the weights are the model's, and another
 // session is still running against them. It returns the blocks it released.
