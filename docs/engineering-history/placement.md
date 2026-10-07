@@ -2971,6 +2971,46 @@ So auto-stream was a mode in one respect -- it engaged only past a size -- and
 that is gone: a mixture block that does not get a resident place gets an
 off-card one, and whether that beats the host is measured.
 
+### 16c-4. Closing it out: batched hybrid, no bank on the card, per-session host sides, the host pages a hybrid block keeps.
+
+- **Batched rows.** A hybrid block now takes a prompt's chunk and a ragged
+  step's rows: the rows are routed on the device (`emitGroupedMoE` up to the
+  weights), their selections, weights and expert inputs come home, and the host
+  runs them expert-major -- each chosen expert read once and run over its rows
+  as one batch (`hostExpertsRows`, `moeBatchExpert`), the host's own batched
+  order -- before the sums go back. Only the valid rows run (a padded chunk of
+  32 for a 10-token prompt ran 224 rows' experts before that). Gates:
+  `TestHybridPrefillMatchesTheHost` (fails at NMSE 6.6e-3 with one row's
+  selection used for all), `TestBatchSeamMovesCarryEveryRowOffCard` (three
+  rows across seam moves and round trips, fails when a hybrid block refuses
+  rows).
+- **No bank on the card.** A hybrid block uploads no compact bank, compiles no
+  expert kernel and needs no packed layout (an F32 fixture runs hybrid); a top-1
+  router streams this way too. Its VRAM goes to bases.
+- **Bugs the gates found on the way.** (1) The host side was the placing
+  State's closure: a block shared by a second session ran the first one's
+  closed generated code (`jit: Call on closed code`). The tier now keeps each
+  session's host side and uses the current session's (`hostFns`, dropped on
+  detach). (2) While blocks were home the host offered their weights to the
+  device as lone matvecs, and a hybrid block never took those copies back:
+  +971 KB a round trip. A routed expert is never offered now, and a block whose
+  host page stays tells the device to forget its weights' copies at placement.
+  (3) A streamed block kept its host block page (1.2 GiB a block on Kimi-K3)
+  and `releaseLayer` dropped its expert pages, which it still reads; now the
+  block page goes and the expert pages stay (`nn.ExpertHolder`), and nothing
+  claims an empty frame for a block page that is out. (4) A block that could
+  neither stream nor run hybrid kept its auto mark and could never come back
+  resident (Gemma 4's dense mixture, F32). (5) Forced `%host` packed the first
+  cards like fill-first and left no room for a prompt's scratch on Kimi-K3; a
+  placement's mark spreads like an auto one.
+- **Zero allocations.** `TestOffCardDecodeDoesNotAllocate`: hybrid decode and
+  steps on synth-kimik3 and Kimi-K3-0.40B, sheet decode on Kimi-K3-0.40B, each
+  counted as having run; `TestDecodeDoesNotAllocate` pins the stream trial off
+  with the tuners (its migrations are page-ins, not a decode).
+- **Tuned constants.** The page-locked half and the direct-send threshold are
+  measured per device after the group count, on one ladder tuner
+  (`streamtune.go`), each pinned by its `Config` field.
+
 ## GPU.Layers' head-on-another-device arm is dead code
 
 ★★★ **AND `GPU.Layers`' HEAD-ON-ANOTHER-DEVICE ARM IS DEAD CODE, ESTABLISHED

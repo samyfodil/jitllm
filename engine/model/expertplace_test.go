@@ -250,3 +250,43 @@ func TestHybridPrefillMatchesTheHost(t *testing.T) {
 	}
 	t.Logf("%d hybrid rows, %d hybrid block-steps", st.HybridRows, st.HybridRuns)
 }
+
+// TestTopOneRouterRunsHybrid: Llama 4's top-1 sigmoid router, whose weight
+// scales the expert's input, places hybrid -- no indexed matvec runs, so the
+// one-slot bank that kept a top-1 router off the streamed path is no obstacle
+// -- with the host's greedy tokens, the hybrid path counted.
+func TestTopOneRouterRunsHybrid(t *testing.T) {
+	path, ok := existingModel(testmodels.Path("synth-llama4.gguf"))
+	if !ok {
+		t.Skip("MODEL MISSING: synth-llama4.gguf -- this gate proved nothing")
+	}
+	ids := []int32{1, 2, 3, 4, 5, 6}
+	host, err := Open(jlmOf(t, path), noTune, WithKVF16(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := runExperts(t, host, nil, ids)
+	host.Close()
+	m, err := Open(jlmOf(t, path), noTune, WithKVF16(false), WithExperts("host"), WithStreamTrial(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if m.Cfg.NExpertUsed != 1 {
+		t.Fatalf("the fixture routes %d experts; this gate is about a top-1 router", m.Cfg.NExpertUsed)
+	}
+	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+	if err != nil || g == nil {
+		noDevice(t, "gpu:0", err)
+	}
+	defer g.Close()
+	got := runExperts(t, m, g, ids)
+	if st := g.Stats(); st.HybridRuns == 0 {
+		t.Fatalf("no hybrid block-step: the top-1 mixture did not run its experts on the host (%s)", g.Err())
+	}
+	for p := range want {
+		if argmaxOf(got[p]) != argmaxOf(want[p]) {
+			t.Fatalf("pos %d: argmax %d, host %d", p, argmaxOf(got[p]), argmaxOf(want[p]))
+		}
+	}
+}
