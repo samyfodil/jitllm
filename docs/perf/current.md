@@ -845,6 +845,37 @@ all 56 threads (its default physical-core count), no numactl:
 | kimi-k3-in-c, run 1 | 153.9 s | 9.55 | 0.105 | 539 GB in the run (430 GB experts, 109 GB trunk) | 376.7 GB |
 | kimi-k3-in-c, run 2 | 74.9 s | 8.83 | 0.113 | 544 GB | 376.7 GB |
 
+Then the jitllm container was reconverted with the same options
+(`jitllm convert -q8 hf://moonshotai/Kimi-K3@f831ab66... Kimi-K3-q8.jlm`, 22369c5c,
+4h36m streamed from the Hub, 1,564,653,101,056 B, the same size as before) and
+jitllm ran back to back on the same box, disk and cgroup ceiling (MemoryMax=420G:
+jitllm's self-set budget 378 GiB, kimi-k3-in-c's peak RSS 376.7 GB), all cores,
+no numactl, trial off:
+
+| run | prompt (5 tok) | decode s/token | tok/s | decode read | peak RSS |
+|---|---|---|---|---|---|
+| jitllm `-devices cpu`, run 1 | 302.2 s | 8.59 | 0.12 | 5.16 GB/token | 355.6 GB |
+| jitllm `-devices cpu`, run 2 | 60.0 s | 4.31 | 0.23 | 5.16 GB/token | 355.6 GB |
+| jitllm `-devices cuda` (hybrid), run 1 | 47.0 s | 3.46 | 0.29 | 4.91 GB/token | 357.5 GB |
+| jitllm `-devices cuda` (hybrid), run 2 | 46.4 s | 2.69 | 0.37 | 4.70 GB/token | 358.0 GB |
+
+The first CPU run came right after the conversion's 1.45 TB of writes and is the
+cold-reclaim run the first table above describes (its decode read the same bytes
+as run 2 at a third of the rate); the second is the one to read. The
+reconverted file gives the earlier runs' answers: the CPU runs' 64 ids are the
+earlier CPU runs' exactly, and the first device run's are the earlier device
+runs' and kimi-k3-in-c's exactly ("Paris." and a list); the second device run
+parts after 31 tokens, within the device band.
+
+**No ratio.** RULE 1 wants both arms measured in the same pass with the same
+tool, and RULE 2 paired interleaved rounds: kimi-k3-in-c and the jitllm
+container could not both be on this disk (237 GiB free, a 60 GiB floor, and
+1.45 TB each), so the arms are hours apart with a reconversion between them, two
+runs each, not interleaved. Absolute rows only: kimi-k3-in-c decoded at
+8.8-9.6 s/token with a 75-154 s first step; jitllm's host 4.31 s/token (warm run)
+and its hybrid device placement 2.69-3.46 s/token with a 46-47 s prompt, under
+the same memory ceiling.
+
 Its tokens: `17374 20829 10 427 414 1008 606 142957 37092 387 7081 306 ...` --
 "Paris.", then a quoted list of sentences about Paris, identical in both runs
 and identical to jitllm's device runs of this prompt (the streamed rows above);
