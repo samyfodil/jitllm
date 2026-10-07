@@ -144,8 +144,13 @@ esac
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 JITLLM="${JITLLM_BIN:-}"
 
-[ -n "$LCPP" ] || { echo "set JITLLM_LCPP to a llama.cpp build directory (the one holding llama-bench)" >&2; exit 1; }
-[ -x "$LCPP/llama-bench" ] || { echo "no llama-bench at $LCPP (JITLLM_LCPP)" >&2; exit 1; }
+# JITLLM_VS_B names a second jitllm binary to run in llama.cpp's arm: two
+# builds of jitllm compared through every gate, the order and the per-round
+# ratio a jitllm-vs-llama.cpp row goes through. llama.cpp is not run then.
+if [ -z "${JITLLM_VS_B:-}" ]; then
+  [ -n "$LCPP" ] || { echo "set JITLLM_LCPP to a llama.cpp build directory (the one holding llama-bench)" >&2; exit 1; }
+  [ -x "$LCPP/llama-bench" ] || { echo "no llama-bench at $LCPP (JITLLM_LCPP)" >&2; exit 1; }
+fi
 
 # ★ GATE ON PSI, NOT loadavg. This box reads loadavg 4.4 while idle; see
 # bench.Guard and RULE 2b.
@@ -300,6 +305,11 @@ fi
 if [ -n "${JITLLM_VS_AA:-}" ]; then
   lcpp_run() { jitllm_run; }
   echo "  A/A self-control: jitllm in both arms"
+fi
+if [ -n "${JITLLM_VS_B:-}" ]; then
+  [ -x "$JITLLM_VS_B" ] || { echo "JITLLM_VS_B=$JITLLM_VS_B is not an executable" >&2; exit 1; }
+  lcpp_run() { local JITLLM="$JITLLM_VS_B"; jitllm_run; }
+  echo "  B arm: $JITLLM_VS_B (jitllm), not llama.cpp"
 fi
 
 # ★ THE CLAMP GATE. This laptop's sustained-power limit (PL1) intermittently
