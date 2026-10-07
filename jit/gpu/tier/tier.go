@@ -1296,6 +1296,12 @@ type devShared struct {
 	lanes   []*lane
 	laneGen uint64
 	dv      *devTier
+	// clk, tickets, quiet and idle are the submissions in flight outside mu
+	// and the waits on them (inflight.go). idle's lock is mu.
+	clk     subClock
+	tickets []uint64
+	quiet   int
+	idle    sync.Cond
 	// tkv is the k/v pair every non-causal block shares and tkvRefs how many
 	// hold it (transientkv.go). Guarded by mu.
 	tkv     *kvPair
@@ -2128,7 +2134,12 @@ func (g *devTier) Close() {
 // to the device-owning goroutine, which is busy running the session, so it
 // would deadlock (the same constraint as Alloc). A recording retired from
 // inside one goes on the stale list and is freed before the next session.
+//
+// What it is called for is a change to something every submission may name,
+// so it waits for every submission in flight first (quiesce), and its caller,
+// holding g.mu, makes the change before any other starts. Callers hold g.mu.
 func (g *devTier) dropGraph() {
+	g.quiesce()
 	// Every recording, not just the current one, in every lane: a moved
 	// address invalidates all of them, whichever session made them.
 	g.eachLane(func(l *lane) {
@@ -2819,9 +2830,9 @@ func (g *devTier) reduceKernel(rows, split int) backend.Kernel {
 // one, under regrow's rules.
 func (g *devTier) sizeF16(n int) bool { return g.regrow(&g.f16Buf, &g.f16Cap, n, 1, true, false) }
 
-// sizePart grows the partial-sum buffer. The block path and the per-matvec
-// path share it, so it can move under a recording (MatVec grows it for a shape
-// the blocks never had): the graph that names the old address is dropped.
+// sizePart grows the lane's partial-sum buffer. The blocks grow it for a
+// shape a recording may not have had: the lane's recordings that name the old
+// address are dropped.
 func (g *devTier) sizePart(n int) bool { return g.regrow(&g.partBuf, &g.partCap, n, 4, true, true) }
 
 // sizeMVPart grows matVec's own partial sums (devShared.mvPart). No recording
@@ -2848,7 +2859,9 @@ func (g *devTier) regrow(dst *backend.Buf, have *int, n, unit int, drop, poison 
 	// Staging is the device's own: charged as scratch (scratch.go).
 	defer g.scratchWin().close()
 	if drop {
-		g.dropGraph()
+		// Every buffer regrow drops for is a lane's: only the lane's
+		// recordings name it.
+		g.dropLaneGraph()
 	}
 	old := *have
 	if *dst != nil {

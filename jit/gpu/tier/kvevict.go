@@ -124,9 +124,11 @@ func (g *devTier) evictableIn(kp *kvPool, l *kvLayerPool) int {
 }
 
 // evictPage sends s's oldest resident page home in every layer that holds s,
-// freeing one id in each. Callers hold g.mu, between submissions: nothing in
-// flight reads the page (readPages waits), so its id is free at once.
+// freeing one id in each. Callers hold g.mu, between submissions: it waits for
+// every submission in flight first (s may be another session's, stepping),
+// so nothing reads the page and its id is free at once.
 func (g *devTier) evictPage(kp *kvPool, s seqID) error {
+	g.quiesce()
 	if err := g.flushTabs(); err != nil {
 		return err
 	}

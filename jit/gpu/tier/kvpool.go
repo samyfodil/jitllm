@@ -55,10 +55,15 @@ type kvLayerPool struct {
 	k, v backend.Buf
 	n    int // pages the buffers hold, the dummy included
 	free []uint32
-	// fenced are ids released since the last completed submission: one in
-	// flight may still read them, so they are reused only after fence().
-	fenced []uint32
-	owned  map[seqID][]uint32
+	// fenced are ids released while a submission may still read them, and
+	// fencedAt the ticket each was released at (subClock.seq then); fence()
+	// frees them once nothing that could read them is in flight. clk is the
+	// device's clock, nil in a pool built outside one, where a fence frees
+	// everything.
+	fenced   []uint32
+	fencedAt []uint64
+	clk      *subClock
+	owned    map[seqID][]uint32
 	// tab is the layer's table arena, kvPool.tabWords u32: sequence s's ids
 	// at ranges[s].off, in position order, entry 0 the dummy.
 	tab backend.Buf
@@ -177,7 +182,7 @@ func (g *devTier) addKVLayer(kp *kvPool, li int, geom kvGeom, n int) error {
 		return nil
 	}
 	n = max(n, 1)
-	l := &kvLayerPool{geom: geom, n: n, owned: map[seqID][]uint32{}}
+	l := &kvLayerPool{geom: geom, n: n, owned: map[seqID][]uint32{}, clk: &g.clk}
 	for id := n - 1; id >= 1; id-- {
 		l.free = append(l.free, uint32(id))
 	}
@@ -439,16 +444,54 @@ func (g *devTier) growTables(kp *kvPool, words int) error {
 // releasePages gives sequence s's pages in layer l back. They are fenced, not
 // free: a submission still in flight may read them.
 func (l *kvLayerPool) releasePages(s seqID) {
-	l.fenced = residentIDs(l.fenced, l.owned[s])
+	l.fenceIDs(l.owned[s])
 	delete(l.owned, s)
 	delete(l.home, s)
 	delete(l.rel, s)
 }
 
-// fence frees the pages released before the last completed submission.
+// fenceIDs fences every id of ids that is a page on the card (0 is one at
+// home), at the ticket the next submission takes.
+func (l *kvLayerPool) fenceIDs(ids []uint32) {
+	for _, id := range ids {
+		if id != 0 {
+			l.fenceID(id)
+		}
+	}
+}
+
+// fenceID fences one page.
+func (l *kvLayerPool) fenceID(id uint32) {
+	var at uint64
+	if l.clk != nil {
+		at = l.clk.seq
+	}
+	l.fenced = append(l.fenced, id)
+	l.fencedAt = append(l.fencedAt, at)
+}
+
+// fence frees the fenced pages nothing in flight can read: every one when no
+// submission is in flight, else those released before the oldest submission in
+// flight took its ticket. A page released at ticket t waits for every
+// submission holding t or less, the one about to take t included -- what
+// "after the next completed submission" was when submissions ran one at a
+// time.
 func (l *kvLayerPool) fence() {
-	l.free = append(l.free, l.fenced...)
-	l.fenced = l.fenced[:0]
+	if l.clk == nil || l.clk.live == 0 {
+		l.free = append(l.free, l.fenced...)
+		l.fenced, l.fencedAt = l.fenced[:0], l.fencedAt[:0]
+		return
+	}
+	kept := 0
+	for i, id := range l.fenced {
+		if l.fencedAt[i] < l.clk.oldest {
+			l.free = append(l.free, id)
+			continue
+		}
+		l.fenced[kept], l.fencedAt[kept] = id, l.fencedAt[i]
+		kept++
+	}
+	l.fenced, l.fencedAt = l.fenced[:kept], l.fencedAt[:kept]
 }
 
 // dropRange gives s's table run back once no layer holds a page of it.

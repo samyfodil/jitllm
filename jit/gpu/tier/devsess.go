@@ -42,6 +42,10 @@ type devSess struct {
 	cur, last *lane
 	depth     int
 	view, v0  *devTier
+	// inSub says the session's submission is running outside g.mu: what it
+	// builds on the way (a kernel, a grown staging buffer) takes g.mu for the
+	// build (subLock), and nothing it calls may quiesce.
+	inSub bool
 	// embPend is the prompt chunk EmbedRows promised and the next submission
 	// gathers (embed.go). Guarded by mu.
 	embPend *embPend
@@ -151,6 +155,7 @@ func newDevice(sh *devShared) *devTier {
 	dv := &devTier{devShared: sh, devSess: ds, lane: l0, Stats: &sh.tot}
 	sh.lane0, sh.dv = l0, dv
 	sh.sess = map[uint64]*devSess{0: ds}
+	sh.idle.L = &sh.mu
 	return dv
 }
 
@@ -460,14 +465,18 @@ func (g *devTier) eachLane(f func(*lane)) {
 	}
 }
 
-// dropLaneGraph retires the recordings made in this view's lane. Callers hold
-// g.mu, outside any Session.
+// dropLaneGraph retires the recordings made in this view's lane, destroying
+// them unless the call is inside its submission, where the next call outside
+// one does (see dropGraph). A lane is its call's alone, so nothing in flight
+// names them. Callers hold g.mu.
 func (g *devTier) dropLaneGraph() {
 	for k, r := range g.recs {
 		g.stale = append(g.stale, r)
 		delete(g.recs, k)
 	}
-	freeStaleOf(g.lane)
+	if !g.inSub {
+		freeStaleOf(g.lane)
+	}
 }
 
 // freeStaleOf destroys a lane's retired recordings. Callers must be outside a

@@ -695,7 +695,7 @@ func (g *devTier) windowPages(sid uint64, kp *kvPool, li int, l *kvLayerPool, se
 	}
 	for j := l.rel[s]; j < first; j++ {
 		if id := l.owned[s][j]; id != 0 {
-			l.fenced = append(l.fenced, id)
+			l.fenceID(id)
 			l.owned[s][j] = 0
 			g.tabPend = append(g.tabPend, tabWrite{l.tab, kp.ranges[s].off + j, l.owned[s][j : j+1]})
 			g.KVWindowReleased++
@@ -1037,7 +1037,7 @@ func (kp *kvPool) trimSeq(s seqID, pos int) bool {
 		if keep >= len(ids) {
 			continue
 		}
-		l.fenced = residentIDs(l.fenced, ids[keep:])
+		l.fenceIDs(ids[keep:])
 		if keep == 0 {
 			delete(l.owned, s)
 		} else {

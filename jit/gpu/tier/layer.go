@@ -1285,13 +1285,14 @@ func (g *devTier) ensureRecNext(rows int) bool {
 		if err != nil {
 			return fail(err)
 		}
+		// Every recording, and every submission in flight, names the old one.
+		g.dropGraph()
 		if g.recNext != nil {
 			g.recNext.Free()
 			g.refund(g.recNextBytes)
 		}
 		g.recNext, g.recNextBytes = b, bytes
 		g.charge(bytes)
-		g.dropGraph() // a recording names the old scratch by address
 	}
 	if _, err := g.slotCopy(g.recS, rows); err != nil {
 		return fail(err)
@@ -6429,7 +6430,9 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	if g.subFn == nil {
 		g.subFn = g.layersSession
 	}
+	t := g.beginSub()
 	g.dev.Session(g.subFn)
+	g.endSub(t)
 	err, direct := g.sub.err, g.sub.direct
 	g.sub = submitArgs{}
 	if err != nil {
