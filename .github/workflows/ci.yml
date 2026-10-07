@@ -231,6 +231,23 @@ jobs:
         run: |
           go build ./...
           go build -o "jitllm-ui$(go env GOEXE)" .
+      # Packaged as the release packages it (ui/cmd/pack): on Windows a GUI
+      # program with its icon and version, refused if it would open a console;
+      # on macOS the jitllm.app bundle, signed and verified.
+      - name: package (windows)
+        if: runner.os == 'Windows'
+        working-directory: ui
+        run: |
+          go run ./cmd/pack syso -arch "$(go env GOARCH)"
+          go build -ldflags -H=windowsgui -o jitllm-ui.exe .
+          go run ./cmd/pack check jitllm-ui.exe
+      - name: package (macos)
+        if: runner.os == 'macOS'
+        working-directory: ui
+        run: |
+          go run ./cmd/pack app -bin jitllm-ui -o dist-app/jitllm.app
+          codesign --verify --strict --verbose=2 dist-app/jitllm.app
+          plutil -lint dist-app/jitllm.app/Contents/Info.plist
       - name: vet
         run: ./scripts/vet ui
       - name: mock-engine tests

@@ -31,6 +31,35 @@ invisible to every measurement gate in this repo and it lands mid-round; the
 project's own evidence records a subagent compiling Go in the same tree as the
 cause of a nine-point phantom regression.
 
+## Packaging: a desktop application, not a command-line program
+
+`cmd/pack` (pure Go, runs on any host) makes the binary an application on the
+two systems that tell one from a terminal program by its packaging:
+
+```
+cd ui && ../scripts/cap 8G -- go run ./cmd/pack syso -arch amd64 -version 1.2.3
+cd ui && GOOS=windows GOARCH=amd64 ../scripts/cap 8G -- go build -ldflags -H=windowsgui -o jitllm-ui.exe .
+cd ui && ../scripts/cap 8G -- go run ./cmd/pack check jitllm-ui.exe
+cd ui && ../scripts/cap 8G -- go run ./cmd/pack app -bin jitllm-ui -version 1.2.3 -o dist-app/jitllm.app
+```
+
+- **Windows**: linked with `-H=windowsgui`, so no console window opens beside
+  it, and with `rsrc_windows_<arch>.syso` beside `main.go` the linker embeds
+  the icon and the version information. `check` refuses an .exe whose
+  subsystem is not GUI or whose resources are missing.
+- **macOS**: `jitllm.app` with Info.plist, the `.icns` and the binary under
+  `Contents/MacOS`; on a Mac it is signed ad-hoc under the hardened runtime
+  with `.github/release/entitlements.plist`. gogpu sets the regular activation
+  policy and brings the window to the front itself.
+- Every icon is drawn from `app.IconAt`, the window icon, so there is no image
+  file to keep in step.
+- With no console to read it (a GUI .exe from Explorer, an app from Finder),
+  the log goes to `jitllm-ui.log` beside the settings file, crashes included.
+  A GUI .exe run from cmd or PowerShell writes to that terminal.
+
+`.goreleaser.yaml` runs the same steps per target; CI's `ui` job runs them on
+its Windows and macOS hosts.
+
 ## Do not float the toolkit
 
 The versions in `go.mod` are pinned and `go get -u` breaks the build. `gg` at
@@ -66,6 +95,7 @@ engine/            attaches common/engine to the window: a Front over the shell,
 mock/              stand-ins for the engine, the hardware and the files; the scenarios
 stage/             headless frames of the mounted window, and what is wrong with them
 cmd/shots/         every scenario's frames as PNGs
+cmd/pack/          the Windows resource and GUI check, the macOS bundle
 ```
 
 The dependency direction is fixed and has no cycle:

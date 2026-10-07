@@ -46,8 +46,8 @@ builds:
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
 
-  # The desktop app (ui/go.mod). On Windows it is linked as a GUI program, so
-  # starting it opens no console window beside it.
+  # The desktop app (ui/go.mod), one build per way it is packaged
+  # (ui/cmd/pack). On Linux it is the binary.
   - id: jitllm-desktop
     dir: ui
     main: .
@@ -58,10 +58,53 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - '{{ if eq .Os "windows" }}-H=windowsgui{{ end }}'
     mod_timestamp: "{{ .CommitTimestamp }}"
-    goos: [linux, darwin, windows]
+    goos: [linux]
     goarch: [amd64, arm64]
+
+  # On Windows it is linked as a GUI program, so starting it opens no console
+  # window beside it, with the icon and version information from the resource
+  # object written beside it first; the check refuses a console program.
+  - id: jitllm-desktop-windows
+    dir: ui
+    main: .
+    binary: jitllm-desktop
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -H=windowsgui
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [windows]
+    goarch: [amd64, arm64]
+    hooks:
+      pre:
+        - cmd: go run ./cmd/pack syso -arch {{ .Arch }} -version {{ .Version }}
+          dir: ui
+      post:
+        - cmd: go run ./cmd/pack check {{ abs .Path }}
+          dir: ui
+
+  # On macOS it is also wrapped in jitllm.app, which the archive carries beside
+  # the bare binary: Info.plist, the icon, the binary under Contents/MacOS.
+  - id: jitllm-desktop-darwin
+    dir: ui
+    main: .
+    binary: jitllm-desktop
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [darwin]
+    goarch: [amd64, arm64]
+    hooks:
+      post:
+        - cmd: go run ./cmd/pack app -bin {{ abs .Path }} -version {{ .Version }} -o dist-app/{{ .Os }}_{{ .Arch }}/jitllm.app
+          dir: ui
 
   # The terminal app (tui/go.mod).
   - id: jitllm-tui
@@ -99,13 +142,25 @@ archives:
         formats: [zip]
     files: *docs
   - id: jitllm-desktop
-    ids: [jitllm-desktop]
+    ids: [jitllm-desktop, jitllm-desktop-windows]
     name_template: "jitllm-desktop_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats: [tar.gz]
     format_overrides:
       - goos: windows
         formats: [zip]
     files: *docs
+  - id: jitllm-desktop-darwin
+    ids: [jitllm-desktop-darwin]
+    name_template: "jitllm-desktop_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - README.md
+      - LICENSE
+      - COPYRIGHT
+      # goreleaser drops the matched files' common directory, which is
+      # Contents (Info.plist sits in it), so dst puts it back under the bundle.
+      - src: "ui/dist-app/{{ .Os }}_{{ .Arch }}/jitllm.app/**/*"
+        dst: jitllm.app/Contents
   - id: jitllm-tui
     ids: [jitllm-tui]
     name_template: "jitllm-tui_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
@@ -163,7 +218,7 @@ snapshot:
 notarize:
   macos:
     - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
-      ids: [jitllm, jitllmd, jitllm-desktop, jitllm-tui]
+      ids: [jitllm, jitllmd, jitllm-desktop-darwin, jitllm-tui]
       sign:
         certificate: "{{ .Env.MACOS_SIGN_P12 }}"
         password: "{{ .Env.MACOS_SIGN_PASSWORD }}"

@@ -38,6 +38,7 @@ func register(sh *app.Shell, d screen.Deps) {
 func main() {
 	mockMode := flag.Bool("mock", false, "run against package mock: no model, no GPU, fixtures only")
 	flag.Parse()
+	logToFileWithoutAConsole()
 	app.UseEnv(app.Env{Models: os.Getenv("JITLLM_MODELS"), DataHome: os.Getenv("XDG_DATA_HOME")})
 	cfg := app.LoadConfig()
 
