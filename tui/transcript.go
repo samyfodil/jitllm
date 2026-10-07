@@ -5,10 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"charm.land/glamour/v2"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"charm.land/glamour/v2"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/samyfodil/jitllm/common/session"

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -28,6 +29,9 @@ var convertOnce sync.Map
 type convertResult struct {
 	once sync.Once
 	err  error
+	// path is the container to serve when it is not the destination: see
+	// the rename in convertPair.
+	path string
 }
 
 // jlmOf converts a GGUF to a container beside it and returns that path; the
@@ -188,20 +192,57 @@ func convertPair(path, mmproj string) (string, error) {
 		// reader open a half-written container. The loser of the race writes a
 		// byte-identical result.
 		tmp := fmt.Sprintf("%s.tmp-%d", dst, os.Getpid())
+		sweepServedCopies(dst)
 		if _, err := convert.FromGGUFs(path, mmproj, tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}); err != nil {
 			os.Remove(tmp)
 			r.err = err
 			return
 		}
-		if err := os.Rename(tmp, dst); err != nil {
-			os.Remove(tmp)
-			r.err = err
-		}
+		r.path, r.err = place(tmp, dst)
 	})
+	return r.served(dst)
+}
+
+// served is the container a conversion left to read: its destination, or the
+// copy place kept under its own name.
+func (r *convertResult) served(dst string) (string, error) {
 	if r.err != nil {
 		return "", r.err
 	}
+	if r.path != "" {
+		return r.path, nil
+	}
 	return dst, nil
+}
+
+// place renames a finished conversion onto dst and returns what to read. On
+// Windows a file another process has open cannot be replaced, and `go test
+// ./...` runs packages in parallel over one model directory, each a different
+// binary and so each reconverting; there the fresh container, complete and
+// written by this build, is served under its own name instead.
+func place(tmp, dst string) (string, error) {
+	err := os.Rename(tmp, dst)
+	if err == nil {
+		return "", nil
+	}
+	if _, statErr := os.Stat(dst); runtime.GOOS == "windows" && statErr == nil {
+		return tmp, nil
+	}
+	os.Remove(tmp)
+	return "", err
+}
+
+// sweepServedCopies removes the copies place kept in earlier runs. Windows
+// refuses to remove a file that is open, so a copy a running test binary still
+// reads survives this; elsewhere place never keeps one.
+func sweepServedCopies(dst string) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	old, _ := filepath.Glob(dst + ".tmp-*")
+	for _, f := range old {
+		os.Remove(f)
+	}
 }
 
 // convertDir is convertPair for a HuggingFace directory: the container is
@@ -233,20 +274,15 @@ func convertDir(dir string) (string, error) {
 			}
 		}
 		tmp := fmt.Sprintf("%s.tmp-%d", dst, os.Getpid())
+		sweepServedCopies(dst)
 		if _, err := convert.FromSafetensors(dir, tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}); err != nil {
 			os.Remove(tmp)
 			r.err = err
 			return
 		}
-		if err := os.Rename(tmp, dst); err != nil {
-			os.Remove(tmp)
-			r.err = err
-		}
+		r.path, r.err = place(tmp, dst)
 	})
-	if r.err != nil {
-		return "", r.err
-	}
-	return dst, nil
+	return r.served(dst)
 }
 
 // The gates' own options: the package reads no environment, so a knob set with
