@@ -194,3 +194,59 @@ func TestOffCardExpertsRelocate(t *testing.T) {
 		})
 	}
 }
+
+// TestHybridPrefillMatchesTheHost: a prompt through hybrid blocks runs as one
+// batched chunk -- the rows routed on the device, each row's experts on the
+// host -- and lands within the device band of the host's prefill, the batched
+// hybrid path counted (rows, not just success; RULE 10).
+func TestHybridPrefillMatchesTheHost(t *testing.T) {
+	path, ok := existingModel(testmodels.Path("kimik3/Kimi-K3-0.40B.Q8_0.gguf"))
+	if !ok {
+		t.Skip("MODEL MISSING: kimik3/Kimi-K3-0.40B.Q8_0.gguf -- this gate proved nothing")
+	}
+	prompt := []int32{1008, 10484, 318, 15383, 387, 17374, 13, 646, 606, 142957}
+	prefill := func(m *Model, g *tier.GPU) []float32 {
+		s := m.NewState(32)
+		defer s.Close()
+		if g != nil {
+			s.SetDeviceLayers(g, m.Cfg.NLayer)
+		}
+		l, err := s.Prefill(prompt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return append([]float32(nil), l...)
+	}
+	host, err := Open(jlmOf(t, path), noTune, WithKVF16(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := prefill(host, nil)
+	host.Close()
+	m, err := Open(jlmOf(t, path), noTune, WithKVF16(false), WithExperts("host"), WithStreamTrial(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	g, err := tier.OpenWith(tier.WithDevices("cuda:0"), tier.WithDeviceTune(tier.TuneOff))
+	if err != nil || g == nil {
+		noDevice(t, "cuda:0", err)
+	}
+	defer g.Close()
+	got := prefill(m, g)
+	st := g.Stats()
+	if st.HybridRows < len(prompt) {
+		t.Fatalf("%d rows ran their experts on the host in a batched chunk, want the prompt's %d",
+			st.HybridRows, len(prompt))
+	}
+	var num, den float64
+	for i := range want {
+		d := float64(got[i] - want[i])
+		num += d * d
+		den += float64(want[i]) * float64(want[i])
+	}
+	if nmse := num / den; nmse > 1e-5 || argmaxOf(got) != argmaxOf(want) {
+		t.Fatalf("hybrid prefill NMSE %.2e, argmax %d against the host's %d", nmse, argmaxOf(got), argmaxOf(want))
+	}
+	t.Logf("%d hybrid rows, %d hybrid block-steps", st.HybridRows, st.HybridRuns)
+}

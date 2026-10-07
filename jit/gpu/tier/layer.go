@@ -285,6 +285,7 @@ type streamBank struct {
 	host          func(sel []uint32, w, in, out []float32) error
 	hybrid        bool // the experts run on the host (runHost), not sent
 	hin, hw, hout []float32
+	hsel          []uint32
 	// pred is this block's selection as the previous block's probe predicted
 	// it (Config.StreamProbe), valid while havePred; score compares it with
 	// the real one and clears it.
@@ -454,6 +455,47 @@ func (st *streamBank) prefetch(g *devTier) {
 func (st *streamBank) prefetchRun() {
 	defer st.pfWG.Done()
 	st.pfErr = st.pre(st.pfWant)
+}
+
+// runHostRows is runHost for a chunk of rows: the selections (row stride
+// k+1, ExpertRank's layout), the weights (stride k) and the rows of in come
+// home, the host runs each row's experts, and the rows of the sum go back.
+func (st *streamBank) runHostRows(g *devTier, s backend.Session, sel, w, in, out backend.Buf, n, k, rows int) error {
+	if cap(st.hin) < rows*n {
+		st.hin = make([]float32, rows*n)
+		st.hout = make([]float32, rows*n)
+	}
+	st.hin, st.hout = st.hin[:rows*n], st.hout[:rows*n]
+	if cap(st.hw) < rows*k {
+		st.hw = make([]float32, rows*k)
+	}
+	st.hw = st.hw[:rows*k]
+	if cap(st.hsel) < rows*(k+1) {
+		st.hsel = make([]uint32, rows*(k+1))
+	}
+	st.hsel = st.hsel[:rows*(k+1)]
+	t0 := time.Now()
+	if err := s.Sync(); err != nil {
+		return err
+	}
+	for _, rd := range [3]struct {
+		b backend.Buf
+		p []byte
+	}{{in, f32b(st.hin)}, {w, f32b(st.hw)}, {sel, u32b(st.hsel)}} {
+		if err := s.Read(rd.b, rd.p); err != nil {
+			return err
+		}
+	}
+	for r := 0; r < rows; r++ {
+		if err := st.host(st.hsel[r*(k+1):r*(k+1)+k], st.hw[r*k:(r+1)*k],
+			st.hin[r*n:(r+1)*n], st.hout[r*n:(r+1)*n]); err != nil {
+			return err
+		}
+	}
+	err := s.WriteAt(out, 0, f32b(st.hout))
+	g.THybrid += time.Since(t0)
+	g.HybridRows += rows
+	return err
 }
 
 // runHost is the hybrid suspension: in (the experts' input, n wide -- the
@@ -2356,7 +2398,15 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 	// kernel constraint: at experts <= 1 mkkID returns the plain matvec, which
 	// has no pSel parameter.
 	mode, auto := g.autoStream[li]
-	stream := moe && (g.StreamExperts || auto) && slots < bank && slots > 1
+	// hostExp says the block's experts will run on the host (hybrid): the
+	// placement's choice, else the tier's defaults. Such a block keeps no bank
+	// on the card at all -- no compact bank, no expert kernels, no packed
+	// layout needed -- and a top-1 router is no obstacle, since no indexed
+	// matvec runs.
+	hostExp := w.HostExperts != nil && (auto && mode == expHost ||
+		g.HybridExperts && !(auto && mode == expCard) || auto && mode == expAuto && !g.NoHybrid)
+	stream := moe && (g.StreamExperts || auto) && slots < bank && (slots > 1 || hostExp)
+	hybrid := stream && hostExp
 	// cslots is the streamed bank's size in sheets, decided at the first bank
 	// matrix (cacheSlotsFor): slots without an expert cache, more with one.
 	cslots := -1
@@ -2745,6 +2795,16 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 		// trailing dimension), which PackWeights and the upload want; the kernel is
 		// built for one expert's rows and does the offset, so it is divided below.
 		var r *resident
+		if hybrid && i >= 4 && i <= 6 {
+			// Nothing of the bank goes on the card; the host runs it.
+			if l.stream == nil {
+				l.stream = &streamBank{sel: make([]uint32, slots),
+					ensure: w.Ensure, sel2: w.EnsureExperts,
+					pre: w.PrefetchExperts, host: w.HostExperts, w: *w, hybrid: true, nExpert: bank}
+				g.StreamBlocks++
+			}
+			continue
+		}
 		if stream && i >= 4 && i <= 6 {
 			q, qok := quantOf(x.T)
 			if !qok {
@@ -7414,7 +7474,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					if latent {
 						g.k3LatentIn(lc, bs, l, R, mvrun)
 					}
-					g.emitGroupedMoE(s, lc, bs, l, R, rin, ein, eout, &err)
+					g.emitGroupedMoE(s, lc, bs, l, R, nrow, rin, ein, eout, &err)
 					if latent {
 						g.k3LatentOut(lc, bs, l, R, mvrun)
 					}
@@ -8887,6 +8947,12 @@ func (g *devTier) prepBatch(width int) bool {
 				// A mixture runs grouped (moegroup.go): a streamed bank holds
 				// only the selection.
 				mg := bb.mg
+				// A hybrid block routes the rows on the device and runs their
+				// experts on the host (emitGroupedMoE): the routing scratch is
+				// all it needs, and no grouped expert kernel.
+				if mg != nil && l.stream != nil && l.stream.hybrid {
+					continue
+				}
 				if mg == nil || l.stream != nil {
 					// Named either way: a refusal with a stale LastErr reads as
 					// some other block's failure.

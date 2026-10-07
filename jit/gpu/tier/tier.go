@@ -708,6 +708,8 @@ type Stats struct {
 	// HybridRuns counts streamed blocks whose experts ran on the host
 	// (Config.HybridExperts), and THybrid the wall of those host calls.
 	HybridRuns int
+	// HybridRows counts rows of batched chunks whose experts ran on the host.
+	HybridRows int
 	THybrid    time.Duration
 	// StreamCacheSize is the largest expert cache a block was given, in
 	// sheets: the check that an auto-sized cache is the size intended.
@@ -1009,6 +1011,7 @@ func (s *Stats) add(o Stats) {
 	s.StreamCacheMisses += o.StreamCacheMisses
 	s.StreamCacheShort += o.StreamCacheShort
 	s.HybridRuns += o.HybridRuns
+	s.HybridRows += o.HybridRows
 	s.THybrid += o.THybrid
 	s.StreamCacheSize = max(s.StreamCacheSize, o.StreamCacheSize)
 	s.StreamGroupsTuned = max(s.StreamGroupsTuned, o.StreamGroupsTuned)

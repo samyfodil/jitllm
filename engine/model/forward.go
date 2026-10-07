@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/samyfodil/jitllm/engine/sched"
 	"github.com/samyfodil/jitllm/format/jlm"
@@ -183,6 +184,10 @@ type State struct {
 	// weights in that order, kept so a token allocates neither.
 	hyOrd []int32
 	hyW   []float32
+	// hostOnly keeps every matvec on the host's kernels: set while the
+	// device's own submission waits on hostExperts, when offering a matvec to
+	// that device would wait on the session it is inside of.
+	hostOnly bool
 	// autoStreamed counts the blocks the last placement streamed because no
 	// card could hold them resident (nn.AutoStreamer).
 	autoStreamed int
@@ -1677,6 +1682,12 @@ func (s *State) offerRange(lo, hi int) {
 			s.m.bind.Lock()
 			releaseLayer(s.m.container, li, l)
 			s.m.bind.Unlock()
+		} else if buf := s.m.container.Page(li); len(buf) > 0 {
+			// The page stays (a streamed block's host side reads it), so no
+			// recycle tells the devices to drop the lone-matvec copies they
+			// made of its weights while the host ran it; the block is placed
+			// now and they are dead weight. Said here instead.
+			s.m.forgetCopies(unsafe.Pointer(&buf[0]), uintptr(len(buf)))
 		}
 	}
 }
@@ -2786,7 +2797,13 @@ func (s *State) mv(out []float32, w tensor, x []float32) error {
 	// answer for the next block from its copy of the first
 	// (TestPagedWeightsAreNeverServedStale).
 	matvec := s.jit.MatVecHost
-	if w.e != nil && s.m.container != nil && (s.forgets || s.m.container.InDense(w.e)) {
+	// A routed expert's sheet is never offered: a device copy of it (a lone
+	// matvec the device keeps keyed on the weight) is an upload for one row's
+	// use and a buffer nothing frees when the block is placed -- a hybrid block
+	// never uploads its bank to take the copies back, and they outlived its
+	// return (TestBatchSeamMovesCarryEveryRowOffCard).
+	if w.e != nil && s.m.container != nil && (s.forgets || s.m.container.InDense(w.e)) && !s.hostOnly &&
+		!jlm.ExpertBank(w.e.Role) {
 		matvec = s.jit.MatVec
 	}
 	if matvec(out, w.typ, w.data, x, w.rows, w.k) {

@@ -140,42 +140,8 @@ func (s *State) moe(li int, l *layer, rin, h, out []float32) error {
 		return err
 	}
 	if !done {
-		// The fallback loops the down projection too, so it is counted here;
-		// moeFFN returned before reaching its own counter.
-		s.moeLooped.Add(1)
-		s.moeDownLooped.Add(1)
-		ff := c.NFFNExp
-		for i, e := range ord {
-			w := ow[i]
-			x := &l.experts[e]
-			if l.ungatedExp {
-				// No gate: the activation alone, in the gate's buffer, which
-				// down reads.
-				if err := s.mv(s.moeGate[:ff], x.up, h); err != nil {
-					return err
-				}
-				s.actAll(s.moeGate[:ff], c.Act)
-			} else {
-				// gate and up read h, which is still the cached quantization.
-				if err := s.mv(s.moeGate[:ff], x.gate, h); err != nil {
-					return err
-				}
-				if err := s.mv(s.moeUp[:ff], x.up, h); err != nil {
-					return err
-				}
-				w = s.weightIn(w, s.moeGate[:ff], s.moeUp[:ff])
-				s.addBias(s.moeGate[:ff], expBias(l.expGateB, int(e), ff))
-				s.addBias(s.moeUp[:ff], expBias(l.expUpB, int(e), ff))
-				s.actmulAll(s.moeGate[:ff], s.moeUp[:ff], c.Act)
-			}
-			s.jit.NewInput()
-			ew := c.ExpWidth()
-			if err := s.mv(s.moeDown[:ew], x.down, s.moeGate[:ff]); err != nil {
-				return err
-			}
-			s.addBias(s.moeDown[:ew], expBias(l.expDownB, int(e), ew))
-			s.axpy(out, s.moeDown[:ew], w)
-			s.jit.NewInput()
+		if err := s.moeLoop(l, ord, ow, h, out); err != nil {
+			return err
 		}
 	}
 	// Gemma 4's dense MLP is not a shared expert's addition (see denseMoE),
@@ -838,6 +804,8 @@ func (s *State) hostExperts(li int, sel []uint32, w, in, out []float32) error {
 		}
 		s.hyOrd[j], s.hyW[j] = int32(e), w[i]
 	}
+	s.hostOnly = true
+	defer func() { s.hostOnly = false }()
 	if err := s.m.ensureExperts(li, s.hyOrd, &s.expHold); err != nil {
 		s.expHold.release()
 		return err
@@ -850,8 +818,55 @@ func (s *State) hostExperts(li int, sel []uint32, w, in, out []float32) error {
 		return err
 	}
 	if !done {
-		return fmt.Errorf("model: block %d: the host has no fused expert path for this mixture", li)
+		if err := s.moeLoop(l, s.hyOrd, s.hyW, in, out); err != nil {
+			return err
+		}
 	}
 	s.jit.NewInput()
+	return nil
+}
+
+// moeLoop is moeFFN's fallback, one generated matvec per expert and
+// projection, summing each expert's weighted output into out: the path a
+// mixture with no fused expert kernel takes (an F32 bank).
+func (s *State) moeLoop(l *layer, ord []int32, ow []float32, h, out []float32) error {
+	c := s.c
+	// The fallback loops the down projection too, so it is counted here;
+	// moeFFN returned before reaching its own counter.
+	s.moeLooped.Add(1)
+	s.moeDownLooped.Add(1)
+	ff := c.NFFNExp
+	for i, e := range ord {
+		w := ow[i]
+		x := &l.experts[e]
+		if l.ungatedExp {
+			// No gate: the activation alone, in the gate's buffer, which
+			// down reads.
+			if err := s.mv(s.moeGate[:ff], x.up, h); err != nil {
+				return err
+			}
+			s.actAll(s.moeGate[:ff], c.Act)
+		} else {
+			// gate and up read h, which is still the cached quantization.
+			if err := s.mv(s.moeGate[:ff], x.gate, h); err != nil {
+				return err
+			}
+			if err := s.mv(s.moeUp[:ff], x.up, h); err != nil {
+				return err
+			}
+			w = s.weightIn(w, s.moeGate[:ff], s.moeUp[:ff])
+			s.addBias(s.moeGate[:ff], expBias(l.expGateB, int(e), ff))
+			s.addBias(s.moeUp[:ff], expBias(l.expUpB, int(e), ff))
+			s.actmulAll(s.moeGate[:ff], s.moeUp[:ff], c.Act)
+		}
+		s.jit.NewInput()
+		ew := c.ExpWidth()
+		if err := s.mv(s.moeDown[:ew], x.down, s.moeGate[:ff]); err != nil {
+			return err
+		}
+		s.addBias(s.moeDown[:ew], expBias(l.expDownB, int(e), ew))
+		s.axpy(out, s.moeDown[:ew], w)
+		s.jit.NewInput()
+	}
 	return nil
 }
