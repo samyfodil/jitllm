@@ -579,7 +579,7 @@ func (g *GPU) AutoStream(li int, total, bank uint64, nExpert, nUsed, blocks int,
 		return false
 	}
 	g.mu.Lock()
-	g.spreadAll = g.StreamCacheSlots == 0
+	g.spreadAll = g.spreadAll || g.StreamCacheSlots == 0
 	g.mu.Unlock()
 	for _, d := range g.devs {
 		d.mu.Lock()
@@ -622,6 +622,14 @@ func (g *GPU) PlaceExperts(li int, where string) bool {
 	case "":
 	default:
 		return false
+	}
+	// A block placed with its experts off the card spreads like an
+	// auto-streamed one: packed onto the first cards, it left them no room for
+	// a prompt's batched scratch, and Kimi-K3's first chunk failed there.
+	if where != "" {
+		g.mu.Lock()
+		g.spreadAll = true
+		g.mu.Unlock()
 	}
 	for _, d := range g.devs {
 		d.mu.Lock()
