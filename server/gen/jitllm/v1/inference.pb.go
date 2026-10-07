@@ -244,8 +244,12 @@ type GenerateRequest struct {
 	SessionId string `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	// Generate against a model in an EPHEMERAL session created for this call
 	// and closed when it ends.
-	ModelId   string          `protobuf:"bytes,2,opt,name=model_id,json=modelId,proto3" json:"model_id,omitempty"`
-	Prompt    *PromptInput    `protobuf:"bytes,3,opt,name=prompt,proto3" json:"prompt,omitempty"`
+	ModelId string       `protobuf:"bytes,2,opt,name=model_id,json=modelId,proto3" json:"model_id,omitempty"`
+	Prompt  *PromptInput `protobuf:"bytes,3,opt,name=prompt,proto3" json:"prompt,omitempty"`
+	// The most tokens to generate. 0 runs until the model ends its reply or
+	// fills the session's context; a larger value than the context has room
+	// for is cut to that room. A reply that reaches the end of the context
+	// finishes with FINISH_REASON_MAX_TOKENS.
 	MaxTokens int32           `protobuf:"varint,4,opt,name=max_tokens,json=maxTokens,proto3" json:"max_tokens,omitempty"`
 	Sampling  *SamplingParams `protobuf:"bytes,5,opt,name=sampling,proto3" json:"sampling,omitempty"`
 	Stop      []string        `protobuf:"bytes,6,rep,name=stop,proto3" json:"stop,omitempty"`

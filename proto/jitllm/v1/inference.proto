@@ -66,6 +66,10 @@ message GenerateRequest {
   string model_id = 2;
 
   PromptInput prompt = 3;
+  // The most tokens to generate. 0 runs until the model ends its reply or
+  // fills the session's context; a larger value than the context has room
+  // for is cut to that room. A reply that reaches the end of the context
+  // finishes with FINISH_REASON_MAX_TOKENS.
   int32 max_tokens = 4;
   SamplingParams sampling = 5;
   repeated string stop = 6;

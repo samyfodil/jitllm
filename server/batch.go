@@ -623,10 +623,12 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 	if o.Sampling != nil {
 		sampler = *o.Sampling
 	}
-	maxTokens := o.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = defaultMaxTokens
+	// The row's prompt starts where the session is, or at 0 when it resets.
+	start := 0
+	if o.Continue {
+		start = s.st.Pos()
 	}
+	maxTokens := tokenLimit(o.MaxTokens, s.st.MaxSeq()-start-len(ids))
 	r := &row{
 		s:         s,
 		ids:       ids,

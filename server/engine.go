@@ -928,8 +928,18 @@ type Event struct {
 	Finished *Finished
 }
 
-// defaultMaxTokens is the completion length a request that names none gets.
-const defaultMaxTokens = 256
+// tokenLimit is a request's completion length: what it asked for, never more
+// than room, the positions left in the session's context. A request that asks
+// for none runs until the model ends its reply or fills the context, as
+// OpenAI's API reads an absent max_tokens. Either way a reply that reaches the
+// end of the context finishes as FinishMaxTokens, not on a full KV cache.
+func tokenLimit(asked, room int) int {
+	room = max(room, 0)
+	if asked <= 0 || asked > room {
+		return room
+	}
+	return asked
+}
 
 // Generate is the one generate path. The first event reports how long the
 // request queued -- for a gate, or for a row of its model's step loop -- and
@@ -1039,15 +1049,12 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	if o.Sampling != nil {
 		sampler = *o.Sampling
 	}
-	maxTokens := o.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = defaultMaxTokens
-	}
+	maxTokens := tokenLimit(o.MaxTokens, s.st.MaxSeq()-s.st.Pos())
 
 	st := newStreamText(lm.m.Vocab, o.Stop)
 	reason := FinishMaxTokens
 	stopMatched := ""
-	out := make([]int32, 0, maxTokens)
+	out := make([]int32, 0, min(maxTokens, 4096))
 	decodeStart := time.Now()
 	n := 0
 

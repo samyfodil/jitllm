@@ -548,6 +548,14 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// Whether the pool spins or parks between regions is decided per token by
 	// the engine, by whether the token paged anything in (model.State.forward);
 	// JITLLM_SPIN_US still fixes it.
+	// No -n: generate until the model ends its reply, in a session as long as
+	// the model's context, as the server's sessions are by default. KV pages
+	// are committed as the context grows, so the length costs nothing up front.
+	if n <= 0 {
+		if n = m.Cfg.NCtx - len(ids) - extra - 1; n <= 0 {
+			return fmt.Errorf("the prompt is %d positions and fills the model's context of %d", len(ids)+extra, m.Cfg.NCtx)
+		}
+	}
 	st := m.NewState(len(ids) + extra + n + 1)
 	defer st.Close()
 	var kvStore *model.FileStore
@@ -736,7 +744,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	if v := os.Getenv("JITLLM_TOP"); v != "" {
 		top, _ = strconv.Atoi(v)
 	}
-	out := make([]int32, 0, n)
+	out := make([]int32, 0, min(n, 4096))
 	// Stream the completion as it decodes. The suffix is recomputed from the
 	// whole id sequence each step, because neither tokenizer is per-token
 	// decodable: a BPE token can split a rune, and SPM's leading space depends
@@ -1346,7 +1354,7 @@ func runCmd(args []string) error {
 	vram := bytesFlag(fs, "vram", 0, "device weight budget, bytes or 3G/512M; 0 asks each device what it has free")
 	// 0 means "work it out": the cgroup limit or MemAvailable, whichever binds.
 	maxmem := bytesFlag(fs, "maxmem", 0, "host weight residency budget, bytes or 3G/512M")
-	n := fs.Int("n", 32, "tokens to generate")
+	n := fs.Int("n", 0, "tokens to generate; 0 runs until the model ends its reply or fills its context")
 	chat := fs.Bool("chat", false, "wrap the prompt in the model's own chat template (instruct models)")
 	system := fs.String("system", "", "a system message, with -chat")
 	depth := fs.Int("depth", 0, "pad the prompt to this many tokens before generating, so decode is measured at that context length")

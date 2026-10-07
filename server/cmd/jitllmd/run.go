@@ -28,7 +28,7 @@ func cmdRun(ctx context.Context, c cli, args []string) error {
 	sessionID := fs.String("session", "",
 		"an existing session to generate in, keeping its KV cache and position")
 
-	n := fs.Int("n", 32, "tokens to generate")
+	n := fs.Int("n", 0, "tokens to generate; 0 runs until the model ends its reply or fills the session's context")
 	chat := fs.Bool("chat", false, "wrap the prompt in the model's own chat template (instruct models)")
 	system := fs.String("system", "", "a system message, with -chat")
 	echo := fs.Bool("echo", false, "have the server emit the prompt's tokens back before generating")
@@ -36,7 +36,7 @@ func cmdRun(ctx context.Context, c cli, args []string) error {
 		"continue from the session's position instead of prefilling the prompt from scratch")
 	stop := fs.String("stop", "", "comma-separated stop strings")
 	ignoreEOS := fs.Bool("ignore-eos", false,
-		"keep generating past an end-of-generation token, up to -n (stop strings still stop)")
+		"keep generating past an end-of-generation token, up to -n or the end of the context (stop strings still stop)")
 	queueMS := fs.Int("queue-timeout", 0,
 		"milliseconds to wait for a device another session is holding; 0 waits indefinitely")
 
