@@ -1,6 +1,10 @@
 package server
 
-import "github.com/samyfodil/jitllm/engine/sched"
+import (
+	"fmt"
+
+	"github.com/samyfodil/jitllm/engine/sched"
+)
 
 // backgroundShare is the fraction of the host budget that all backgrounded
 // models divide between them when the active model is given priority.
@@ -175,4 +179,33 @@ func (lm *LoadedModel) Pinned() bool {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
 	return lm.pin > 0
+}
+
+// The priorities a request may name (GenerateOptions.Priority).
+const (
+	PriorityHigh   = "high"
+	PriorityNormal = "normal"
+)
+
+// prioritise applies a request's priority. "high" makes its model the
+// favoured one with priority on, so the host budget follows the model in use:
+// it gets all but an eighth, the others divide the eighth and page. "normal"
+// changes nothing, so a request that does not care cannot take the budget
+// from one that asked. The re-division runs only when the answer changes.
+func (e *Engine) prioritise(lm *LoadedModel, p string) error {
+	switch p {
+	case PriorityNormal:
+		return nil
+	case PriorityHigh:
+	default:
+		return fmt.Errorf("%w: priority %q: want %q or %q", ErrInvalid, p, PriorityHigh, PriorityNormal)
+	}
+	e.mu.Lock()
+	same := e.priority && e.favored == lm.id
+	e.priority, e.favored = true, lm.id
+	e.mu.Unlock()
+	if !same {
+		e.rebudget()
+	}
+	return nil
 }

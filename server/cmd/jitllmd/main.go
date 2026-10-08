@@ -160,6 +160,17 @@ func serve(args []string) {
 	jointSteps := fs.String("joint-steps", "auto",
 		"how a batch's decode step runs: auto (time joint against one session after another, "+
 			"per row count, and run the faster), always (one joint step) or never (each session alone)")
+	warm := fs.Bool("warm", true,
+		"after every load, run a short prefill and a decode step so the first request does not pay for them")
+	noStore := fs.Bool("no-prompt-store", false,
+		"turn off each model's prompt store: every request prefills its whole prompt")
+	storeMax := fs.String("prompt-store-max", "",
+		"bound each model's prompt store, e.g. 2G (default: an eighth of the model's host share)")
+	pool := fs.Int("session-pool", 0,
+		"reset sessions each model keeps for model_id requests; 0 is -sessions, -1 none")
+	maxQueue := fs.Int("max-queue", 0,
+		"requests one model holds, running or waiting, before it answers 429; 0 is 64, -1 unbounded")
+	retry := fs.Duration("retry-after", time.Second, "the Retry-After a 429 for a full queue names")
 	version := fs.String("version", version, "version string reported by GetServerInfo")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
@@ -177,6 +188,15 @@ func serve(args []string) {
 		budget = b
 	}
 
+	var storeBytes uint64
+	if *storeMax != "" {
+		b, err := tier.ParseBytes(*storeMax)
+		if err != nil {
+			fatal("-prompt-store-max: %v", err)
+		}
+		storeBytes = b
+	}
+
 	joint, ok := map[string]server.JointSteps{
 		"auto": server.JointMeasured, "always": server.JointAlways, "never": server.JointNever,
 	}[*jointSteps]
@@ -190,6 +210,13 @@ func serve(args []string) {
 		JointSteps:    joint,
 		DefaultMaxSeq: *maxSeq,
 		Version:       *version,
+
+		NoPromptStore:    *noStore,
+		PromptStoreBytes: storeBytes,
+		SessionPool:      *pool,
+		MaxQueue:         *maxQueue,
+		RetryAfter:       *retry,
+		WarmLoads:        *warm,
 	})
 	defer e.Close()
 

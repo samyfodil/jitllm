@@ -57,6 +57,26 @@ type Config struct {
 	// Version is reported by GetServerInfo.
 	Version string
 
+	// NoPromptStore turns the per-model prompt store off: every generate then
+	// prefills its whole prompt, as a session given no KVStore does.
+	NoPromptStore bool
+	// PromptStoreBytes bounds each model's prompt store; zero is an eighth
+	// of the model's host share.
+	PromptStoreBytes uint64
+	// SessionPool is how many reset States each model keeps for model_id
+	// requests: zero is LoadOptions.Sessions (at least one), negative none.
+	SessionPool int
+	// MaxQueue is how many requests one model holds, running or waiting,
+	// before it refuses the next with ErrOverloaded: zero is 64, negative
+	// unbounded.
+	MaxQueue int
+	// RetryAfter is what an HTTP refusal for ErrOverloaded tells the client
+	// to wait; zero is a second.
+	RetryAfter time.Duration
+	// WarmLoads warms every load, as LoadOptions.Warm does one: the Connect
+	// LoadModel call has no field for it.
+	WarmLoads bool
+
 	// Probe enumerates the hardware. nil takes the real one, which is
 	// expensive and exclusive: backend.Open() opens and closes every backend.
 	// Tests and deployments that know their topology supply it here.
@@ -211,6 +231,11 @@ type LoadedModel struct {
 
 	tokensGenerated atomic.Int64
 	tokensPrefilled atomic.Int64
+
+	// ttft is the prompt store, the State pool and the admission bound
+	// (ttft.go); warmTook is how long the load's warm-up ran.
+	ttft     ttft
+	warmTook time.Duration
 }
 
 // gateIDs is what a session of this model must hold to run: one gate per
@@ -291,6 +316,11 @@ type LoadOptions struct {
 	// history for (tier.Config.Sessions). 0 and 1 are one: a second session
 	// then gets what the first left over, and on a full card that is the host.
 	Sessions int
+
+	// Warm runs a short prefill and a decode step on a pooled State before
+	// LoadModel returns, so the first request does not pay for the kernels
+	// and recordings those emit (ttft.go).
+	Warm bool
 
 	// tierConfig adjusts the tier after Sessions is set. Tests use it to put
 	// the device into a configuration a gate has to run (a joint step the
@@ -438,6 +468,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 	if gpu != nil && e.cfg.MaxBatchRows != 1 {
 		lm.loop = newStepLoop(e, lm)
 	}
+	e.initTTFT(lm, o)
 
 	e.mu.Lock()
 	if _, ok := e.models[id]; ok {
@@ -452,6 +483,14 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 	e.mu.Unlock()
 	// The models already loaded give up the bytes this one now holds.
 	e.rebudget()
+	if o.Warm || e.cfg.WarmLoads {
+		// A model that cannot run a five-token prompt is not loaded: the
+		// first request would find out instead.
+		if err := e.warm(lm); err != nil {
+			e.UnloadModel(id, true)
+			return nil, err
+		}
+	}
 	return lm, nil
 }
 
@@ -526,6 +565,7 @@ func (e *Engine) UnloadModel(id string, force bool) (closed int, err error) {
 		s.close()
 	}
 	closed = len(victims)
+	e.closeIdle(lm)
 	// The loop goes after the sessions -- their generates hold its rows until
 	// they end -- and before the model it steps.
 	lm.closeLoop()
@@ -570,6 +610,7 @@ func (e *Engine) Close() {
 	}
 	for _, lm := range models {
 		lm.closeLoop()
+		e.closeIdle(lm)
 		lm.closeEmbedders()
 		lm.m.Close()
 		lm.closeDev()
@@ -602,6 +643,9 @@ type Session struct {
 	created  time.Time
 	// cached is a session with a prompt store: it prefills through it, alone.
 	cached bool
+	// storeOn says the State is attached to the model's prompt store for the
+	// generate in hand (attachStore). Guarded by mu.
+	storeOn bool
 
 	lastUsed  atomic.Int64
 	generated atomic.Int64
@@ -648,6 +692,11 @@ type SessionOptions struct {
 	// store prefills alone rather than as a row of the step loop.
 	KVStore  model.KVStore
 	CacheKey string
+
+	// pooled takes a State from the model's pool when one is idle: a
+	// model_id request's session, which asks for nothing a pooled State
+	// could lack.
+	pooled bool
 }
 
 // CreateSession builds a model.State and offers its blocks to the model's
@@ -678,8 +727,19 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 	}
 	e.mu.Unlock()
 
-	st := lm.m.NewState(maxSeq)
-	if lm.dev != nil {
+	var st *model.State
+	if o.pooled {
+		st = e.takeIdle(lm)
+	}
+	reused := st != nil
+	if reused {
+		// Placed when it was built, and reset when it was pooled.
+		lm.ttft.statesReused.Add(1)
+	} else {
+		st = lm.m.NewState(maxSeq)
+		lm.ttft.statesCreated.Add(1)
+	}
+	if lm.dev != nil && !reused {
 		max := o.MaxDeviceBlocks
 		if max == 0 {
 			max = lm.maxBlocks
@@ -905,6 +965,14 @@ type GenerateOptions struct {
 	// MaxTokens: the token is emitted and fed like any other (vLLM's
 	// ignore_eos). Stop strings still end the generate.
 	IgnoreEOS bool
+	// CachePrompt is a request that marked a cache breakpoint (Anthropic's
+	// cache_control). Every generate that starts its sequence goes through
+	// the prompt store already; a marked one also reports the positions it
+	// computed as written to the cache.
+	CachePrompt bool
+	// Priority is a request's claim on the host budget (prioritise): ""
+	// leaves it as it is.
+	Priority string
 }
 
 // EventKind discriminates Event.
@@ -936,6 +1004,9 @@ type Started struct {
 	// Batched is set when the generate decodes as a row of its model's step
 	// loop (batch.go) rather than alone on its gates.
 	Batched bool
+	// Restored is how many of PromptTokens came from the model's prompt store
+	// rather than being computed.
+	Restored int
 }
 
 // Token is one step of the output. Every sampled token is sent, its Text
@@ -974,6 +1045,8 @@ type Finished struct {
 	TokensPerSecond  float64
 	BytesPerToken    uint64
 	Position         int
+	// Restored is how many of PromptTokens came from the prompt store.
+	Restored int
 }
 
 // Event is one message of a generate's stream: Kind says which of Started,
@@ -1002,12 +1075,25 @@ func tokenLimit(asked, room int) int {
 // request queued -- for a gate, or for a row of its model's step loop -- and
 // how many were ahead, so a caller does not mistake a queue for a slow model.
 func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Event) error) (err error) {
+	// Admission comes first, so a refused request builds nothing.
+	if lm := e.modelOf(o); lm != nil {
+		done, err := e.admit(lm)
+		if err != nil {
+			return err
+		}
+		defer done()
+	}
 	s, ephemeral, err := e.resolveSession(o)
 	if err != nil {
 		return err
 	}
 	if ephemeral {
-		defer e.CloseSession(s.id)
+		defer e.releaseEphemeral(s)
+	}
+	if o.Priority != "" {
+		if err := e.prioritise(s.lm, o.Priority); err != nil {
+			return err
+		}
 	}
 
 	// One sequence, one generate. A second concurrent call on the same session
@@ -1054,8 +1140,19 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		return fmt.Errorf("%w: continue_session with no prompt has no token to run", ErrInvalid)
 	}
 
+	// The model's prompt store, for a generate that starts its sequence
+	// (ttft.go). The State is reset here, before the store is attached or
+	// taken away: both want position 0.
+	store := e.useStore(s, o)
+	if !o.Continue {
+		s.st.Reset()
+		if err := s.attachStore(store); err != nil {
+			return err
+		}
+	}
+
 	if lp := e.joins(s); lp != nil && !spans && !s.cached {
-		return e.generateBatched(ctx, lp, s, o, ids, ephemeral, emit)
+		return e.generateBatched(ctx, lp, s, o, ids, ephemeral, store, emit)
 	}
 
 	// ---- recorded as running on its devices; nothing waits here.
@@ -1068,25 +1165,38 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	defer s.running.Store(false)
 	s.lastUsed.Store(time.Now().UnixMilli())
 
-	// ---- prefill.
+	// ---- prefill. A sequence that starts here stops between chunks when its
+	// client goes; one that continues keeps its history whole, so it does not.
 	if !o.Continue {
-		s.st.Reset()
+		s.st.SetPrefillInterrupt(func() bool { return ctx.Err() != nil })
+		defer s.st.SetPrefillInterrupt(nil)
 	}
 	prefillStart := time.Now()
 	var logits []float32
 	prompted := len(ids)
+	restored := 0
 	switch {
 	case spans:
 		prompted = model.SpanPositions(o.Prompt.Spans, lm.m.Cfg.NEmbd)
 		logits, err = s.st.PrefillCachedMixed(o.Prompt.Spans...)
-	case s.cached && !o.Continue:
+		restored = s.st.KVRestored()
+	case (s.cached || store) && !o.Continue:
 		logits, err = s.st.PrefillCached(ids)
+		restored = s.st.KVRestored()
 	default:
 		logits, err = s.st.Prefill(ids)
+	}
+	if errors.Is(err, model.ErrPrefillInterrupted) {
+		// Part of a prompt nobody is waiting for: give the sequence back
+		// whole rather than leave it half-prefilled.
+		s.st.Reset()
+		return context.Cause(ctx)
 	}
 	if err != nil {
 		return err
 	}
+	lm.ttft.restored.Add(int64(restored))
+	lm.ttft.computed.Add(int64(prompted - restored))
 	s.prefilled.Add(int64(prompted))
 	lm.tokensPrefilled.Add(int64(prompted))
 	prefill := time.Since(prefillStart)
@@ -1104,6 +1214,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		DeviceIDs:    lm.deviceIDs,
 		Prefill:      prefill,
 		Execution:    ExecutionParallel,
+		Restored:     restored,
 	}}); err != nil {
 		return err
 	}
@@ -1190,6 +1301,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		// Bytes per token makes the rate checkable against the read wall.
 		BytesPerToken: lm.m.BytesPerToken(),
 		Position:      s.st.Pos(),
+		Restored:      restored,
 	}})
 }
 
@@ -1206,7 +1318,7 @@ func (e *Engine) resolveSession(o GenerateOptions) (*Session, bool, error) {
 	if o.ModelID == "" {
 		return nil, false, fmt.Errorf("%w: one of session_id or model_id is required", ErrInvalid)
 	}
-	s, err := e.CreateSession(SessionOptions{ModelID: o.ModelID})
+	s, err := e.CreateSession(SessionOptions{ModelID: o.ModelID, pooled: true})
 	if err != nil {
 		return nil, false, err
 	}
@@ -1505,8 +1617,16 @@ func (e *Engine) applyPageBudget(lm *LoadedModel, newest *model.State) {
 	if newest == nil && len(lm.sessions) == 0 {
 		minDev = 0 // no session has placed anything yet
 	}
+	kv += lm.idleKV()
 	e.mu.RUnlock()
 
+	// The pooled States' history (above) and the prompt store are committed
+	// host memory too. The store's bound is a share of the model's budget,
+	// set here so it follows every re-division.
+	if st := lm.ttft.store; st != nil {
+		st.SetLimit(e.storeLimit(avail))
+		kv += st.Bytes()
+	}
 	if kv < avail {
 		avail -= kv
 	} else {
