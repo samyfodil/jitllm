@@ -35,7 +35,7 @@ are [desktop](#desktop-app) and [terminal](#terminal-app) apps too.
 Linux and macOS:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/samyfodil/jitllm/main/scripts/install.sh | sh
+curl -fsSL https://jitllm.org/install.sh | sh
 ```
 
 Windows (PowerShell):
