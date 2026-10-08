@@ -95,6 +95,8 @@ func NewShell(gpuApp *gogpu.App, cfg *Config) *Shell {
 	s.Store.MaxSeq.Set(cfg.MaxSeq)
 	s.Store.ShowTuning.Set(!cfg.HideTuning)
 	s.Store.KVCache.Set(!cfg.NoKVCache)
+	s.Store.API.Set(cfg.API)
+	s.Store.APIAddr.Set(cfg.APIAddr)
 	s.Store.ModelDirs.Set(append([]string(nil), cfg.ModelDirs...))
 	if p := cfg.ChatsPath(); p != "" {
 		s.Store.LoadChats(p)
@@ -357,6 +359,8 @@ func (s *Shell) SaveSettings() {
 	s.Cfg.MaxSeq = st.MaxSeq.Get()
 	s.Cfg.HideTuning = !st.ShowTuning.Get()
 	s.Cfg.NoKVCache = !st.KVCache.Get()
+	s.Cfg.API = st.API.Get()
+	s.Cfg.APIAddr = st.APIAddr.Get()
 	s.Cfg.ModelDirs = append([]string(nil), st.ModelDirs.Get()...)
 	s.Cfg.LastModel = st.ModelPath.Get()
 	if err := s.Cfg.Save(); err != nil {
@@ -397,6 +401,8 @@ func (s *Shell) autosave() {
 	on(st.MaxSeq, save)
 	on(st.ShowTuning, save)
 	on(st.KVCache, save)
+	on(st.API, save)
+	on(st.APIAddr, save)
 	on(st.ModelDirs, save)
 	on(st.ModelPath, save)
 	on(st.Chats, save)

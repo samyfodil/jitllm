@@ -8,6 +8,7 @@ require (
 	github.com/gogpu/ui v0.1.54
 	github.com/samyfodil/jitllm v0.0.0
 	github.com/samyfodil/jitllm/common v0.0.0
+	github.com/samyfodil/jitllm/server v0.0.0
 	golang.org/x/image v0.45.0
 	golang.org/x/text v0.42.0
 )
@@ -26,7 +27,6 @@ require (
 	github.com/gogpu/gputypes v0.5.2 // indirect
 	github.com/gogpu/naga v0.18.0 // indirect
 	github.com/gogpu/wgpu v0.31.4 // indirect
-	github.com/samyfodil/jitllm/server v0.0.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 )
 

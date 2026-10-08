@@ -80,6 +80,9 @@ func newRoot(f *front, e *engine.Engine, cfg *config.Config, dirs []string) *roo
 func (r *root) page() page { return r.pages[r.cur] }
 
 func (r *root) Init() tea.Cmd {
+	if r.env.cfg.API {
+		return tea.Batch(r.page().Focus(), notify(r.env.syncAPI()))
+	}
 	return r.page().Focus()
 }
 

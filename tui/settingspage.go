@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 
@@ -27,6 +28,8 @@ type settingsPage struct {
 // half-typed value is the form's to validate rather than lost.
 type draft struct {
 	chat, kvCache     bool
+	api               bool
+	apiAddr           string
 	system, spec, ctx string
 	knobs             []string
 	seed, folders     string
@@ -63,7 +66,7 @@ func theme() *huh.Theme {
 func (p *settingsPage) rebuild() {
 	cfg := p.env.cfg
 	d := &draft{
-		chat: cfg.Chat, kvCache: !cfg.NoKVCache,
+		chat: cfg.Chat, kvCache: !cfg.NoKVCache, api: cfg.API, apiAddr: cfg.APIAddr,
 		system: cfg.System, spec: cfg.DeviceSpec, ctx: strconv.Itoa(cfg.MaxSeq),
 		seed: strconv.FormatInt(cfg.Sampling.Seed, 10), folders: strings.Join(cfg.ModelDirs, "\n"),
 	}
@@ -122,6 +125,15 @@ func (p *settingsPage) rebuild() {
 				}
 				return nil
 			}),
+			huh.NewConfirm().Title("API").Description("serve the OpenAI, Anthropic and Connect API while this app runs").
+				Affirmative("on").Negative("off").Value(&d.api),
+			huh.NewInput().Title("API address").Description("host:port · 127.0.0.1 keeps it on this machine").
+				Value(&d.apiAddr).Validate(func(s string) error {
+				if _, _, err := net.SplitHostPort(strings.TrimSpace(s)); err != nil {
+					return errors.New("host:port, e.g. 127.0.0.1:8080")
+				}
+				return nil
+			}),
 		).Title("Engine"),
 		huh.NewGroup(knobs...).Title("Sampling"),
 	).WithTheme(theme()).WithShowHelp(false).WithLayout(huh.LayoutColumns(3))
@@ -169,7 +181,12 @@ func (p *settingsPage) apply() tea.Cmd {
 	folders := strings.Join(dirs, "\n") != strings.Join(cfg.ModelDirs, "\n")
 	cfg.ModelDirs = dirs
 	p.env.dirs = dirs
-	cmds := []tea.Cmd{saveConfig(p.env), notify("settings saved")}
+	cfg.API, cfg.APIAddr = d.api, strings.TrimSpace(d.apiAddr)
+	msg := "settings saved"
+	if s := p.env.syncAPI(); s != "" {
+		msg += " · " + s
+	}
+	cmds := []tea.Cmd{saveConfig(p.env), notify(msg)}
 	if folders {
 		cmds = append(cmds, rescan())
 	}

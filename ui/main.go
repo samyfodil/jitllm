@@ -59,6 +59,7 @@ func main() {
 		register(sh, d)
 	} else {
 		eng := engine.New(sh)
+		sh.ServeAPI(eng.Server())
 		// Before the window closes, so a decode in flight is cancelled and the
 		// container and device are released rather than leaked past the window.
 		sh.OnShutdown(eng.Close)

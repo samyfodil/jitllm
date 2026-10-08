@@ -1,6 +1,7 @@
 package screen
 
 import (
+	"github.com/samyfodil/jitllm/common/api"
 	"os"
 
 	"github.com/gogpu/ui/core/button"
@@ -32,6 +33,7 @@ func Settings(sh *app.Shell) widget.Widget {
 		card(sh, "Model folders", modelFolders(sh)),
 		card(sh, "Loading models", nextLoad(sh)),
 		card(sh, "Chat", chatSettings(sh)),
+		card(sh, "API", apiSettings(sh)),
 		card(sh, "Files", files(sh)),
 	).Gap(p.Space.M).CrossAlign(primitives.CrossAxisStretch).Padding(p.Space.L)
 
@@ -168,6 +170,28 @@ func chatSettings(sh *app.Shell) widget.Widget {
 	).Gap(p.Space.S).CrossAlign(primitives.CrossAxisStretch)
 }
 
+// apiSettings turns on the API the app serves (Shell.ServeAPI).
+func apiSettings(sh *app.Shell) widget.Widget {
+	p := sh.P
+	st := sh.Store
+	addr := textfield.New(
+		textfield.ValueSignal(st.APIAddr),
+		textfield.Placeholder(api.DefaultAddr),
+		textfield.PainterOpt(p.TextField),
+	)
+	return primitives.VBox(
+		checkbox.New(
+			checkbox.LabelOpt("Serve the API while the app runs"),
+			checkbox.CheckedSignal(st.API),
+			checkbox.PainterOpt(p.Checkbox),
+		),
+		note(sh, "OpenAI- and Anthropic-compatible endpoints and jitllm's own Connect API. A model open here is a model of the API, and its requests run beside the chat."),
+		label(sh, "Address"),
+		p.Field(addr),
+		note(sh, "127.0.0.1 keeps it on this computer. A new address applies the next time the API is turned on."),
+	).Gap(p.Space.S).CrossAlign(primitives.CrossAxisStretch)
+}
+
 // files is where everything the app keeps lives, each a click from the
 // system's file browser.
 func files(sh *app.Shell) widget.Widget {
@@ -267,6 +291,8 @@ func ResetSettings(sh *app.Shell) {
 	st.MaxSeq.Set(d.MaxSeq)
 	st.ShowTuning.Set(!d.HideTuning)
 	st.KVCache.Set(!d.NoKVCache)
+	st.API.Set(d.API)
+	st.APIAddr.Set(d.APIAddr)
 	sh.Cfg.MaxMem = d.MaxMem
 	sh.SaveSoon()
 	sh.SetDark(!d.Light)
