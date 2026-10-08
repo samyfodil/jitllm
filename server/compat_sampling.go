@@ -28,9 +28,11 @@ import (
 //	presence_penalty,
 //	frequency_penalty   the engine's sampler has neither, so a non-zero value is
 //	                    refused rather than ignored
-//	n                   one choice per request; n > 1 is refused
+//	n                   continuations of one prompt, prefilled once; read by
+//	                    the OpenAI routes (compat_choices.go)
 //	logprobs,
-//	top_logprobs        not produced; a request asking for them is refused
+//	top_logprobs        the raw distribution's log-probabilities; read by the
+//	                    OpenAI routes (compat_choices.go)
 type oaSampling struct {
 	Temperature       *float64        `json:"temperature"`
 	TopP              *float64        `json:"top_p"`
@@ -49,17 +51,6 @@ type oaSampling struct {
 // means the session's own, which only a named session with no sampling field
 // gets.
 func (q *oaSampling) sampler(session string) (*model.Sampler, error) {
-	if q.N != nil && *q.N != 1 {
-		return nil, fmt.Errorf("n=%d: only one choice per request is supported", *q.N)
-	}
-	switch string(q.Logprobs) {
-	case "", "null", "false", "0":
-	default:
-		return nil, fmt.Errorf("logprobs are not supported")
-	}
-	if q.TopLogprobs != nil && *q.TopLogprobs != 0 {
-		return nil, fmt.Errorf("top_logprobs are not supported")
-	}
 	if q.PresencePenalty != nil && *q.PresencePenalty != 0 {
 		return nil, fmt.Errorf("presence_penalty is not supported; repetition_penalty is")
 	}

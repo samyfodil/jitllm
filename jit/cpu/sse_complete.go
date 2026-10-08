@@ -73,6 +73,7 @@ var sseProbes = []sseProbe{
 	{"LerpGrid", func(em *Emitters) error { return probe0(em.LerpGrid) }},
 	{"SinCosTab", func(em *Emitters) error { return probe0(em.SinCosTab) }},
 	{"Softmax", func(em *Emitters) error { return probe0(em.Softmax) }},
+	{"LogSoftmax", func(em *Emitters) error { return probe0(em.LogSoftmax) }},
 	{"SigmoidMul", func(em *Emitters) error { return probe0(em.SigmoidMul) }},
 	{"XIELU", func(em *Emitters) error { return probe0(em.XIELU) }},
 	{"ActMul", func(em *Emitters) error {

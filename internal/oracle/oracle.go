@@ -250,6 +250,32 @@ func Softmax32(x []float32) {
 	}
 }
 
+// LogSoftmax32 is the log-softmax of an f32 row, x - max - ln(sum exp(x -
+// max)), accumulated in f64 and returned in f64 so a gate can hold an f32
+// kernel to it without the reference's own rounding.
+func LogSoftmax32(x []float32) []float64 {
+	out := make([]float64, len(x))
+	if len(x) == 0 {
+		return out
+	}
+	mx := x[0]
+	for _, v := range x[1:] {
+		if v > mx {
+			mx = v
+		}
+	}
+	var sum float64
+	m := float64(mx)
+	for _, v := range x {
+		sum += math.Exp(float64(v) - m)
+	}
+	lse := m + math.Log(sum)
+	for i, v := range x {
+		out[i] = float64(v) - lse
+	}
+	return out
+}
+
 // Widen and Narrow convert between the oracle's float64 and the engine's f32.
 func Widen(dst []float64, src []float32) {
 	for i, v := range src {
