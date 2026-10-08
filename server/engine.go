@@ -194,9 +194,9 @@ type LoadedModel struct {
 	pin       uint64
 	maxBlocks int
 
-	// loop batches this model's device generates (batch.go). nil for a
-	// host-only model, or with batching off. Set before the model is
-	// published and never changed.
+	// loop batches this model's generates, on its device or on the host
+	// (batch.go). nil with batching off. Set before the model is published
+	// and never changed.
 	loop *stepLoop
 
 	// mu guards the model-level mutations: page budget, and the placement
@@ -435,7 +435,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		maxBlocks: o.MaxDeviceBlocks,
 		sessions:  map[string]*Session{},
 	}
-	if gpu != nil && e.cfg.MaxBatchRows != 1 {
+	if e.cfg.MaxBatchRows != 1 {
 		lm.loop = newStepLoop(e, lm)
 	}
 
@@ -762,7 +762,7 @@ func (s *Session) refresh() {
 	s.snapKV.Store(s.st.KVBytes())
 	s.snapDevBlocks.Store(int32(s.st.GPULayers()))
 	s.snapAt.Store(time.Now().UnixMilli())
-	s.snapBatched.Store(s.lm.loop != nil && s.st.Steppable())
+	s.snapBatched.Store(s.lm.loop != nil && stepsJointly(s.st))
 	s.snapPlacement.Store(&placementSnapshot{
 		runs:        s.st.DeviceBlocks(),
 		declines:    s.st.DeviceDeclines(),

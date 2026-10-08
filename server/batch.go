@@ -11,14 +11,17 @@ import (
 	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
 )
 
-// stepLoop is continuous batching for one loaded model on its devices.
+// stepLoop is continuous batching for one loaded model, on its devices or on
+// the host.
 //
-// A generate on a session whose every block and head are on one device does
-// not take the device's gate for itself. It becomes a ROW of the model's step
-// loop: one goroutine that owns every live row's model.State, and each step
-// gathers each row's next token and runs them through model.StepRuns -- one
-// device step for all of them, every block's weights read once
-// (nn.SessionStepper), each row's history its own session's. Each row then
+// A generate on a session whose every block and head are on one device, or
+// whose every block and head are on the host, does not take the gates for
+// itself. It becomes a ROW of the model's step loop: one goroutine that owns
+// every live row's model.State, and each step gathers each row's next token
+// and runs them through model.StepRuns -- one device step for all of them
+// (nn.SessionStepper), or one host pass over the weights (State.HostSteppable),
+// every block's weights read once, each row's history its own session's. Each
+// row then
 // samples its own logits with its own sampler, exactly as the one-at-a-time
 // path does, and its events go to an outbox its request goroutine drains, so a
 // slow client never holds up a step.
@@ -35,7 +38,13 @@ import (
 //
 // A new row's prompt is fed a chunk at a time inside the same steps
 // (promptUnits): its chunk rides beside the decoding rows' tokens, so
-// admission never stalls them by more than the rows it adds to a step.
+// admission never stalls them by more than the rows it adds to a step. A
+// prompt whose State pipelines its prefill across several cards takes that
+// path instead, a pipelined chunk at a time, beside the joint step.
+//
+// The Go work of a step that does not feed it -- each sampled token's text,
+// its stop-string check where the row has none, its event -- runs on a helper
+// goroutine while the step runs (stepPost), so it leaves the critical path.
 type stepLoop struct {
 	e  *Engine
 	lm *LoadedModel
@@ -71,6 +80,26 @@ type stepLoop struct {
 	// session after another (batchchoose.go).
 	choice *jointChoice
 
+	// post is the helper that turns the tokens a step feeds into text and
+	// events while the step runs.
+	post *stepPost
+	// The lists an iteration reuses: the rows it walks (finish changes
+	// lp.rows) and the units it steps.
+	walk         []*row
+	units, joint []unit
+	solo         []unit
+	runs         []model.Run
+
+	// chunkOf is how many prompt tokens a row's State takes in one prefill:
+	// its pipelined chunk when the State pipelines (State.PromptChunk). A
+	// gate replaces it to drive the pipelined arm without several cards.
+	chunkOf func(*row) int
+
+	// A gate's violations, false but in a test: feedNext feeds each decoding
+	// row the token sampled for the row after it; dropMaxTokens never
+	// retires a row for reaching its max_tokens.
+	feedNext, dropMaxTokens bool
+
 	stats batchCounters
 }
 
@@ -81,6 +110,12 @@ type batchCounters struct {
 	promptChunks, promptSteps                           atomic.Int64
 	admissions, admitWait                               atomic.Int64
 	refusals, separateSteps                             atomic.Int64
+	// pipelinedChunks is prompt chunks that ran as a pipelined prefill
+	// beside the step rather than as rows of it.
+	pipelinedChunks atomic.Int64
+	// postedTokens is tokens whose text and event the helper produced while
+	// their step ran.
+	postedTokens atomic.Int64
 	lastRefusal                                         atomic.Pointer[string]
 }
 
@@ -114,6 +149,8 @@ func newStepLoop(e *Engine, lm *LoadedModel) *stepLoop {
 		done:        make(chan struct{}),
 		wake:        make(chan struct{}, 1),
 	}
+	lp.post = newStepPost(&lp.stats.postedTokens)
+	lp.chunkOf = func(r *row) int { return r.s.st.PromptChunk() }
 	go lp.run()
 	return lp
 }
@@ -128,7 +165,10 @@ type row struct {
 	sampler   model.Sampler
 	maxTokens int
 	ignoreEOS bool
-	stream    *streamText
+	// stops says the row has stop strings: a token's text then decides
+	// whether it is fed, so it is produced before the step, not beside it.
+	stops  bool
+	stream *streamText
 	enqueued  time.Time
 	depth     int32
 
@@ -201,11 +241,26 @@ func (r *row) isDone() bool {
 // (SetRelocate); from then on it is stepped alone.
 func (e *Engine) joins(s *Session) *stepLoop {
 	lp := s.lm.loop
-	if lp == nil || !s.st.Steppable() {
+	if lp == nil || !stepsJointly(s.st) {
 		return nil
 	}
 	return lp
 }
+
+// hasStop says whether stops holds a stop string that can match: an empty
+// one never does (streamText.push skips it).
+func hasStop(stops []string) bool {
+	for _, x := range stops {
+		if x != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// stepsJointly says whether st can take a run of a joint step: wholly on one
+// device that steps sessions together, or wholly on the host.
+func stepsJointly(st *model.State) bool { return st.Steppable() || st.HostSteppable() }
 
 // submit queues r for a row, recording in r.depth how many requests were
 // ahead -- under the lock, since the loop may admit r and read it at once.
@@ -259,6 +314,7 @@ func (lp *stepLoop) close() {
 	lp.mu.Unlock()
 	lp.quit()
 	<-lp.done
+	lp.post.close()
 	for _, r := range waiting {
 		r.result.err = errUnloaded
 		close(r.done)
@@ -364,6 +420,9 @@ type unit struct {
 	tokens []int32
 	logits bool
 	prompt bool
+	// alone is a pipelined prompt chunk: it runs as its State's own prefill,
+	// never as rows of the joint step.
+	alone bool
 }
 
 // iterate runs one step: every decoding row's next token, and as much of the
@@ -371,7 +430,8 @@ type unit struct {
 func (lp *stepLoop) iterate() {
 	units := lp.decodeUnits()
 	decoding := len(units)
-	units = append(units, lp.promptUnits(min(lp.promptChunk, model.MaxStepRows-decoding))...)
+	units = lp.promptUnits(units, min(lp.promptChunk, model.MaxStepRows-decoding))
+	lp.units = units
 	if len(units) == 0 {
 		return
 	}
@@ -386,7 +446,17 @@ func (lp *stepLoop) iterate() {
 	if decoding > 0 && decoding < len(units) {
 		lp.stats.promptSteps.Add(1)
 	}
+	if lp.feedNext && decoding > 1 {
+		first := units[0].tokens[0]
+		for i := range decoding - 1 {
+			units[i].tokens[0] = units[i+1].tokens[0]
+		}
+		units[decoding-1].tokens[0] = first
+	}
+	// The tokens this step feeds become text and events while it runs.
+	lp.post.start()
 	lp.step(units)
+	lp.post.wait()
 }
 
 // decodeUnits samples every decoding row's next token from the logits its
@@ -400,8 +470,9 @@ func (lp *stepLoop) iterate() {
 // any other), and a stop string ends the row before its token is fed.
 func (lp *stepLoop) decodeUnits() []unit {
 	vocab := lp.lm.m.Vocab
-	var units []unit
-	for _, r := range append([]*row(nil), lp.rows...) {
+	units := lp.units[:0]
+	lp.walk = append(lp.walk[:0], lp.rows...)
+	for _, r := range lp.walk {
 		if r.prompting() {
 			continue
 		}
@@ -409,7 +480,7 @@ func (lp *stepLoop) decodeUnits() []unit {
 			lp.finish(r, FinishCancelled, "", nil)
 			continue
 		}
-		if r.n >= r.maxTokens {
+		if r.n >= r.maxTokens && !lp.dropMaxTokens {
 			lp.finish(r, FinishMaxTokens, "", nil)
 			continue
 		}
@@ -420,12 +491,19 @@ func (lp *stepLoop) decodeUnits() []unit {
 			continue
 		}
 		r.out = append(r.out, next)
-		chunk, hit, match := r.stream.push(r.out)
-		r.push(Event{Kind: EventToken, Token: &Token{ID: next, Text: chunk, Index: r.n}})
-		if hit {
-			r.n++
-			lp.finish(r, FinishStop, match, nil)
-			continue
+		if !r.stops {
+			// No stop string can end the row here, so its text is not
+			// needed to decide the step: the helper makes it while the
+			// step runs.
+			lp.post.add(r, next, r.n)
+		} else {
+			chunk, hit, match := r.stream.push(r.out)
+			r.push(Event{Kind: EventToken, Token: &Token{ID: next, Text: chunk, Index: r.n}})
+			if hit {
+				r.n++
+				lp.finish(r, FinishStop, match, nil)
+				continue
+			}
 		}
 		r.next[0] = next
 		units = append(units, unit{r: r, tokens: r.next[:], logits: true})
@@ -440,9 +518,16 @@ func (lp *stepLoop) decodeUnits() []unit {
 // rows it adds to one step. A chunk that ends its prompt wants its logits --
 // the row samples from them at the next step; one that does not costs no head
 // projection.
-func (lp *stepLoop) promptUnits(budget int) []unit {
-	var units []unit
-	for _, r := range append([]*row(nil), lp.rows...) {
+//
+// A row whose State pipelines its prefill across several cards (chunkOf
+// wider than a joint step, model.MaxStepRows) takes a pipelined chunk
+// instead, run alone beside the joint step, so its cards overlap as they
+// would on the prompt alone; the decoding rows wait one pipelined chunk rather than the prompt.
+// One such chunk a step, the oldest.
+func (lp *stepLoop) promptUnits(units []unit, budget int) []unit {
+	piped := false
+	lp.walk = append(lp.walk[:0], lp.rows...)
+	for _, r := range lp.walk {
 		if !r.prompting() {
 			continue
 		}
@@ -456,7 +541,9 @@ func (lp *stepLoop) promptUnits(budget int) []unit {
 			lp.finish(r, FinishCancelled, "", nil)
 			continue
 		}
-		if budget <= 0 {
+		pipe := lp.chunkOf(r)
+		pipelined := !piped && pipe > model.MaxStepRows && len(r.ids)-r.fed > lp.promptChunk
+		if budget <= 0 && !pipelined {
 			continue
 		}
 		if r.fed == 0 {
@@ -465,9 +552,16 @@ func (lp *stepLoop) promptUnits(budget int) []unit {
 			}
 			r.promptStart = time.Now()
 		}
-		k := min(budget, len(r.ids)-r.fed)
-		budget -= k
-		units = append(units, unit{r: r, tokens: r.ids[r.fed : r.fed+k], logits: r.fed+k == len(r.ids), prompt: true})
+		var k int
+		if pipelined {
+			piped = true
+			k = min(pipe, len(r.ids)-r.fed)
+		} else {
+			k = min(budget, len(r.ids)-r.fed)
+			budget -= k
+		}
+		units = append(units, unit{r: r, tokens: r.ids[r.fed : r.fed+k], logits: r.fed+k == len(r.ids),
+			prompt: true, alone: pipelined})
 	}
 	return units
 }
@@ -475,13 +569,32 @@ func (lp *stepLoop) promptUnits(budget int) []unit {
 // step runs the units: those of sessions wholly on the device as one
 // model.StepRuns, any other alone, and moves each row on by what it ran.
 func (lp *stepLoop) step(units []unit) {
-	var joint, solo []unit
+	joint, solo, npiped := lp.joint[:0], lp.solo[:0], 0
+	defer func() { lp.joint, lp.solo = joint[:0], solo[:0] }()
 	for _, u := range units {
-		if u.r.s.st.Steppable() {
+		switch {
+		case u.alone:
+			npiped++
+		case stepsJointly(u.r.s.st):
 			joint = append(joint, u)
-		} else {
+		default:
 			solo = append(solo, u)
 		}
+	}
+	// A pipelined chunk runs first and alone: its prefill is the State's own
+	// path across the cards, and the decoding rows step after it.
+	for _, u := range units {
+		if !u.alone {
+			continue
+		}
+		out, err := model.StepRuns([]model.Run{{State: u.r.s.st, Tokens: u.tokens, Logits: u.logits}})
+		if err != nil {
+			lp.finish(u.r, FinishError, "", err)
+			continue
+		}
+		lp.stats.pipelinedChunks.Add(1)
+		lp.stats.soloRows.Add(int64(len(u.tokens)))
+		lp.ran(u, out[0])
 	}
 	if (lp.refused && lp.refusedFor == lp.shape) || len(joint) < 2 {
 		solo, joint = append(solo, joint...), nil
@@ -511,7 +624,7 @@ func (lp *stepLoop) step(units []unit) {
 	}
 	// A step the device refused ran its rows alone, which is neither arm.
 	if timed && !(lp.refused && lp.refusedFor == lp.shape) {
-		lp.choice.observe(len(units), chose, time.Since(t0))
+		lp.choice.observe(len(units)-npiped, chose, time.Since(t0))
 	}
 }
 
@@ -528,13 +641,17 @@ func anyPrompt(units []unit) bool {
 // moved, when the device refused the step before running any of it; those
 // units then run alone, and the refusal stands until the rows change.
 func (lp *stepLoop) stepJoint(units []unit) bool {
-	runs := make([]model.Run, len(units))
+	runs := lp.runs[:0]
+	defer func() { clear(runs); lp.runs = runs[:0] }()
 	rows := 0
-	for i, u := range units {
-		runs[i] = model.Run{State: u.r.s.st, Tokens: u.tokens, Logits: u.logits}
+	for _, u := range units {
+		runs = append(runs, model.Run{State: u.r.s.st, Tokens: u.tokens, Logits: u.logits})
 		rows += len(u.tokens)
 	}
 	gpu := lp.lm.gpu
+	if gpu == nil {
+		return lp.stepHost(units, runs, rows)
+	}
 	before := gpu.Stats().SessionRows
 	out, err := model.StepRuns(runs)
 	if err != nil {
@@ -556,6 +673,32 @@ func (lp *stepLoop) stepJoint(units []unit) bool {
 	// The tier's own count says whether the rows really shared a step:
 	// StepRuns runs States one after another, correctly, whenever they cannot.
 	if gpu.Stats().SessionRows-before == rows {
+		lp.stats.jointSteps.Add(1)
+		lp.stats.jointRows.Add(int64(rows))
+	} else {
+		lp.stats.soloRows.Add(int64(rows))
+	}
+	for i, u := range units {
+		lp.ran(u, out[i])
+	}
+	return true
+}
+
+// stepHost is stepJoint for a model on the host: the runs as one host pass
+// (model.StepRuns' host arm). The host refuses no step it was offered, so an
+// error ends every row in it: a hybrid's rows may have advanced their
+// recurrent state, and running them again would apply their tokens twice.
+func (lp *stepLoop) stepHost(units []unit, runs []model.Run, rows int) bool {
+	m := lp.lm.m
+	before := m.HostStepRows()
+	out, err := model.StepRuns(runs)
+	if err != nil {
+		for _, u := range units {
+			lp.finish(u.r, FinishError, "", err)
+		}
+		return true
+	}
+	if m.HostStepRows()-before == int64(rows) {
 		lp.stats.jointSteps.Add(1)
 		lp.stats.jointRows.Add(int64(rows))
 	} else {
@@ -592,6 +735,8 @@ func (lp *stepLoop) ran(u unit, logits []float32) {
 // finish retires r: its held-back text is flushed as the one-at-a-time path
 // flushes it, and from here on the loop never touches its State again.
 func (lp *stepLoop) finish(r *row, reason FinishReason, stop string, err error) {
+	// The helper may hold r's last token; its event goes before the end.
+	lp.post.wait()
 	if err == nil && (reason == FinishMaxTokens || reason == FinishEOS || reason == FinishCancelled) {
 		if tail := r.stream.flush(); tail != "" {
 			r.push(Event{Kind: EventToken, Token: &Token{ID: -1, Text: tail, Index: r.n}})
@@ -638,6 +783,7 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 		sampler:   sampler,
 		maxTokens: maxTokens,
 		ignoreEOS: o.IgnoreEOS,
+		stops:     hasStop(o.Stop),
 		stream:    newStreamText(lm.m.Vocab, o.Stop),
 		enqueued:  time.Now(),
 		admitted:  make(chan struct{}),
@@ -816,8 +962,10 @@ func (lp *stepLoop) pb() *v1.BatchStats {
 			Rows:               int32(ch.rows),
 			Settled:            ch.settled,
 			Joint:              ch.joint,
-			JointStepMillis:    float64(ch.jointMedian) / float64(time.Millisecond),
-			SeparateStepMillis: float64(ch.separateMedian) / float64(time.Millisecond),
+			// The medians are per row; a step of the bucket's widest count
+			// is what the fields report.
+			JointStepMillis:    float64(ch.jointMedian) * float64(ch.rows) / float64(time.Millisecond),
+			SeparateStepMillis: float64(ch.separateMedian) * float64(ch.rows) / float64(time.Millisecond),
 			Probes:             int32(ch.probes),
 		})
 	}

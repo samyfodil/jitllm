@@ -49,10 +49,11 @@ func runsToTheEndOfTheContext(t *testing.T, c clients, lm *LoadedModel, wantBatc
 
 // TestNoMaxTokensRunsToTheEndOfTheContext: a generate with no max_tokens runs
 // until the model ends its reply or the session's context is full, and ends
-// there cleanly; a limit past the context is cut to it.
+// there cleanly; a limit past the context is cut to it. On the host the
+// generate is a row of the model's step loop too (batch.go).
 func TestNoMaxTokensRunsToTheEndOfTheContext(t *testing.T) {
 	_, lm, c := loadedEngine(t, instructModel, "inst", LoadOptions{})
-	runsToTheEndOfTheContext(t, c, lm, false)
+	runsToTheEndOfTheContext(t, c, lm, true)
 }
 
 // TestNoMaxTokensRunsToTheEndOfTheContextBatched is the same for a generate
