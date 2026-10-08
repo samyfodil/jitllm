@@ -6,11 +6,13 @@
 package goheap
 
 import (
+	"math"
 	"os"
 	"runtime/debug"
 	"strconv"
 
 	"github.com/samyfodil/jitllm/engine/sched"
+	"github.com/samyfodil/jitllm/format/jlm"
 )
 
 // Cap tells Go's collector about the cgroup, which it cannot see, and returns
@@ -47,6 +49,40 @@ func Cap() uint64 {
 	}
 	gogc()
 	return set
+}
+
+// OffHeap re-derives the collector's memory limit for the weight memory off
+// the heap: the runtime cannot see those bytes and the cgroup can, so they come
+// off the limit Cap set. budgets is the page budget the loaded models' frames
+// will grow to -- one model's in cmd/jitllm, every loaded model's summed in
+// jitllmd, which calls it on each load and unload -- and what is mapped
+// already (dense regions, frames faulted) is added on top, conservatively.
+//
+// The limit is a backstop, set only when it leaves the real heap at least
+// GCHeadroom: where the frames fill the cgroup, a limit just above the heap is
+// the spiral moved rather than removed, so the collector is left on GOGC,
+// whose goal is then a multiple of the heap it actually collects. With nothing
+// off the heap -- the last model unloaded -- the limit is Cap's again; with
+// weights on the heap (JITLLM_OFFHEAP=0) it is left as Cap set it, and
+// JITLLM_GOMEMLIMIT=0 sets none here either.
+func OffHeap(budgets uint64) {
+	if os.Getenv("JITLLM_GOMEMLIMIT") == "0" {
+		return
+	}
+	mapped := uint64(jlm.OffHeapBytes())
+	if mapped == 0 {
+		if budgets == 0 {
+			Cap()
+		}
+		return
+	}
+	lim := sched.MemLimit()
+	off := budgets + mapped
+	if lim == 0 || lim < 2*sched.GCHeadroom+off {
+		debug.SetMemoryLimit(math.MaxInt64)
+		return
+	}
+	debug.SetMemoryLimit(int64(lim - sched.GCHeadroom - off))
 }
 
 // gogc applies JITLLM_GOGC, the ordinary GOGC.

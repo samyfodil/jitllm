@@ -68,6 +68,14 @@ type Config struct {
 	// Version is reported by GetServerInfo.
 	Version string
 
+	// OffHeap is told, after every load, unload, pin and change of priority,
+	// the page budgets every loaded model's frames may grow to, summed: the
+	// off-heap memory the loaded models can reach, 0 with none loaded. The
+	// collector's memory limit is process-wide, so the engine does not set it;
+	// jitllmd hands goheap.OffHeap here, as cmd/jitllm calls it after its one
+	// load (AGENTS.md RULE 2f).
+	OffHeap func(budgets uint64)
+
 	// Probe enumerates the hardware. nil takes the real one, which is
 	// expensive and exclusive: backend.Open() opens and closes every backend.
 	// Tests and deployments that know their topology supply it here.
