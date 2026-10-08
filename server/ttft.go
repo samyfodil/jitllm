@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"sync/atomic"
@@ -14,7 +16,7 @@ import (
 // What a request pays before its first token, and the four things here that
 // cut it:
 //
-//   - The prompt store. Every loaded model keeps one bounded model.MemStore,
+//   - The memory cache. Every loaded model keeps one bounded model.MemStore,
 //     and every generate that starts its sequence prefills through it
 //     (State.PrefillCached), so a chat's second turn or a system prompt
 //     another request already ran restores its prefix instead of computing
@@ -119,13 +121,13 @@ func (e *Engine) overloaded(lm *LoadedModel) error {
 // defaultMaxQueue is Config.MaxQueue when it is zero.
 const defaultMaxQueue = 64
 
-// storeShare is the fraction of a model's host share its prompt store may
-// hold, when Config.PromptStoreBytes does not say: an eighth, the same slice
+// storeShare is the fraction of a model's host share its memory cache may
+// hold, when Config.MemCacheBytes does not say: an eighth, the same slice
 // a backgrounded model keeps (backgroundShare).
 const storeShare = 8
 
-// PromptCacheStats is a model's prompt store and State pool, as counted.
-type PromptCacheStats struct {
+// MemCacheStats is a model's memory cache and State pool, as counted.
+type MemCacheStats struct {
 	Store model.MemStoreStats
 	// Restored and Computed are prompt positions taken from the store and
 	// prefilled, over every generate that started its sequence.
@@ -142,8 +144,11 @@ type PromptCacheStats struct {
 
 // ttft is a LoadedModel's share of the above.
 type ttft struct {
-	store *model.MemStore // nil with Config.NoPromptStore
-	ns    string
+	store *model.MemStore // nil with Config.NoMemCache
+	// kv is what a State is pointed at: the memory cache, or the memory cache
+	// over Config.PromptStore (layered) when the server has one.
+	kv model.KVStore
+	ns string
 
 	// idle is the pool: reset States waiting for a request. Guarded by the
 	// Engine's mu, as lm.sessions is.
@@ -159,14 +164,18 @@ type ttft struct {
 	warmed                                    atomic.Bool
 }
 
-// initTTFT sets lm's prompt store, pool and queue bound from the config.
+// initTTFT sets lm's memory cache, pool and queue bound from the config.
 func (e *Engine) initTTFT(lm *LoadedModel, o LoadOptions) {
 	t := &lm.ttft
-	if !e.cfg.NoPromptStore && !lm.m.IsEncoder() {
+	if !e.cfg.NoMemCache && !lm.m.IsEncoder() {
 		t.store = model.NewBoundedMemStore(1)
 		// The namespace names this load: the store is the model's own, and
 		// the KV width and page geometry are fixed for its life.
 		t.ns = fmt.Sprintf("jitllmd/%s/%d", lm.id, lm.loadedAt.UnixNano())
+		t.kv = t.store
+		if e.cfg.PromptStore != nil {
+			t.kv = &layered{mem: t.store, disk: e.cfg.PromptStore}
+		}
 	}
 	switch {
 	case e.cfg.SessionPool < 0:
@@ -188,11 +197,11 @@ func (e *Engine) initTTFT(lm *LoadedModel, o LoadOptions) {
 	}
 }
 
-// storeLimit is the prompt store's bound under a host share: what the config
+// storeLimit is the memory cache's bound under a host share: what the config
 // names, else an eighth of the share.
 func (e *Engine) storeLimit(share uint64) uint64 {
-	if e.cfg.PromptStoreBytes > 0 {
-		return e.cfg.PromptStoreBytes
+	if e.cfg.MemCacheBytes > 0 {
+		return e.cfg.MemCacheBytes
 	}
 	return max(share/storeShare, 1)
 }
@@ -210,8 +219,8 @@ func (e *Engine) admit(lm *LoadedModel) (func(), error) {
 	return func() { t.inflight.Add(-1) }, nil
 }
 
-// PromptCache reports the model's prompt store, pool and admission counters.
-func (e *Engine) PromptCache(lm *LoadedModel) PromptCacheStats {
+// PromptCache reports the model's memory cache, pool and admission counters.
+func (e *Engine) MemCacheStats(lm *LoadedModel) MemCacheStats {
 	t := &lm.ttft
 	var st model.MemStoreStats
 	if t.store != nil {
@@ -220,7 +229,7 @@ func (e *Engine) PromptCache(lm *LoadedModel) PromptCacheStats {
 	e.mu.RLock()
 	pooled := len(t.idle)
 	e.mu.RUnlock()
-	return PromptCacheStats{
+	return MemCacheStats{
 		Store:         st,
 		Restored:      t.restored.Load(),
 		Computed:      t.computed.Load(),
@@ -290,7 +299,7 @@ func (e *Engine) pool(lm *LoadedModel, st *model.State) bool {
 	return true
 }
 
-// closeIdle closes every pooled State and the prompt store. The model is
+// closeIdle closes every pooled State and the memory cache. The model is
 // already unpublished, so nothing returns a State to the pool after it.
 func (e *Engine) closeIdle(lm *LoadedModel) {
 	e.mu.Lock()
@@ -337,7 +346,7 @@ func (s *Session) attachStore(on bool) error {
 		}
 		return nil
 	}
-	s.st.SetKVStore(s.lm.ttft.store)
+	s.st.SetKVStore(s.lm.ttft.kv)
 	if err := s.st.SetCacheKey(s.lm.ttft.ns); err != nil {
 		return err
 	}
@@ -348,7 +357,7 @@ func (s *Session) attachStore(on bool) error {
 // warm runs what a first request would on a pooled State: a short prefill and
 // one decode step, so the JIT's kernels for those shapes are emitted and the
 // device's first recordings made before a request waits on them. Nothing is
-// counted as served and nothing goes into the prompt store.
+// counted as served and nothing goes into the memory cache.
 func (e *Engine) warm(lm *LoadedModel) error {
 	if lm.m.IsEncoder() || lm.m.Vocab == nil {
 		return nil
@@ -375,4 +384,52 @@ func (e *Engine) warm(lm *LoadedModel) error {
 	lm.ttft.warmed.Store(true)
 	lm.warmTook = time.Since(start)
 	return nil
+}
+
+// layered is the memory cache over the server's prompt store
+// (Config.PromptStore, jitllmd's -kv-cache directory): a page is looked for in
+// memory first and on disk second, and a disk hit is copied up so the next
+// restore of it is a memory one; a page offered is kept in both, so the disk
+// keeps what the memory cache evicts. Drop forgets both.
+//
+// A model_id request's namespace names its load (initTTFT), so what it leaves
+// on disk serves this process only; a session created with prompt_cache names
+// its own, and its pages outlive the process as the disk store's always did.
+type layered struct {
+	mem  *model.MemStore
+	disk model.KVStore
+}
+
+func (l *layered) Get(cacheId string, layer, index int, page io.Writer) error {
+	err := l.mem.Get(cacheId, layer, index, page)
+	if !errors.Is(err, model.ErrNoPage) {
+		return err
+	}
+	var b bytes.Buffer
+	if err := l.disk.Get(cacheId, layer, index, &b); err != nil {
+		return err
+	}
+	if err := l.mem.Set(cacheId, layer, index, bytes.NewReader(b.Bytes())); err != nil {
+		return err
+	}
+	_, err = page.Write(b.Bytes())
+	return err
+}
+
+func (l *layered) Set(cacheId string, layer, index int, page io.Reader) error {
+	b, err := io.ReadAll(page)
+	if err != nil {
+		return err
+	}
+	if err := l.mem.Set(cacheId, layer, index, bytes.NewReader(b)); err != nil {
+		return err
+	}
+	return l.disk.Set(cacheId, layer, index, bytes.NewReader(b))
+}
+
+func (l *layered) Drop(cacheId string) error {
+	if err := l.mem.Drop(cacheId); err != nil {
+		return err
+	}
+	return l.disk.Drop(cacheId)
 }

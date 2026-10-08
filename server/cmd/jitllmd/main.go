@@ -32,6 +32,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/samyfodil/jitllm/engine/model"
+	"github.com/samyfodil/jitllm/internal/cmd/goheap"
 	"github.com/samyfodil/jitllm/jit/gpu/tier"
 	"github.com/samyfodil/jitllm/server"
 )
@@ -149,7 +151,7 @@ func serve(args []string) {
 	maxmem := fs.String("maxmem", "",
 		"page budget for -load, e.g. 8G (default: the engine's own budget)")
 	gpuLayers := fs.Int("gpu-layers", -1, "blocks to place on a device for -load; -1 is as many as fit")
-	sessions := fs.Int("sessions", 1, "concurrent sessions each device block reserves a KV cache for, for -load")
+	sessions := fs.Int("sessions", 1, "concurrent sessions each linear device block reserves a recurrent state for, for -load (attention history is paged)")
 	maxSeq := fs.Int("max-seq", 0, "default KV capacity per session, in positions (default: the model's context length)")
 	maxBatch := fs.Int("max-batch", 0,
 		"generates of one device model that decode as rows of one step. 0 is the engine's "+
@@ -162,21 +164,33 @@ func serve(args []string) {
 			"per row count, and run the faster), always (one joint step) or never (each session alone)")
 	warm := fs.Bool("warm", true,
 		"after every load, run a short prefill and a decode step so the first request does not pay for them")
-	noStore := fs.Bool("no-prompt-store", false,
-		"turn off each model's prompt store: every request prefills its whole prompt")
-	storeMax := fs.String("prompt-store-max", "",
-		"bound each model's prompt store, e.g. 2G (default: an eighth of the model's host share)")
+	noStore := fs.Bool("no-mem-cache", false,
+		"turn off each model's memory cache: every request prefills its whole prompt")
+	storeMax := fs.String("mem-cache-max", "",
+		"bound each model's memory cache, e.g. 2G (default: an eighth of the model's host share)")
 	pool := fs.Int("session-pool", 0,
 		"reset sessions each model keeps for model_id requests; 0 is -sessions, -1 none")
 	maxQueue := fs.Int("max-queue", 0,
 		"requests one model holds, running or waiting, before it answers 429; 0 is 64, -1 unbounded")
 	retry := fs.Duration("retry-after", time.Second, "the Retry-After a 429 for a full queue names")
+	kvF16 := fs.Bool("kv-f16", false,
+		"the KV cache width of every load that names none: true binary16, false f32 (default: the engine's per-host choice)")
+	kvCache := fs.String("kv-cache", "",
+		"a directory sessions created with prompt_cache keep their prompt prefixes in; empty refuses such a session")
+	kvCacheMax := fs.String("kv-cache-max", "8G", "what -kv-cache may occupy before its least recently used pages go; 0 is unbounded")
 	version := fs.String("version", version, "version string reported by GetServerInfo")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
 	if err := misplacedFlag(fs); err != nil {
 		fatal("%v", err)
+	}
+
+	// Before anything is loaded: the daemon holds page frames for as long as
+	// it lives, and a collector that cannot see the cgroup plans a heap goal
+	// past it (AGENTS.md RULE 2f).
+	if lim := goheap.Cap(); lim > 0 {
+		fmt.Fprintf(os.Stderr, "go memory limit %.2f GiB\n", float64(lim)/(1<<30))
 	}
 
 	var budget uint64
@@ -192,7 +206,7 @@ func serve(args []string) {
 	if *storeMax != "" {
 		b, err := tier.ParseBytes(*storeMax)
 		if err != nil {
-			fatal("-prompt-store-max: %v", err)
+			fatal("-mem-cache-max: %v", err)
 		}
 		storeBytes = b
 	}
@@ -203,7 +217,26 @@ func serve(args []string) {
 	if !ok {
 		fatal("-joint-steps %q: want auto, always or never", *jointSteps)
 	}
+	var kvWidth *bool
+	if wasSet(fs, "kv-f16") {
+		kvWidth = kvF16
+	}
+	var store model.KVStore
+	if *kvCache != "" {
+		max, err := tier.ParseBytes(*kvCacheMax)
+		if err != nil {
+			fatal("-kv-cache-max: %v", err)
+		}
+		fsStore, err := model.NewFileStoreLimit(*kvCache, max)
+		if err != nil {
+			fatal("-kv-cache: %v", err)
+		}
+		store = fsStore
+	}
 	e := server.New(server.Config{
+		KVF16:         kvWidth,
+		OffHeap:       goheap.OffHeap,
+		PromptStore:   store,
 		ModelDir:      *models,
 		MaxBatchRows:  *maxBatch,
 		PromptChunk:   *promptChunk,
@@ -211,12 +244,12 @@ func serve(args []string) {
 		DefaultMaxSeq: *maxSeq,
 		Version:       *version,
 
-		NoPromptStore:    *noStore,
-		PromptStoreBytes: storeBytes,
-		SessionPool:      *pool,
-		MaxQueue:         *maxQueue,
-		RetryAfter:       *retry,
-		WarmLoads:        *warm,
+		NoMemCache:    *noStore,
+		MemCacheBytes: storeBytes,
+		SessionPool:   *pool,
+		MaxQueue:      *maxQueue,
+		RetryAfter:    *retry,
+		WarmLoads:     *warm,
 	})
 	defer e.Close()
 

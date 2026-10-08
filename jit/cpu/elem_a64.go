@@ -164,7 +164,12 @@ func EmitA64RMSNorm(n int) []byte {
 // and Args.Rows single elements after them. The tails are EmitSoftmax's: the
 // maximum broadcasts its element, the exp pass keeps lane 0 alone before the
 // sum.
-func EmitA64Softmax() []byte {
+func EmitA64Softmax() []byte { return emitA64Softmax(false) }
+
+// EmitA64LogSoftmax is the NEON twin of EmitLogSoftmax.
+func EmitA64LogSoftmax() []byte { return emitA64Softmax(true) }
+
+func emitA64Softmax(log bool) []byte {
 	var a A64
 	a.LDRx(X1, X0, 0)   // Out -> the row, in place
 	a.LDRx(X5, X0, 56)  // Scr -> consts
@@ -199,7 +204,9 @@ func EmitA64Softmax() []byte {
 		a.LDRq(0, X6, 0)
 		a.FSUB4s(0, 0, 3)
 		emitA64Exp(&a, 0, 1, 2)
-		a.STRq(0, X6, 0)
+		if !log {
+			a.STRq(0, X6, 0)
+		}
 		a.FADD4s(4, 4, 0)
 	}, func() {
 		a.LDRs(0, X6, 0)
@@ -207,13 +214,31 @@ func EmitA64Softmax() []byte {
 		emitA64Exp(&a, 0, 1, 2)
 		a.MOVIzero(7) // lanes 1..3 held exp(-max): keep lane 0 alone
 		a.INSs(7, 0, 0, 0)
-		a.STRs(7, X6, 0)
+		if !log {
+			a.STRs(7, X6, 0)
+		}
 		a.FADD4s(4, 4, 7)
 	})
 
 	// pass 3: divide by the sum.
 	a.FADDP4s(4, 4, 4)
 	a.FADDPs(4, 4)
+	if log {
+		// or subtract max + ln(sum).
+		a.DUPs4(4, 4)
+		emitA64LnSum(&a)
+		pass(func() {
+			a.LDRq(0, X6, 0)
+			a.FSUB4s(0, 0, 3)
+			a.STRq(0, X6, 0)
+		}, func() {
+			a.LDRs(0, X6, 0)
+			a.FSUB4s(0, 0, 3)
+			a.STRs(0, X6, 0)
+		})
+		a.RET()
+		return a.Bytes()
+	}
 	a.LDRs(5, X5, 28) // 1.0
 	a.FDIV4s(4, 5, 4)
 	a.DUPs4(4, 4)
@@ -473,6 +498,7 @@ func a64ElemLoops(a *A64, k, r XReg, cursors []XReg, vec, one func()) {
 // NEON twin. Keeping one name means the caller has no build tag and no branch.
 func EmitRMSNorm(n int) []byte    { return EmitA64RMSNorm(n) }
 func EmitSoftmax() []byte         { return EmitA64Softmax() }
+func EmitLogSoftmax() []byte      { return EmitA64LogSoftmax() }
 func EmitActMul(k ActKind) []byte { return EmitA64ActMul(k) }
 func EmitAct(k ActKind) []byte    { return EmitA64Act(k) }
 func EmitSigmoidMul() []byte      { return EmitA64SigmoidMul() }
@@ -757,4 +783,38 @@ func EmitA64Softcap() []byte {
 	})
 	a.RET()
 	return a.Bytes()
+}
+
+// emitA64LnSum is emitLnSum's NEON twin: v3 += ln(v4), every lane, v25 the
+// exponent bias and v23 1.0 (loadA64ExpConsts). Clobbers v0..v2, v5..v7.
+func emitA64LnSum(a *A64) {
+	cst := func(v VReg, off int32) {
+		a.LDRs(v, X5, off)
+		a.DUPs4(v, v)
+	}
+	a.USHR4s(0, 4, 23)
+	a.SUB4s(0, 0, 25)
+	a.SCVTF4s(0, 0) // e
+	cst(1, 172)     // the mantissa mask
+	a.AND16b(1, 4, 1)
+	a.ORR16b(1, 1, 23) // m
+	a.FSUB4s(1, 1, 23) // u
+	cst(5, 80)         // 2
+	a.FADD4s(2, 1, 5)
+	a.FDIV4s(2, 1, 2) // s
+	a.FMUL4s(1, 2, 2) // s^2
+	cst(6, 84)
+	for _, off := range []int32{88, 92, 96} {
+		cst(7, off)
+		a.FMUL4s(6, 6, 1)
+		a.FADD4s(6, 6, 7)
+	}
+	a.FMUL4s(6, 6, 1)
+	a.FADD4s(6, 6, 23)
+	a.FMUL4s(6, 6, 2)
+	a.FMUL4s(6, 6, 5) // ln(m)
+	cst(7, 176)       // ln2
+	a.FMUL4s(0, 0, 7)
+	a.FADD4s(0, 0, 6) // e*ln2 + ln(m)
+	a.FADD4s(3, 3, 0)
 }

@@ -182,6 +182,9 @@ func emitGEMMA64K(t quant.Type, mr, nr, nb, window int) ([]byte, error) {
 		}
 	}
 	kLo, kHi := hoist(t0), hoist(t2)
+	// t0..t3 are temporaries of the unpack before the dots and of the fold
+	// after them, so a widened SDOT (sdotemu.go) may clobber two of them.
+	a.DotScratch(t1, t3)
 	a.LDRx(X1, X0, 0)  // Out
 	a.LDRx(X2, X0, 8)  // W
 	a.LDRx(X3, X0, 16) // A

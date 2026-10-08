@@ -21,12 +21,19 @@ func (s *SessionService) CreateSession(ctx context.Context, req *connect.Request
 		MaxSeq:    int(m.MaxSeq),
 		DeviceIDs: m.DeviceIds,
 		Relocate:  m.RelocateWhileServing,
+
+		KeepOffHost: m.KeepOffHost,
+		PromptCache: m.PromptCache,
+		CacheKey:    m.CacheKey,
 	}
 	if m.MaxDeviceBlocks != nil {
 		o.MaxDeviceBlocks = int(*m.MaxDeviceBlocks)
 	}
 	if sp := pbSampling(m.Sampling); sp != nil {
 		o.Sampling = *sp
+	}
+	if sp := pbSpeculation(m.Speculation); sp != nil {
+		o.Speculation = *sp
 	}
 	sess, err := s.E.CreateSession(o)
 	if err != nil {

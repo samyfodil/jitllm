@@ -94,6 +94,18 @@ message GenerateRequest {
   // still end the generate. For a run whose length must be fixed, such as a
   // benchmark.
   bool ignore_eos = 10;
+
+  // Speculative decoding for this generate; unset takes the session's.
+  SpeculationParams speculation = 30;
+
+  // Structured output: the reply is a sentence of this GBNF grammar
+  // (llama.cpp's format, root rule `root`), and ends where it does. A
+  // constrained generate runs alone and without speculation.
+  string grammar = 31;
+  // Structured output by JSON Schema, compiled to a grammar: the subset
+  // llama.cpp's json-schema-to-grammar builds, anything else refused by
+  // name. Not with `grammar`.
+  string json_schema = 32;
 }
 
 // GenerateResponse is one event. The oneof is deliberate: a token stream that

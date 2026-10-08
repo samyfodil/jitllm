@@ -19,7 +19,9 @@ type specFlags struct {
 func addSpecFlags(fs *flag.FlagSet) specFlags {
 	return specFlags{
 		kind: fs.String("spec", "", "speculative decoding: \"mtp\" drafts with the model's own "+
-			"multi-token-prediction block and verifies the drafts in one pass of the model"),
+			"multi-token-prediction block, \"lookup\" with the tokens that followed the sequence's last "+
+			"n-gram earlier in it (any model; greedy only), \"auto\" the first where the model has one; "+
+			"the drafts are verified in one pass of the model"),
 		k: fs.Int("spec-k", 0, "tokens drafted a round with -spec; 0 chooses each round from this "+
 			"session's measured acceptance and timing"),
 		minP: fs.Float64("spec-min-p", 0, "stop a round's drafting at the first draft the prediction "+
@@ -32,12 +34,18 @@ func addSpecFlags(fs *flag.FlagSet) specFlags {
 
 // options turns the flags into the Speculator's options; nil without -spec.
 func (f specFlags) options() ([]model.SpecOption, error) {
+	var dr model.SpecDrafter
 	switch *f.kind {
 	case "":
 		return nil, nil
 	case "mtp":
+		dr = model.SpecDraftMTP
+	case "lookup":
+		dr = model.SpecDraftLookup
+	case "auto":
+		dr = model.SpecDraftAuto
 	default:
-		return nil, fmt.Errorf("-spec %q: the one kind is mtp, the model's own prediction block", *f.kind)
+		return nil, fmt.Errorf("-spec %q: mtp, lookup or auto", *f.kind)
 	}
 	var rb model.SpecRollback
 	switch *f.rollback {
@@ -53,7 +61,7 @@ func (f specFlags) options() ([]model.SpecOption, error) {
 	if *f.k < 0 || *f.minP < 0 || *f.minP > 1 {
 		return nil, fmt.Errorf("-spec-k %d, -spec-min-p %g: a count and a probability", *f.k, *f.minP)
 	}
-	return []model.SpecOption{model.WithSpecDraft(*f.k), model.WithSpecMinP(*f.minP),
+	return []model.SpecOption{model.WithSpecDrafter(dr), model.WithSpecDraft(*f.k), model.WithSpecMinP(*f.minP),
 		model.WithSpecRollback(rb)}, nil
 }
 
@@ -65,14 +73,17 @@ func printSpec(w io.Writer, sp *model.Speculator) {
 	if s.Drafted > 0 {
 		pct = 100 * float64(s.Accepted) / float64(s.Drafted)
 	}
-	on := "host"
-	if d := sp.Draft(); d.GPULayers() > 0 {
-		on = "the device"
+	on := "; the prediction block on the host"
+	switch d := sp.Draft(); {
+	case d == nil:
+		on = ""
+	case d.GPULayers() > 0:
+		on = "; the prediction block on the device"
 	}
-	fmt.Fprintf(w, "spec     mtp: %d pass(es), %d drafted, %d accepted (%.1f%%), %.2f tokens a pass; "+
-		"draft %.0f ms, verify %.0f ms, catch-up %.0f ms; rollback %v (%d restored, %d row(s) replayed, %d replay pass(es)); "+
-		"the prediction block on %s\n",
-		s.Rounds, s.Drafted, s.Accepted, pct, s.TokensPerRound(),
+	fmt.Fprintf(w, "spec     %v: %d pass(es), %d drafted, %d accepted (%.1f%%), %.2f tokens a pass; "+
+		"draft %.0f ms, verify %.0f ms, catch-up %.0f ms; rollback %v (%d restored, %d row(s) replayed, %d replay pass(es))"+
+		"%s\n",
+		s.Drafter, s.Rounds, s.Drafted, s.Accepted, pct, s.TokensPerRound(),
 		float64(s.Draft.Microseconds())/1e3, float64(s.Verify.Microseconds())/1e3,
 		float64(s.CatchUp.Microseconds())/1e3, s.Rollback, s.Restored, s.Replayed, s.Commits, on)
 	if s.Retired {

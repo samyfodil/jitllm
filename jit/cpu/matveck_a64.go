@@ -51,8 +51,7 @@ func emitA64KMatVec(t quant.Type, actWin int) ([]byte, error) {
 
 	// Four accumulator chains, because a single FMLA chain across a row is
 	// latency-bound and the core has no memory stall to hide it behind.
-	// v26-v28 are caller-saved and otherwise unused here; v8-v15 stay
-	// untouched (AAPCS64 reserves their low 64 bits).
+	// v26-v28 are otherwise unused here.
 	//
 	// When the whole super-block shares one activation scale (nn.NewJIT widens
 	// the amax to 256 for an all-k-quant model), d_a is loaded once per
@@ -77,8 +76,8 @@ func emitA64KMatVec(t quant.Type, actWin int) ([]byte, error) {
 		eight = VReg(6)
 		f0    = VReg(7)
 	)
-	// v8-v15 are avoided: AAPCS64 reserves their low 64 bits and skipping them
-	// costs nothing here. Ten temporaries for the scale unpack, which is the
+	// v8-v15 are free (Go's arm64 ABI saves no V register); v8 and v9 are a
+	// widened SDOT's scratch (sdotemu.go) and the rest unused. Ten temporaries for the scale unpack, which is the
 	// widest thing this kernel does.
 	tmps := []VReg{16, 17, 18, 19, 20, 21, 22, 23, 24, 25}
 	u1 := tmps[1]
@@ -115,6 +114,8 @@ func emitA64KMatVec(t quant.Type, actWin int) ([]byte, error) {
 	}
 
 	var a A64
+	// v8 and v9: see the temporaries above.
+	a.DotScratch(V8, V9)
 	a.LDRx(X1, X0, 0)   // Out
 	a.LDRx(X2, X0, 8)   // W
 	a.LDRx(X3, X0, 16)  // A

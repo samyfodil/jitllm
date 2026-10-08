@@ -1,4 +1,4 @@
-//go:build arm64 && !linux && !darwin
+//go:build arm64 && !linux && !darwin && !windows
 
 package cpu
 

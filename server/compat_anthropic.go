@@ -89,7 +89,7 @@ type anOutBlock struct {
 type anUsage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
-	// CacheReadInputTokens is how many input tokens the prompt store
+	// CacheReadInputTokens is how many input tokens the memory cache
 	// restored; CacheCreationInputTokens how many it computed and kept, for
 	// a request that marked a cache_control breakpoint.
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
@@ -98,7 +98,7 @@ type anUsage struct {
 
 // anCachePrompt says whether a request marks any cache_control breakpoint.
 //
-// The prompt store keeps every prompt's prefix, so a breakpoint is not
+// The memory cache keeps every prompt's prefix, so a breakpoint is not
 // needed for a later request to restore one; what it maps onto is the usage
 // report, cache_creation_input_tokens. Where the breakpoint sits is not read:
 // the store keeps pages up to the whole prompt, a superset of any

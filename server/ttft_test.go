@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -90,15 +91,15 @@ func longPrompt(m *model.Model) []int32 {
 
 func idsPrompt(ids []int32) Prompt { return Prompt{Kind: PromptIDs, IDs: ids} }
 
-// TestThePromptStoreRestoresAndAnswersAsAColdPrefill runs a prompt, the same
+// TestTheMemCacheRestoresAndAnswersAsAColdPrefill runs a prompt, the same
 // prompt again, and the prompt with a turn appended, on an engine with the
-// prompt store and on one without: the second and third restore positions
+// memory cache and on one without: the second and third restore positions
 // (counted by the engine and reported in Started and Finished), and every
 // answer -- greedy and seeded sampling -- is the cold engine's. On a host
 // model the restore is PrefillCached; on a device model the step loop's
 // restore-then-join (RestorePrefix, SealPrompt); on a hybrid the recurrent
 // summary comes back with the pages.
-func TestThePromptStoreRestoresAndAnswersAsAColdPrefill(t *testing.T) {
+func TestTheMemCacheRestoresAndAnswersAsAColdPrefill(t *testing.T) {
 	type arm struct {
 		name   string
 		model  string
@@ -113,10 +114,10 @@ func TestThePromptStoreRestoresAndAnswersAsAColdPrefill(t *testing.T) {
 				}
 				return ttftEngine(t, a.model, cfg, LoadOptions{})
 			}
-			cold, clm := open(Config{NoPromptStore: true})
+			cold, clm := open(Config{NoMemCache: true})
 			warm, wlm := open(Config{})
 			if wlm.ttft.store == nil || clm.ttft.store != nil {
-				t.Fatal("NoPromptStore did not select the arms: the store is on in both or neither")
+				t.Fatal("NoMemCache did not select the arms: the store is on in both or neither")
 			}
 			p := longPrompt(wlm.m)
 			turn := append(slices.Clone(p), wlm.m.Vocab.Encode(" The dog said hello to the cat.", false)...)
@@ -166,7 +167,7 @@ func TestThePromptStoreRestoresAndAnswersAsAColdPrefill(t *testing.T) {
 				t.Logf("request %d: %d of %d prompt positions restored; %d tokens identical",
 					i, got.started, got.promptTokens, len(got.ids))
 			}
-			st := warm.PromptCache(wlm)
+			st := warm.MemCacheStats(wlm)
 			if st.Restored == 0 || st.Computed == 0 || st.Store.Sets == 0 || st.Store.Hits == 0 {
 				t.Fatalf("the counters saw no restore: %+v", st)
 			}
@@ -183,8 +184,8 @@ func TestThePromptStoreRestoresAndAnswersAsAColdPrefill(t *testing.T) {
 // the next), the pool builds one State and hands it out again, and the other
 // engine builds and closes one per request.
 func TestPooledStatesAnswerAsFreshOnes(t *testing.T) {
-	pooled, plm := ttftEngine(t, smallModel, Config{NoPromptStore: true}, LoadOptions{})
-	fresh, flm := ttftEngine(t, smallModel, Config{NoPromptStore: true, SessionPool: -1}, LoadOptions{})
+	pooled, plm := ttftEngine(t, smallModel, Config{NoMemCache: true}, LoadOptions{})
+	fresh, flm := ttftEngine(t, smallModel, Config{NoMemCache: true, SessionPool: -1}, LoadOptions{})
 	x := pooled.encodeText(t, plm, "Once upon a time")
 	y := pooled.encodeText(t, plm, "The little dog ran to the park and")
 	var answers [2][]int32
@@ -200,7 +201,7 @@ func TestPooledStatesAnswerAsFreshOnes(t *testing.T) {
 	if slices.Equal(answers[0], answers[1]) {
 		t.Fatal("the two prompts have the same answer, so a leaked history could not show")
 	}
-	ps, fs := pooled.PromptCache(plm), fresh.PromptCache(flm)
+	ps, fs := pooled.MemCacheStats(plm), fresh.MemCacheStats(flm)
 	if ps.StatesCreated != 1 || ps.StatesReused != 5 || ps.StatesClosed != 0 || ps.Pooled != 1 {
 		t.Fatalf("pooled engine: %+v; want one State built, reused five times, none closed", ps)
 	}
@@ -214,7 +215,7 @@ func TestPooledStatesAnswerAsFreshOnes(t *testing.T) {
 	if _, err := pooled.UnloadModel("m", false); err != nil {
 		t.Fatalf("an idle pool kept the model from unloading: %v", err)
 	}
-	if ps := pooled.PromptCache(plm); ps.StatesClosed != 1 || ps.Pooled != 0 {
+	if ps := pooled.MemCacheStats(plm); ps.StatesClosed != 1 || ps.Pooled != 0 {
 		t.Fatalf("after the unload: %+v", ps)
 	}
 }
@@ -233,7 +234,7 @@ func (e *Engine) encodeText(t *testing.T, lm *LoadedModel, s string) []int32 {
 // builds none; it stores nothing and counts nothing as served.
 func TestAWarmLoadLeavesAPooledState(t *testing.T) {
 	e, lm := ttftEngine(t, smallModel, Config{}, LoadOptions{Warm: true})
-	st := e.PromptCache(lm)
+	st := e.MemCacheStats(lm)
 	if !st.Warmed || st.StatesCreated != 1 || st.Pooled != 1 {
 		t.Fatalf("after a warm load: %+v; want one State built and pooled", st)
 	}
@@ -241,7 +242,7 @@ func TestAWarmLoadLeavesAPooledState(t *testing.T) {
 		t.Fatalf("the warm-up was counted as served or stored: %+v, %d prefilled", st, lm.tokensPrefilled.Load())
 	}
 	generate(t, e, GenerateOptions{ModelID: "m", Prompt: Prompt{Kind: PromptText, Text: story}, MaxTokens: 4})
-	if st := e.PromptCache(lm); st.StatesCreated != 1 || st.StatesReused != 1 {
+	if st := e.MemCacheStats(lm); st.StatesCreated != 1 || st.StatesReused != 1 {
 		t.Fatalf("the first request after a warm load: %+v; want the warm State reused", st)
 	}
 
@@ -306,8 +307,19 @@ func TestAFullQueueIsRefusedWith429(t *testing.T) {
 	if got := lm.ttft.statesCreated.Load(); got != created {
 		t.Fatalf("a refused request built %d State(s)", got-created)
 	}
-	if st := e.PromptCache(lm); st.Refused != 5 {
+	if st := e.MemCacheStats(lm); st.Refused != 5 {
 		t.Fatalf("refused %d, want 5", st.Refused)
+	}
+	mr, err := http.Get(c.url + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mb, _ := io.ReadAll(mr.Body)
+	mr.Body.Close()
+	for _, want := range []string{`jitllm_requests_refused_total{model="m"} 5`, `jitllm_requests_in_flight{model="m"} 1`} {
+		if !strings.Contains(string(mb), want) {
+			t.Fatalf("/metrics does not carry %q", want)
+		}
 	}
 
 	close(hold)
@@ -324,7 +336,7 @@ func TestAFullQueueIsRefusedWith429(t *testing.T) {
 // context's error, with no Started sent), and the State it leaves in the pool
 // answers the next request as a fresh one.
 func TestACancelledPrefillLeavesThePooledStateClean(t *testing.T) {
-	e, lm := ttftEngine(t, smallModel, Config{NoPromptStore: true}, LoadOptions{})
+	e, lm := ttftEngine(t, smallModel, Config{NoMemCache: true}, LoadOptions{})
 	p := longPrompt(lm.m)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -338,12 +350,12 @@ func TestACancelledPrefillLeavesThePooledStateClean(t *testing.T) {
 		t.Fatalf("the cancelled prefill counted %d positions", lm.tokensPrefilled.Load())
 	}
 	got := generate(t, e, GenerateOptions{ModelID: "m", Prompt: idsPrompt(p), MaxTokens: 8})
-	fresh, _ := ttftEngine(t, smallModel, Config{NoPromptStore: true, SessionPool: -1}, LoadOptions{})
+	fresh, _ := ttftEngine(t, smallModel, Config{NoMemCache: true, SessionPool: -1}, LoadOptions{})
 	want := generate(t, fresh, GenerateOptions{ModelID: "m", Prompt: idsPrompt(p), MaxTokens: 8})
 	if !slices.Equal(want.ids, got.ids) {
 		t.Fatalf("after a cancelled prefill the pooled State answered %v, a fresh one %v", got.ids, want.ids)
 	}
-	if st := e.PromptCache(lm); st.StatesReused != 1 {
+	if st := e.MemCacheStats(lm); st.StatesReused != 1 {
 		t.Fatalf("%+v: the cancelled request's State was not pooled", st)
 	}
 }
@@ -420,5 +432,65 @@ func TestAnthropicCacheUsageIsReported(t *testing.T) {
 	}
 	if len(out[0].Content) == 0 || len(out[1].Content) == 0 || out[0].Content[0].Text != out[1].Content[0].Text {
 		t.Fatalf("the restored request answered differently: %+v vs %+v", out[0].Content, out[1].Content)
+	}
+}
+
+// TestTheMemCacheLayersOverThePromptStore: a page offered goes to memory and
+// disk; once memory has dropped it, a Get finds it on disk and copies it back
+// up, so the next Get is a memory hit.
+func TestTheMemCacheLayersOverThePromptStore(t *testing.T) {
+	disk, err := model.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mem := model.NewBoundedMemStore(4096)
+	defer mem.Close()
+	l := &layered{mem: mem, disk: disk}
+	page := bytes.Repeat([]byte{3}, 4096)
+	if err := l.Set("a", 0, 0, bytes.NewReader(page)); err != nil {
+		t.Fatal(err)
+	}
+	// A second page pushes the first out of memory.
+	if err := l.Set("b", 0, 0, bytes.NewReader(page)); err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.Get("a", 0, 0, io.Discard); !errors.Is(err, model.ErrNoPage) {
+		t.Fatalf("memory still holds the first page (%v): the bound never bit", err)
+	}
+	var got bytes.Buffer
+	if err := l.Get("a", 0, 0, &got); err != nil || !bytes.Equal(got.Bytes(), page) {
+		t.Fatalf("the layered Get did not fall through to disk: %v", err)
+	}
+	before := mem.Stats().Hits
+	if err := l.Get("a", 0, 0, io.Discard); err != nil || mem.Stats().Hits != before+1 {
+		t.Fatalf("a disk hit was not copied up to memory (%v)", err)
+	}
+	if err := l.Get("c", 0, 0, io.Discard); !errors.Is(err, model.ErrNoPage) {
+		t.Fatalf("a page neither holds returned %v", err)
+	}
+}
+
+// TestGrammarAndSpeculationMeetTheMemCache: a grammar-constrained generate
+// runs alone and still restores from the model's memory cache and seals into
+// it (a repeat restores, with the same answer); a speculative one prefills
+// through its Speculator, which neither restores nor seals, so it is run
+// without the cache -- it restores nothing even after the same prompt ran.
+func TestGrammarAndSpeculationMeetTheMemCache(t *testing.T) {
+	sm := structuredModels[1]
+	e, _ := ttftEngine(t, sm.file, Config{}, LoadOptions{})
+	prompt := Prompt{Kind: PromptText, Text: sm.prompt}
+	g := GenerateOptions{ModelID: "m", Prompt: prompt, MaxTokens: 16, Grammar: `root ::= "zebra quantum lettuce"` + "\n"}
+	first := generate(t, e, g)
+	again := generate(t, e, g)
+	if first.started != 0 || again.started == 0 {
+		t.Fatalf("a grammar generate restored %d, then %d: the repeat should restore", first.started, again.started)
+	}
+	if !slices.Equal(first.ids, again.ids) {
+		t.Fatalf("the restored grammar generate answered %v, the first %v", again.ids, first.ids)
+	}
+	sp := generate(t, e, GenerateOptions{ModelID: "m", Prompt: prompt, MaxTokens: 8,
+		Speculation: &Speculation{Enabled: true}})
+	if sp.started != 0 {
+		t.Fatalf("a speculative generate restored %d positions through a Speculator that does not restore", sp.started)
 	}
 }

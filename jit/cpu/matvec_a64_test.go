@@ -78,6 +78,11 @@ func TestA64KernelShape(t *testing.T) {
 	if mc == "" {
 		t.Skip("no llvm-mc to disassemble aarch64")
 	}
+	// The golden shape is the SDOT kernel's; on a chip without FEAT_DotProd
+	// the widened form is sdotemu_test.go's.
+	old := forceDotEncoding
+	forceDotEncoding = true
+	defer func() { forceDotEncoding = old }()
 	for _, tc := range []struct {
 		wt      quant.Type
 		want    map[string]int

@@ -133,7 +133,8 @@ func reportJIT() {
 
 // isa names what the row-major emitter emits, and whether this CPU can run it.
 // jit/cpu probes (CPUID leaf 7.1 EAX[4] on amd64, AT_HWCAP or sysctl on arm64)
-// and SupportedNative declines when the feature is absent. This line is about
+// On amd64 SupportedNative declines when the feature is absent; arm64 widens
+// SDOT instead (jit/cpu/sdotemu.go) and runs every kernel. This line is about
 // the GGUF row-major family only; the packed line is what a container runs.
 func isa() string {
 	switch cpu.NativeArch() {
@@ -151,8 +152,8 @@ func isa() string {
 		return s + " (probed: ABSENT -- the GGUF row-major kernels decline; the packed line below is what a container runs)"
 	case "arm64":
 		s := "NEON + FEAT_DotProd SDOT"
-		if !cpu.SupportedNative(quant.Q4_0) {
-			s += " (probed: ABSENT -- no quantized kernel runs here; a container will not load)"
+		if !cpu.HasDotProd() {
+			s += " (probed: ABSENT -- every SDOT is widened to SMULL/SADDLP/ADDP: the same bits, slower)"
 		} else {
 			s += " (probed: present)"
 		}

@@ -27,6 +27,9 @@ func cmdSessions(ctx context.Context, c cli, args []string) error {
 	devices := fs.String("devices", "", "devices for -new, comma-separated; empty inherits the model's default")
 	gpuLayers := fs.Int("gpu-layers", -1, "at most this many blocks on a device for -new; -1 is as many as fit")
 	grow := fs.Bool("gpu-grow", false, "adopt one block per token while serving, as memory frees")
+	keepOff := fs.Bool("keep-off-host", false, "for -new: never hand a block to the host when the context outgrows the device")
+	promptCache := fs.Bool("prompt-cache", false, "for -new: keep prompt prefixes in the server's -kv-cache store")
+	cacheKey := fs.String("cache-key", "", "for -new: what the prompt store may share between sessions (needs -prompt-cache)")
 
 	closeID := fs.String("close", "", "a session id to close")
 	resetID := fs.String("reset", "", "a session id to reset to position 0")
@@ -51,6 +54,9 @@ func cmdSessions(ctx context.Context, c cli, args []string) error {
 			MaxSeq:               int32(*maxSeq),
 			DeviceIds:            csv(*devices),
 			RelocateWhileServing: *grow,
+			KeepOffHost:          *keepOff,
+			PromptCache:          *promptCache,
+			CacheKey:             *cacheKey,
 		}
 		if wasSet(fs, "gpu-layers") {
 			v := int32(*gpuLayers)

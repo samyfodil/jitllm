@@ -126,12 +126,13 @@ type row struct {
 	echo      bool
 	ephemeral bool
 	sampler   model.Sampler
+	logprobs  *model.Logprobs // nil unless the request asked for logprobs
 	maxTokens int
 	ignoreEOS bool
 	stream    *streamText
 	enqueued  time.Time
 	depth     int32
-	// restored is the prompt positions the prompt store gave the row before
+	// restored is the prompt positions the memory cache gave the row before
 	// it was queued (State.RestorePrefix); its prompt is fed from there. seal
 	// has the row's prompt offered to the store once it has run.
 	restored int
@@ -422,13 +423,14 @@ func (lp *stepLoop) decodeUnits() []unit {
 		}
 		next := r.sampler.Sample(r.logits)
 		r.sampler.Observe(next)
+		tlp := takeLogprob(r.logprobs, vocab, r.logits, next)
 		if !r.ignoreEOS && vocab.IsEOG(next) {
 			lp.finish(r, FinishEOS, "", nil)
 			continue
 		}
 		r.out = append(r.out, next)
 		chunk, hit, match := r.stream.push(r.out)
-		r.push(Event{Kind: EventToken, Token: &Token{ID: next, Text: chunk, Index: r.n}})
+		r.push(Event{Kind: EventToken, Token: &Token{ID: next, Text: chunk, Index: r.n, Logprob: tlp}})
 		if hit {
 			r.n++
 			lp.finish(r, FinishStop, match, nil)
@@ -646,7 +648,7 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 		start = s.st.Pos()
 	}
 	maxTokens := tokenLimit(o.MaxTokens, s.st.MaxSeq()-start-len(ids))
-	// The prompt store restores before the row is queued, on this goroutine
+	// The memory cache restores before the row is queued, on this goroutine
 	// (the caller reset the State and attached the store), so the loop feeds
 	// only what it did not hold. It leaves at least one token to run: the row
 	// needs that token's logits.
@@ -668,9 +670,10 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 		echo:      o.Echo,
 		ephemeral: ephemeral,
 		sampler:   sampler,
+		logprobs:  newLogprobs(o),
 		maxTokens: maxTokens,
 		ignoreEOS: o.IgnoreEOS,
-		stream:    newStreamText(lm.m.Vocab, o.Stop),
+		stream:    newStreamText(lm.m.Vocab.NewChatStream().Next, o.Stop),
 		enqueued:  time.Now(),
 		admitted:  make(chan struct{}),
 		done:      make(chan struct{}),
@@ -736,7 +739,7 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 
 	res := r.result
 	s.generated.Add(int64(res.n))
-	lm.tokensGenerated.Add(int64(res.n))
+	lm.finished(res.n, r.prefill, res.decode)
 	s.lastUsed.Store(time.Now().UnixMilli())
 	s.refresh()
 	// The history grew by what this generate committed.

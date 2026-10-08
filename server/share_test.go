@@ -103,3 +103,41 @@ func TestASessionDoesNotStarveThePager(t *testing.T) {
 		t.Fatalf("after a generate the pager holds %d bytes and the weights do not fit", lm.m.PageBudget())
 	}
 }
+
+// TestEveryLoadRederivesTheOffHeapBudget: the collector's limit is
+// process-wide, so the engine tells Config.OffHeap the page budgets every
+// loaded model may grow to, on every load and unload: a second model's load
+// keeps the sum at the host total the two divide, and the last unload hands
+// back zero, so jitllmd's goheap.OffHeap returns the limit to goheap.Cap's.
+//
+// VIOLATION SIGNATURE. Without the call in rebudget this fails with
+//
+//	after loading b: OffHeap was told nothing
+func TestEveryLoadRederivesTheOffHeapBudget(t *testing.T) {
+	e, a, _ := loadedEngine(t, smallModel, "a", LoadOptions{})
+	var told []uint64
+	e.cfg.OffHeap = func(b uint64) { told = append(told, b) }
+	total := e.hostTotal()
+	last := func(what string, want uint64) {
+		t.Helper()
+		if len(told) == 0 {
+			t.Fatalf("%s: OffHeap was told nothing", what)
+		}
+		if got := told[len(told)-1]; got != want {
+			t.Fatalf("%s: OffHeap told %d, want %d", what, got, want)
+		}
+		told = told[:0]
+	}
+	if _, err := e.LoadModel(LoadOptions{Path: a.path, ModelID: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	last("after loading b", total)
+	if _, err := e.UnloadModel("b", true); err != nil {
+		t.Fatal(err)
+	}
+	last("after unloading b", total)
+	if _, err := e.UnloadModel("a", true); err != nil {
+		t.Fatal(err)
+	}
+	last("after the last unload", 0)
+}

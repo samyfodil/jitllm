@@ -287,7 +287,7 @@ func TestBatchARequestJoinsWhileOthersDecode(t *testing.T) {
 		const chunk = 4
 		// No prompt store: the "alone" pass would store the long prompt and
 		// the joined one restore it, leaving no chunks to count.
-		e, lm, c := batchEngine(t, name, Config{PromptChunk: chunk, NoPromptStore: true}, 4, nil)
+		e, lm, c := batchEngine(t, name, Config{PromptChunk: chunk, NoMemCache: true}, 4, nil)
 		const gen = 32
 		long := strings.Repeat("The sun was warm and the birds sang in the tall green trees. ", 3)
 		reqs := []*v1.GenerateRequest{

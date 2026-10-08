@@ -67,6 +67,12 @@ type oaChatRequest struct {
 	JitllmSession string `json:"jitllm_session,omitempty"`
 	// JitllmPriority is "high" or "normal" (Engine.prioritise).
 	JitllmPriority string `json:"jitllm_priority,omitempty"`
+	// JitllmSpeculate turns speculative decoding on or off for the request
+	// (Speculation); absent takes the session's.
+	JitllmSpeculate *bool `json:"jitllm_speculate,omitempty"`
+	// ResponseFormat is OpenAI's structured output: text, json_object or
+	// json_schema (grammar.go).
+	ResponseFormat json.RawMessage `json:"response_format"`
 }
 
 type oaCompletionRequest struct {
@@ -82,6 +88,12 @@ type oaCompletionRequest struct {
 	JitllmSession string `json:"jitllm_session,omitempty"`
 	// JitllmPriority is "high" or "normal" (Engine.prioritise).
 	JitllmPriority string `json:"jitllm_priority,omitempty"`
+	// JitllmSpeculate turns speculative decoding on or off for the request
+	// (Speculation); absent takes the session's.
+	JitllmSpeculate *bool `json:"jitllm_speculate,omitempty"`
+	// ResponseFormat is OpenAI's structured output: text, json_object or
+	// json_schema (grammar.go).
+	ResponseFormat json.RawMessage `json:"response_format"`
 }
 
 type oaUsage struct {
@@ -98,11 +110,11 @@ type oaPromptTokenInfo struct {
 }
 
 type oaChatChoice struct {
-	Index        int       `json:"index"`
-	Message      *oaOutMsg `json:"message,omitempty"`
-	Delta        *oaOutMsg `json:"delta,omitempty"`
-	FinishReason *string   `json:"finish_reason"`
-	Logprobs     *struct{} `json:"logprobs"`
+	Index        int             `json:"index"`
+	Message      *oaOutMsg       `json:"message,omitempty"`
+	Delta        *oaOutMsg       `json:"delta,omitempty"`
+	FinishReason *string         `json:"finish_reason"`
+	Logprobs     *oaChatLogprobs `json:"logprobs"`
 }
 
 type oaOutMsg struct {
@@ -138,6 +150,10 @@ type oaJitllmExtra struct {
 	DecodeMillis   int64   `json:"decode_ms"`
 	TokensPerSec   float64 `json:"decode_tokens_per_second"`
 	BytesPerToken  uint64  `json:"bytes_per_token"`
+	// Seeds and PromptRestored are set for several choices: each choice's
+	// seed, and how many prompt positions each restored rather than ran.
+	Seeds          []int64 `json:"seeds,omitempty"`
+	PromptRestored []int   `json:"prompt_restored,omitempty"`
 }
 
 type oaError struct {
@@ -267,14 +283,31 @@ func (e *compat) openAIChatCompletions(w http.ResponseWriter, r *http.Request) {
 	} else if req.MaxCompletionTokens != nil {
 		maxTok = *req.MaxCompletionTokens
 	}
-	o := GenerateOptions{
-		Prompt:    Prompt{Kind: PromptChat, Chat: chat},
-		MaxTokens: maxTok,
-		Stop:      oaStop(req.Stop),
-		Sampling:  sampling,
-		IgnoreEOS: req.IgnoreEOS,
-		Priority:  req.JitllmPriority,
+	lpr, err := oaChatLogprobsOf(req.Logprobs, req.TopLogprobs)
+	if err != nil {
+		oaFail(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+		return
 	}
+	seeds, err := oaChoiceSeeds(req.N, req.Seed)
+	if err != nil {
+		oaFail(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+		return
+	}
+	o := GenerateOptions{
+		Prompt:      Prompt{Kind: PromptChat, Chat: chat},
+		MaxTokens:   maxTok,
+		Stop:        oaStop(req.Stop),
+		Sampling:    sampling,
+		IgnoreEOS:   req.IgnoreEOS,
+		Seeds:       seeds,
+		Speculation: oaSpeculation(req.JitllmSpeculate),
+		Priority:    req.JitllmPriority,
+	}
+	if o.Grammar, err = oaResponseFormat(req.ResponseFormat); err != nil {
+		oaFailErr(w, err)
+		return
+	}
+	lpr.apply(&o)
 	if err := e.b.BindTarget(&o, req.JitllmSession, req.Model); err != nil {
 		oaFail(w, http.StatusNotFound, err.Error(), "invalid_request_error")
 		return
@@ -331,15 +364,42 @@ func (e *compat) openAICompletions(w http.ResponseWriter, r *http.Request) {
 	if req.MaxTokens != nil {
 		maxTok = *req.MaxTokens
 	}
-	o := GenerateOptions{
-		Prompt:    ps[0],
-		MaxTokens: maxTok,
-		Stop:      oaStop(req.Stop),
-		Echo:      req.Echo,
-		Sampling:  sampling,
-		IgnoreEOS: req.IgnoreEOS,
-		Priority:  req.JitllmPriority,
+	lpr, err := oaLegacyLogprobsOf(req.Logprobs, req.TopLogprobs)
+	if err != nil {
+		oaFail(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+		return
 	}
+	if lpr.on && req.Echo {
+		oaFail(w, http.StatusBadRequest, "logprobs with echo would need the prompt's own "+
+			"log-probabilities, which are not built", "invalid_request_error")
+		return
+	}
+	seeds, err := oaChoiceSeeds(req.N, req.Seed)
+	if err != nil {
+		oaFail(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+		return
+	}
+	if len(ps) > 1 && (lpr.on || len(seeds) > 0) {
+		oaFail(w, http.StatusBadRequest, "logprobs and n with a list of prompts are not built; "+
+			"send one request per prompt", "invalid_request_error")
+		return
+	}
+	o := GenerateOptions{
+		Prompt:      ps[0],
+		MaxTokens:   maxTok,
+		Stop:        oaStop(req.Stop),
+		Echo:        req.Echo,
+		Sampling:    sampling,
+		IgnoreEOS:   req.IgnoreEOS,
+		Seeds:       seeds,
+		Speculation: oaSpeculation(req.JitllmSpeculate),
+		Priority:    req.JitllmPriority,
+	}
+	if o.Grammar, err = oaResponseFormat(req.ResponseFormat); err != nil {
+		oaFailErr(w, err)
+		return
+	}
+	lpr.apply(&o)
 	if err := e.b.BindTarget(&o, req.JitllmSession, req.Model); err != nil {
 		oaFail(w, http.StatusNotFound, err.Error(), "invalid_request_error")
 		return
@@ -349,6 +409,53 @@ func (e *compat) openAICompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	e.runOpenAI(w, r, o, req.Model, req.Stream, false)
+}
+
+// oaChoice is one continuation's state while a response is built.
+type oaChoice struct {
+	tt      *toolText
+	text    strings.Builder
+	started *Started
+	fin     *Finished
+	// The logprobs not yet sent: a streamed token whose text is held back
+	// (a partial rune, a possible stop or tool call) sends its logprobs with
+	// the next chunk that carries text, or with the last.
+	pend   []oaLogprobContent
+	legacy *oaLegacyLogprobs
+	offset int
+}
+
+func (c *oaChoice) take(t *Token, lp bool) {
+	if !lp || t.Logprob == nil {
+		return
+	}
+	c.pend = append(c.pend, oaChatEntry(t.Logprob))
+	c.legacy.add(t.Logprob, c.offset)
+	c.offset += len(t.Logprob.Text)
+}
+
+// chatLogprobs hands over the pending entries in the chat shape.
+func (c *oaChoice) chatLogprobs(lp bool) *oaChatLogprobs {
+	if !lp {
+		return nil
+	}
+	out := &oaChatLogprobs{Content: c.pend}
+	if out.Content == nil {
+		out.Content = []oaLogprobContent{}
+	}
+	c.pend = nil
+	return out
+}
+
+// legacyLogprobs hands over the entries since the last call in the legacy
+// shape: a streamed chunk carries its own tokens, a whole response all.
+func (c *oaChoice) legacyLogprobs(lp bool) *oaLegacyLogprobs {
+	if !lp {
+		return nil
+	}
+	out := c.legacy
+	c.legacy = &oaLegacyLogprobs{}
+	return out
 }
 
 // runCompletions answers a list of prompts with one choice each, in order. The
@@ -408,6 +515,7 @@ func (e *compat) runCompletions(w http.ResponseWriter, r *http.Request, o Genera
 
 // runOpenAI is the one place a generate becomes an OpenAI response, streaming
 // or not. Both entry points funnel through it so the two shapes cannot drift.
+// Several choices (n) arrive as one generate whose events carry their index.
 func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOptions, modelName string, stream, chat bool) {
 	id := "chatcmpl-" + e.b.NextID("oa")
 	object, deltaObject := "chat.completion", "chat.completion.chunk"
@@ -416,25 +524,65 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 		object, deltaObject = "text_completion", "text_completion"
 	}
 	created := time.Now().Unix()
+	lp := o.Logprobs
 
 	var tools []byte
 	if o.Prompt.Chat != nil {
 		tools = o.Prompt.Chat.Tools
 	}
-	tt := newToolText(tools)
+	n := max(len(o.Seeds), 1)
+	cs := make([]*oaChoice, n)
+	for i := range cs {
+		cs[i] = &oaChoice{tt: newToolText(tools), legacy: &oaLegacyLogprobs{}}
+	}
+	usage := func() *oaUsage {
+		u := &oaUsage{}
+		for i, c := range cs {
+			if c.fin == nil {
+				continue
+			}
+			// The prompt is counted once: every choice after the first
+			// restored it rather than running it.
+			if i == 0 {
+				u.PromptTokens = c.fin.PromptTokens
+				u.PromptTokensDetails = &oaPromptTokenInfo{CachedTokens: c.fin.Restored}
+			}
+			u.CompletionTokens += c.fin.CompletionTokens
+		}
+		u.TotalTokens = u.PromptTokens + u.CompletionTokens
+		return u
+	}
+	extra := func() *oaJitllmExtra {
+		x := jitllmExtra(cs[0].started, cs[0].fin)
+		if x != nil && len(o.Seeds) > 0 {
+			x.Seeds = o.Seeds
+			for _, c := range cs {
+				if c.started != nil {
+					x.PromptRestored = append(x.PromptRestored, c.started.Restored)
+				}
+			}
+		}
+		return x
+	}
+	choice := func(ev Event) *oaChoice {
+		if ev.Choice < 0 || ev.Choice >= n {
+			return cs[0]
+		}
+		return cs[ev.Choice]
+	}
+
 	if !stream {
-		var text strings.Builder
-		var started *Started
-		var fin *Finished
 		err := e.b.Generate(r.Context(), o, func(ev Event) error {
+			c := choice(ev)
 			switch ev.Kind {
 			case EventStarted:
-				started = ev.Started
+				c.started = ev.Started
 			case EventToken:
-				tt.push(ev.Token.Text)
-				text.WriteString(ev.Token.Text)
+				c.tt.push(ev.Token.Text)
+				c.text.WriteString(ev.Token.Text)
+				c.take(ev.Token, lp)
 			case EventFinished:
-				fin = ev.Finished
+				c.fin = ev.Finished
 			}
 			return nil
 		})
@@ -443,41 +591,41 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 			return
 		}
 		// A Backend that returned nil without a Finished event would nil-deref
-		// three lines down. It cannot happen with the engine, and a shim that
-		// panics on an unexpected backend is a shim that takes the process out.
-		if fin == nil {
-			oaFail(w, http.StatusInternalServerError,
-				"the generate finished without a finished event", "server_error")
+		// below. It cannot happen with the engine, and a shim that panics on
+		// an unexpected backend is a shim that takes the process out.
+		for _, c := range cs {
+			if c.fin == nil {
+				oaFail(w, http.StatusInternalServerError,
+					"the generate finished without a finished event", "server_error")
+				return
+			}
+		}
+		if !chat {
+			// A legacy completion carries `text`, not a message: the two
+			// response bodies are genuinely different shapes.
+			out := legacyBody(id, object, created, modelName)
+			for i, c := range cs {
+				reason := oaFinish(c.fin.Reason)
+				out.Choices = append(out.Choices, legacyChoice{Index: i, Text: c.text.String(),
+					FinishReason: &reason, Logprobs: c.legacyLogprobs(lp)})
+			}
+			out.Usage, out.Jitllm = usage(), extra()
+			writeJSON(w, http.StatusOK, out)
 			return
 		}
-		reason := oaFinish(fin.Reason)
-		msg := &oaOutMsg{Role: "assistant", Content: text.String()}
-		if _, content, calls := tt.finish(); len(calls) > 0 {
-			reason = "tool_calls"
-			msg.Content, msg.ToolCalls = content, e.oaCalls(calls, false)
+		resp := oaChatResponse{ID: id, Object: object, Created: created, Model: modelName}
+		for i, c := range cs {
+			reason := oaFinish(c.fin.Reason)
+			msg := &oaOutMsg{Role: "assistant", Content: c.text.String()}
+			if _, content, calls := c.tt.finish(); len(calls) > 0 {
+				reason = "tool_calls"
+				msg.Content, msg.ToolCalls = content, e.oaCalls(calls, false)
+			}
+			resp.Choices = append(resp.Choices, oaChatChoice{Index: i, Message: msg,
+				FinishReason: &reason, Logprobs: c.chatLogprobs(lp)})
 		}
-		ch := oaChatChoice{Index: 0, FinishReason: &reason}
-		if chat {
-			ch.Message = msg
-		} else {
-			// A legacy completion carries `text`, not a message. The field is
-			// added by the wrapper below rather than by widening oaChatChoice,
-			// because the two response bodies are genuinely different shapes.
-			writeJSON(w, http.StatusOK, legacyCompletion(id, object, created, modelName,
-				text.String(), reason, started, fin))
-			return
-		}
-		writeJSON(w, http.StatusOK, oaChatResponse{
-			ID: id, Object: object, Created: created, Model: modelName,
-			Choices: []oaChatChoice{ch},
-			Usage: &oaUsage{
-				PromptTokens:        fin.PromptTokens,
-				CompletionTokens:    fin.CompletionTokens,
-				TotalTokens:         fin.PromptTokens + fin.CompletionTokens,
-				PromptTokensDetails: &oaPromptTokenInfo{CachedTokens: fin.Restored},
-			},
-			Jitllm: jitllmExtra(started, fin),
-		})
+		resp.Usage, resp.Jitllm = usage(), extra()
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 
@@ -493,44 +641,78 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 		oaFail(w, http.StatusInternalServerError, err.Error(), "server_error")
 		return
 	}
-	first := true
-	var fin *Finished
-	var started *Started
+	chunk := func(ch oaChatChoice) error {
+		return sse.send(oaChatResponse{
+			ID: id, Object: deltaObject, Created: created, Model: modelName,
+			Choices: []oaChatChoice{ch},
+		})
+	}
+	// end is a choice's last chunks, sent when its Finished arrives so the
+	// next choice's stream starts after it.
+	end := func(i int, c *oaChoice) {
+		reason := oaFinish(c.fin.Reason)
+		if !chat {
+			out := legacyBody(id, object, created, modelName)
+			out.Choices = []legacyChoice{{Index: i, FinishReason: &reason, Logprobs: c.legacyLogprobs(lp)}}
+			if n == 1 {
+				out.Usage, out.Jitllm = usage(), extra()
+			}
+			sse.send(out)
+			return
+		}
+		// What the tool holdback kept back goes out now: the calls, or the
+		// text that turned out not to be one.
+		tail, _, calls := c.tt.finish()
+		if tail != "" {
+			chunk(oaChatChoice{Index: i, Delta: &oaOutMsg{Content: tail}, Logprobs: c.chatLogprobs(lp)})
+		}
+		if len(calls) > 0 {
+			reason = "tool_calls"
+			chunk(oaChatChoice{Index: i, Delta: &oaOutMsg{ToolCalls: e.oaCalls(calls, true)}})
+		}
+		var lps *oaChatLogprobs
+		if len(c.pend) > 0 {
+			lps = c.chatLogprobs(lp)
+		}
+		last := oaChatResponse{
+			ID: id, Object: deltaObject, Created: created, Model: modelName,
+			Choices: []oaChatChoice{{Index: i, Delta: &oaOutMsg{}, FinishReason: &reason, Logprobs: lps}},
+		}
+		if n == 1 {
+			last.Usage, last.Jitllm = usage(), extra()
+		}
+		sse.send(last)
+	}
 	gerr := e.b.Generate(r.Context(), o, func(ev Event) error {
+		c := choice(ev)
+		i := ev.Choice
 		switch ev.Kind {
 		case EventStarted:
-			started = ev.Started
+			c.started = ev.Started
 			if chat {
 				// The first chunk carries the role and no content, which is
 				// what the reference implementation emits and what several
 				// clients key their state machine on.
-				return sse.send(oaChatResponse{
-					ID: id, Object: deltaObject, Created: created, Model: modelName,
-					Choices: []oaChatChoice{{Index: 0, Delta: &oaOutMsg{Role: "assistant"}}},
-				})
+				return chunk(oaChatChoice{Index: i, Delta: &oaOutMsg{Role: "assistant"}})
 			}
 		case EventToken:
+			c.take(ev.Token, lp)
 			if ev.Token.Text == "" {
 				return nil
 			}
 			if chat {
-				txt := tt.push(ev.Token.Text)
+				txt := c.tt.push(ev.Token.Text)
 				if txt == "" {
 					return nil
 				}
-				d := &oaOutMsg{Content: txt}
-				if first {
-					first = false
-				}
-				return sse.send(oaChatResponse{
-					ID: id, Object: deltaObject, Created: created, Model: modelName,
-					Choices: []oaChatChoice{{Index: 0, Delta: d}},
-				})
+				return chunk(oaChatChoice{Index: i, Delta: &oaOutMsg{Content: txt}, Logprobs: c.chatLogprobs(lp)})
 			}
-			return sse.send(legacyCompletion(id, object, created, modelName,
-				ev.Token.Text, "", nil, nil))
+			out := legacyBody(id, object, created, modelName)
+			out.Choices = []legacyChoice{{Index: i, Text: ev.Token.Text, Logprobs: c.legacyLogprobs(lp)}}
+			return sse.send(out)
 		case EventFinished:
-			fin = ev.Finished
+			c.fin = ev.Finished
+			end(i, c)
 		}
 		return nil
 	})
@@ -541,79 +723,53 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 		sse.done()
 		return
 	}
-	if fin == nil {
-		sse.sendError(errors.New("the generate finished without a finished event"))
-		sse.done()
-		return
+	for _, c := range cs {
+		if c.fin == nil {
+			sse.sendError(errors.New("the generate finished without a finished event"))
+			sse.done()
+			return
+		}
 	}
-	reason := oaFinish(fin.Reason)
-	if chat {
-		// What the tool holdback kept back goes out now: the calls, or the
-		// text that turned out not to be one.
-		tail, _, calls := tt.finish()
-		if tail != "" {
-			sse.send(oaChatResponse{
-				ID: id, Object: deltaObject, Created: created, Model: modelName,
-				Choices: []oaChatChoice{{Index: 0, Delta: &oaOutMsg{Content: tail}}},
-			})
-		}
-		if len(calls) > 0 {
-			reason = "tool_calls"
-			sse.send(oaChatResponse{
-				ID: id, Object: deltaObject, Created: created, Model: modelName,
-				Choices: []oaChatChoice{{Index: 0, Delta: &oaOutMsg{ToolCalls: e.oaCalls(calls, true)}}},
-			})
-		}
+	// One choice's usage rode on its last chunk; several choices' usage,
+	// once for the whole response, rides on a chunk of its own.
+	switch {
+	case n == 1:
+	case chat:
 		sse.send(oaChatResponse{
 			ID: id, Object: deltaObject, Created: created, Model: modelName,
-			Choices: []oaChatChoice{{Index: 0, Delta: &oaOutMsg{}, FinishReason: &reason}},
-			Usage: &oaUsage{
-				PromptTokens:     fin.PromptTokens,
-				CompletionTokens: fin.CompletionTokens,
-				TotalTokens:      fin.PromptTokens + fin.CompletionTokens,
-			},
-			Jitllm: jitllmExtra(started, fin),
+			Choices: []oaChatChoice{}, Usage: usage(), Jitllm: extra(),
 		})
-	} else {
-		sse.send(legacyCompletion(id, object, created, modelName, "", reason, started, fin))
+	default:
+		out := legacyBody(id, object, created, modelName)
+		out.Choices = []legacyChoice{}
+		out.Usage, out.Jitllm = usage(), extra()
+		sse.send(out)
 	}
 	sse.done()
 }
 
-// legacyCompletion is /v1/completions' body, which is NOT the chat body: its
-// choice carries `text` rather than a message or a delta.
-func legacyCompletion(id, object string, created int64, modelName, text, reason string, started *Started, fin *Finished) any {
-	type choice struct {
-		Index        int       `json:"index"`
-		Text         string    `json:"text"`
-		FinishReason *string   `json:"finish_reason"`
-		Logprobs     *struct{} `json:"logprobs"`
-	}
-	var fr *string
-	if reason != "" {
-		fr = &reason
-	}
-	out := struct {
-		ID      string         `json:"id"`
-		Object  string         `json:"object"`
-		Created int64          `json:"created"`
-		Model   string         `json:"model"`
-		Choices []choice       `json:"choices"`
-		Usage   *oaUsage       `json:"usage,omitempty"`
-		Jitllm  *oaJitllmExtra `json:"jitllm,omitempty"`
-	}{
-		ID: id, Object: object, Created: created, Model: modelName,
-		Choices: []choice{{Index: 0, Text: text, FinishReason: fr}},
-	}
-	if fin != nil {
-		out.Usage = &oaUsage{
-			PromptTokens:     fin.PromptTokens,
-			CompletionTokens: fin.CompletionTokens,
-			TotalTokens:      fin.PromptTokens + fin.CompletionTokens,
-		}
-		out.Jitllm = jitllmExtra(started, fin)
-	}
-	return out
+// legacyChoice is /v1/completions' choice, which is NOT the chat one: it
+// carries `text` rather than a message or a delta.
+type legacyChoice struct {
+	Index        int               `json:"index"`
+	Text         string            `json:"text"`
+	FinishReason *string           `json:"finish_reason"`
+	Logprobs     *oaLegacyLogprobs `json:"logprobs"`
+}
+
+// legacyResponse is /v1/completions' body.
+type legacyResponse struct {
+	ID      string         `json:"id"`
+	Object  string         `json:"object"`
+	Created int64          `json:"created"`
+	Model   string         `json:"model"`
+	Choices []legacyChoice `json:"choices"`
+	Usage   *oaUsage       `json:"usage,omitempty"`
+	Jitllm  *oaJitllmExtra `json:"jitllm,omitempty"`
+}
+
+func legacyBody(id, object string, created int64, modelName string) legacyResponse {
+	return legacyResponse{ID: id, Object: object, Created: created, Model: modelName}
 }
 
 func jitllmExtra(s *Started, f *Finished) *oaJitllmExtra {
@@ -655,6 +811,15 @@ func oaFinish(r FinishReason) string {
 // BindTarget resolves the `model` field, or the jitllm_session extension, onto
 // the engine's own ids. A session id wins: continuing a conversation is a
 // stronger statement than naming a model.
+// oaSpeculation is the jitllm_speculate extension as a request's
+// speculation; nil when absent.
+func oaSpeculation(on *bool) *Speculation {
+	if on == nil {
+		return nil
+	}
+	return &Speculation{Enabled: *on}
+}
+
 func (e *Engine) BindTarget(o *GenerateOptions, sessionID, modelName string) error {
 	if sessionID != "" {
 		if _, err := e.Session(sessionID); err != nil {
