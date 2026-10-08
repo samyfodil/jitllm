@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/samyfodil/jitllm/internal/oracle"
+	"github.com/samyfodil/jitllm/internal/testmodels"
 )
 
 // lpCheck holds a step's reported logprobs to the oracle's log-softmax of the
@@ -62,7 +63,8 @@ func lpCheck(logits []float32, chosen int32, got float32, top []TopLogprob, n in
 func TestLogprobsMatchTheOracle(t *testing.T) {
 	mp, ok := existingModel(models["stories15M"])
 	if !ok {
-		t.Fatalf("stories15M is not present (set JITLLM_MODELS): %s", models["stories15M"])
+		testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS to the model directory) -- this gate proved nothing",
+			models["stories15M"])
 	}
 	m, err := Open(jlmOf(t, mp))
 	if err != nil {
