@@ -86,6 +86,10 @@ func emitGEMMA64(t quant.Type, mr, nr, nb int) ([]byte, error) {
 	)
 
 	var a A64
+	// The accumulators end at v(4*mr*nr-1), at most v23 (2*vecs+6 <= 32 and
+	// 2*vecs is a multiple of four), so v24 and v25 are always free for a
+	// widened SDOT (sdotemu.go).
+	a.DotScratch(V24, V25)
 	a.LDRx(X1, X0, 0)  // Out
 	a.LDRx(X2, X0, 8)  // W
 	a.LDRx(X3, X0, 16) // A, packed [kgroup][token][4]

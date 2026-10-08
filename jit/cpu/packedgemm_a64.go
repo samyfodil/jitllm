@@ -147,6 +147,9 @@ func EmitA64PackedMatMulStationary(t quant.Type, k, nrows, win int) ([]byte, err
 
 	nb := k / Q8Block
 	var a A64
+	// r[0] and r[1] are written after the token's dots and never read before
+	// them, so a widened SDOT (sdotemu.go) may clobber them.
+	a.DotScratch(r[0], r[1])
 	stream := kernels.ScStream(q)
 	// X6 row offset (bytes, 4 a row), X5 row groups left, X7 RowStr, X23
 	// Scratch, X19..X22 the per-token strides, X25 DStr.

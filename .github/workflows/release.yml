@@ -187,9 +187,17 @@ jobs:
             target: linux_arm64
           - runner: macos-15
             target: darwin_arm64
+          - runner: windows-2025
+            target: windows_amd64
+          - runner: windows-11-arm
+            target: windows_arm64
     runs-on: ${{ matrix.runner }}
     env:
       MODELS: ${{ github.workspace }}/models
+    # Git Bash on Windows, so one script serves every host.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -203,12 +211,16 @@ jobs:
           set -euo pipefail
           cd dist
           mkdir ../bin
+          ext=; [ "$RUNNER_OS" = Windows ] && ext=.exe
           for prog in jitllm jitllmd jitllm-desktop jitllm-tui; do
-            archive=$(ls ./"$prog"_*_"${{ matrix.target }}".tar.gz)
+            archive=$(ls ./"$prog"_*_"${{ matrix.target }}".* | grep -E '\.(tar\.gz|zip)$')
             grep " ${archive#./}\$" checksums.txt > want.txt
             if command -v sha256sum >/dev/null; then sha256sum -c want.txt; else shasum -a 256 -c want.txt; fi
-            tar -xzf "$archive" -C ../bin
-            test -x "../bin/$prog"
+            case "$archive" in
+            *.zip) unzip -q -o "$archive" -d ../bin ;;
+            *) tar -xzf "$archive" -C ../bin ;;
+            esac
+            test -x "../bin/$prog$ext"
           done
           ls -l ../bin
       - name: signature (macos)
@@ -221,6 +233,23 @@ jobs:
           # The bundle macos-app signed: its signature must verify whole.
           codesign --verify --strict --verbose=2 bin/jitllm.app
           codesign -d --entitlements - bin/jitllm.app 2>&1
+      # The desktop app is linked -H=windowsgui so Explorer opens no console
+      # beside it: the PE optional header's Subsystem field must read 2 (GUI),
+      # and every other program's 3 (console).
+      - name: subsystem (windows)
+        if: runner.os == 'Windows'
+        run: |
+          python - <<'PY'
+          import struct
+          def subsystem(p):
+              b = open(p, 'rb').read()
+              pe = struct.unpack_from('<I', b, 0x3c)[0]
+              return struct.unpack_from('<H', b, pe + 24 + 68)[0]
+          for prog, want in [('jitllm-desktop', 2), ('jitllm', 3), ('jitllmd', 3), ('jitllm-tui', 3)]:
+              got = subsystem(f'bin/{prog}.exe')
+              print(prog, got)
+              assert got == want, f'{prog}.exe subsystem {got}, want {want}'
+          PY
       - name: hardware
         run: bin/jitllm hardware
       - uses: actions/cache@v6

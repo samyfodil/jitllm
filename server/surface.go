@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -45,7 +46,15 @@ type ModelSummary struct {
 }
 
 // compat carries the Backend into the two shims' handlers.
-type compat struct{ b Backend }
+type compat struct {
+	b Backend
+	// mux is the routes below, which a batch line runs through.
+	mux http.Handler
+	// The Files and Batch APIs' store, opened on first use.
+	batchOnce sync.Once
+	batch     *batches
+	batchErr  error
+}
 
 // ---- *Engine implements Backend.
 
@@ -75,6 +84,11 @@ var _ Backend = (*Engine)(nil)
 func CompatHandler(b Backend) http.Handler {
 	c := &compat{b: b}
 	mux := http.NewServeMux()
+	c.mux = mux
+	mux.HandleFunc("/v1/files", c.openAIFiles)
+	mux.HandleFunc("/v1/files/", c.openAIFiles)
+	mux.HandleFunc("/v1/batches", c.openAIBatches)
+	mux.HandleFunc("/v1/batches/", c.openAIBatches)
 	mux.HandleFunc("/v1/chat/completions", c.openAIChatCompletions)
 	mux.HandleFunc("/v1/completions", c.openAICompletions)
 	mux.HandleFunc("/v1/models", c.openAIModels)

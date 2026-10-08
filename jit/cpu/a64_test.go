@@ -104,6 +104,16 @@ var a64Encodings = []struct {
 	{"sdot v6.4s, v2.16b, v4.16b", "4694844e", func(a *A64) { a.SDOT(V6, V2, V4) }},
 	{"sdot v31.4s, v30.16b, v29.16b", "df979d4e", func(a *A64) { a.SDOT(V31, V30, V29) }},
 
+	// SDOT widened for a chip without FEAT_DotProd (sdotemu.go).
+	{"smull v8.8h, v1.8b, v2.8b", "28c0220e", func(a *A64) { a.SMULL8b(V8, V1, V2) }},
+	{"smull v31.8h, v30.8b, v29.8b", "dfc33d0e", func(a *A64) { a.SMULL8b(V31, V30, V29) }},
+	{"smull2 v9.8h, v1.16b, v2.16b", "29c0224e", func(a *A64) { a.SMULL16b(V9, V1, V2) }},
+	{"smull2 v31.8h, v30.16b, v29.16b", "dfc33d4e", func(a *A64) { a.SMULL16b(V31, V30, V29) }},
+	{"saddlp v8.4s, v8.8h", "0829604e", func(a *A64) { a.SADDLP8h(V8, V8) }},
+	{"saddlp v31.4s, v30.8h", "df2b604e", func(a *A64) { a.SADDLP8h(V31, V30) }},
+	{"addp v8.4s, v8.4s, v9.4s", "08bda94e", func(a *A64) { a.ADDP4s(V8, V8, V9) }},
+	{"addp v31.4s, v30.4s, v29.4s", "dfbfbd4e", func(a *A64) { a.ADDP4s(V31, V30, V29) }},
+
 	// The Q4_0 nibble unpack.
 	{"and v3.16b, v2.16b, v29.16b", "431c3d4e", func(a *A64) { a.AND16b(V3, V2, V29) }},
 	{"and v31.16b, v30.16b, v29.16b", "df1f3d4e", func(a *A64) { a.AND16b(V31, V30, V29) }},

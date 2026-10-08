@@ -130,6 +130,10 @@ func emitA64Packed(t quant.Type, rows int, fused bool, ahead int, intFold bool, 
 	vSec, vSecSh := t1, t2
 
 	var a A64
+	// t3 and vDA are epilogue-local too, and both are written there before they
+	// are read, so a widened SDOT (sdotemu.go) may clobber them in the payload
+	// loop.
+	a.DotScratch(t3, vDA)
 	// Container v27's SC stream (scstream.go): X24, free in this kernel,
 	// addresses a straddling field's next word, one plane stride on.
 	stream := kernels.ScStream(q)
@@ -821,6 +825,11 @@ func EmitA64PackedMatMulTiled(t quant.Type, k, nrows, tok int) ([]byte, error) {
 	vSec, vSecSh := t1, t2
 
 	var a A64
+	// A widened SDOT (sdotemu.go) needs two scratch vectors and the tile has
+	// spent the rest: t3, which the epilogue writes before it reads, and vK,
+	// the correction constant, which the payload loop never reads and the
+	// epilogue rebuilds when it was clobbered.
+	a.DotScratch(t3, vK)
 	// Container v27's SC stream (scstream.go): X25 -- a narrow format's DStr,
 	// and a stream format is never narrow -- addresses a straddling field's
 	// next word, one plane stride on.
@@ -1019,6 +1028,10 @@ func EmitA64PackedMatMulTiled(t quant.Type, k, nrows, tok int) ([]byte, error) {
 				}
 				a.ADDreg(X12, X12, X7)
 			}
+		}
+		if a.dotEmu && corrK != 0 {
+			a.MOVI4s(vK, byte(corrK))
+			a.SCVTF4s(vK, vK)
 		}
 		// --- epilogue: d_row and the sub-block scale are shared by every
 		// token, so they are computed once per row group and reused.

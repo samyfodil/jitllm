@@ -98,6 +98,20 @@ message SamplingParams {
   optional float min_p = 7;
 }
 
+// SpeculationParams turns on speculative decoding for a generate: a round
+// drafts tokens -- with the model's own multi-token-prediction block where
+// it carries one, by prompt lookup (the tokens that followed the sequence's
+// last n-gram earlier in it) otherwise -- and verifies them in one pass of
+// the model. Greedy output is token for token what plain greedy decode
+// gives. A sampled generate with prompt lookup drafts nothing (it is plain
+// sampled decode): the rejection rule that keeps sampling exact is built for
+// the prediction block's drafts only.
+message SpeculationParams {
+  bool enabled = 1;
+  // Tokens drafted a round. Zero takes the engine's choice.
+  int32 draft_tokens = 2;
+}
+
 // ByteSize is bytes. It exists so a field can carry a human-readable form
 // beside the number without the two ever disagreeing: `human` is derived.
 message ByteSize {

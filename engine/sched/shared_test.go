@@ -104,3 +104,55 @@ func TestOverlappingCrewsShareTheirTurn(t *testing.T) {
 		t.Fatal("crews over disjoint cores share a lock they do not need")
 	}
 }
+
+// A view waiting for the crew runs after at most the region in flight, however
+// fast the other view relocks and however few threads the runtime has: on a
+// three-core runner one session once ran a whole reply while another's
+// generate produced no token. Here a view loops regions back to back on
+// GOMAXPROCS=2 under a three-worker crew, and the other's every region must
+// come within two of its regions of the last.
+func TestSharedViewsAlternateUnderContention(t *testing.T) {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(2))
+	cpus := []int{0, 1, 2}
+	a, b := Shared(cpus), Shared(cpus)
+	defer a.Close()
+	defer b.Close()
+
+	var aRegions atomic.Int64
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			a.Do(64, 1, func(_, lo, hi int) {})
+			aRegions.Add(1)
+		}
+	}()
+	for aRegions.Load() < 100 {
+		runtime.Gosched() // a is running back to back before b asks
+	}
+	const regions = 500
+	worst := int64(0)
+	last := aRegions.Load()
+	for r := 0; r < regions; r++ {
+		b.Do(64, 1, func(_, lo, hi int) {})
+		now := aRegions.Load()
+		if d := now - last; d > worst {
+			worst = d
+		}
+		last = now
+	}
+	close(stop)
+	<-done
+	// The region a has in flight when b queues, and the one a's goroutine
+	// counts after b's handoff, are the most a can run between two of b's.
+	if worst > 2 {
+		t.Fatalf("view a ran %d regions between two of b's: a waiting view is not handed the turn", worst)
+	}
+	t.Logf("a ran at most %d region(s) between two of b's; %d in all", worst, aRegions.Load())
+}

@@ -79,13 +79,11 @@ func PreVNNIPacked(quant.Type) error {
 func primaryPackedSupported(t quant.Type) bool { return SupportedPackedNative(t) }
 
 // SupportedPackedNative is "can this host run the generated packed kernel for
-// t": the packed emitter's list (SupportedA64Packed) and the one CPU feature
-// its kernels use, FEAT_DotProd. It must not ask SupportedNative (the
-// row-major list, which lacks MXFP4), and must never be a constant: a format
-// it says no to is a tensor a model refuses to load.
-func SupportedPackedNative(t quant.Type) bool {
-	return PackedSupported(t) && hasDotProd()
-}
+// t": the packed emitter's list (SupportedA64Packed). FEAT_DotProd is not
+// asked: without it SDOT is widened (sdotemu.go). It must not ask
+// SupportedNative (the row-major list, which lacks MXFP4): a format it says no
+// to is a tensor a model refuses to load.
+func SupportedPackedNative(t quant.Type) bool { return PackedSupported(t) }
 
 func EmitPackedMatVec(t quant.Type, rows int, _ DotKind) ([]byte, error) {
 	return packedMatVecPF(t, rows, 0)

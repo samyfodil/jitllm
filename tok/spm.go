@@ -571,3 +571,16 @@ func nibble(c byte) byte {
 	}
 	return 0
 }
+
+// Piece is the bytes token id adds to decoded text, false for a token that
+// adds none: a control or unused token, or an id outside the vocabulary.
+func (v *Vocab) Piece(id int32) (string, bool) {
+	if id < 0 || int(id) >= len(v.text) {
+		return "", false
+	}
+	if k := v.kind[id]; k == typeControl || k == typeUnused {
+		return "", false
+	}
+	s := v.Decode([]int32{id})
+	return s, s != ""
+}

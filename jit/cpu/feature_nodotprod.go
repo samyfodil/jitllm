@@ -9,3 +9,11 @@ package cpu
 // can be tested from an x86 box), so the symbol must exist here too; it never
 // decides anything off arm64.
 func hasDotProd() bool { return false }
+
+// a64EmulateDot is whether the A64 emitters widen SDOT (sdotemu.go). Off arm64
+// nothing executes A64 code, so only the test instrument decides: a
+// disassembly test on an x86 box can then read the emulated sequence.
+func a64EmulateDot() bool { return !forceDotEncoding && forceNoDotProd }
+
+// HasDotProd is false off arm64: no chip here runs A64 code.
+func HasDotProd() bool { return false }

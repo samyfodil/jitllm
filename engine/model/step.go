@@ -448,6 +448,12 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 			st.hot.endToken()
 		}
 		st.reap()
+		// A decoding row steps its seam tuner as stepTogether's do. A tuner
+		// that moves blocks onto a card takes the State out of the host
+		// step (HostRefusal), and StepRuns runs it alone from then on.
+		if k == 1 {
+			st.seamStep()
+		}
 		if err := st.kvCheck(); err != nil {
 			return nil, err
 		}
@@ -597,6 +603,13 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 			st.hot.endToken()
 		}
 		st.reap()
+		// A decoding row's token is complete, so it steps the seam tuner as
+		// Forward does: a session stepping as a row of a server's step loop
+		// would otherwise never measure. A prompt chunk steps it no more than
+		// Prefill does.
+		if k == 1 {
+			st.seamStep()
+		}
 		if err := st.kvCheck(); err != nil {
 			return nil, err
 		}

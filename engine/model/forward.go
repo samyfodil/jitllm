@@ -3260,6 +3260,13 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 				// The device applied the final softcap (nn.Head.Softcap).
 				s.finishDevLogits(s.logits)
 				s.advance(0, 1)
+				// The token is complete, so it steps what every token steps:
+				// a head on the device is no reason for the seam tuner or the
+				// grow path to stop counting.
+				s.hot.endToken()
+				s.reap()
+				s.growStep()
+				s.seamStep()
 				// A page the store could not return fails the request.
 				if err := s.kvCheck(); err != nil {
 					return nil, err

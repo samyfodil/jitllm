@@ -116,7 +116,7 @@ type batchCounters struct {
 	// postedTokens is tokens whose text and event the helper produced while
 	// their step ran.
 	postedTokens atomic.Int64
-	lastRefusal                                         atomic.Pointer[string]
+	lastRefusal  atomic.Pointer[string]
 }
 
 // errUnloaded ends a request still waiting for a row when its model goes.
@@ -163,14 +163,15 @@ type row struct {
 	echo      bool
 	ephemeral bool
 	sampler   model.Sampler
+	logprobs  *model.Logprobs // nil unless the request asked for logprobs
 	maxTokens int
 	ignoreEOS bool
 	// stops says the row has stop strings: a token's text then decides
 	// whether it is fed, so it is produced before the step, not beside it.
-	stops  bool
-	stream *streamText
-	enqueued  time.Time
-	depth     int32
+	stops    bool
+	stream   *streamText
+	enqueued time.Time
+	depth    int32
 
 	// admitted closes when the loop takes the row; done when it lets go of
 	// the row for good, after its last event is in the outbox.
@@ -486,6 +487,7 @@ func (lp *stepLoop) decodeUnits() []unit {
 		}
 		next := r.sampler.Sample(r.logits)
 		r.sampler.Observe(next)
+		tlp := takeLogprob(r.logprobs, vocab, r.logits, next)
 		if !r.ignoreEOS && vocab.IsEOG(next) {
 			lp.finish(r, FinishEOS, "", nil)
 			continue
@@ -495,10 +497,10 @@ func (lp *stepLoop) decodeUnits() []unit {
 			// No stop string can end the row here, so its text is not
 			// needed to decide the step: the helper makes it while the
 			// step runs.
-			lp.post.add(r, next, r.n)
+			lp.post.add(r, next, r.n, tlp)
 		} else {
 			chunk, hit, match := r.stream.push(r.out)
-			r.push(Event{Kind: EventToken, Token: &Token{ID: next, Text: chunk, Index: r.n}})
+			r.push(Event{Kind: EventToken, Token: &Token{ID: next, Text: chunk, Index: r.n, Logprob: tlp}})
 			if hit {
 				r.n++
 				lp.finish(r, FinishStop, match, nil)
@@ -781,10 +783,11 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 		echo:      o.Echo,
 		ephemeral: ephemeral,
 		sampler:   sampler,
+		logprobs:  newLogprobs(o),
 		maxTokens: maxTokens,
 		ignoreEOS: o.IgnoreEOS,
 		stops:     hasStop(o.Stop),
-		stream:    newStreamText(lm.m.Vocab, o.Stop),
+		stream:    newStreamText(lm.m.Vocab.NewChatStream().Next, o.Stop),
 		enqueued:  time.Now(),
 		admitted:  make(chan struct{}),
 		done:      make(chan struct{}),
@@ -850,7 +853,7 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 
 	res := r.result
 	s.generated.Add(int64(res.n))
-	lm.tokensGenerated.Add(int64(res.n))
+	lm.finished(res.n, r.prefill, res.decode)
 	s.lastUsed.Store(time.Now().UnixMilli())
 	s.refresh()
 	// The history grew by what this generate committed.
@@ -959,9 +962,9 @@ func (lp *stepLoop) pb() *v1.BatchStats {
 	}
 	for _, ch := range lp.choice.snapshot() {
 		out.Choices = append(out.Choices, &v1.JointChoice{
-			Rows:               int32(ch.rows),
-			Settled:            ch.settled,
-			Joint:              ch.joint,
+			Rows:    int32(ch.rows),
+			Settled: ch.settled,
+			Joint:   ch.joint,
 			// The medians are per row; a step of the bucket's widest count
 			// is what the fields report.
 			JointStepMillis:    float64(ch.jointMedian) * float64(ch.rows) / float64(time.Millisecond),

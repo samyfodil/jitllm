@@ -7,11 +7,10 @@ import "sync/atomic"
 // events (streamText.push, row.push), the Go work a token costs that the
 // step does not depend on.
 //
-// What moved off the critical path, by construction: each token's
-// re-decode of its row's ids and the diff against what was emitted
-// (streamText.push, a whole-completion decode per token), the event's
-// allocation and its append to the row's outbox, and the wake of the
-// request goroutine. What stays on it: sampling (the step needs the token)
+// What moved off the critical path, by construction: each token's text
+// (streamText.push, which decodes only the ids new since the last push),
+// the event's allocation and its append to the row's outbox, and the wake
+// of the request goroutine. What stays on it: sampling (the step needs the token)
 // and, for a row with stop strings, the text, since a stop string decides
 // whether the token is fed at all.
 //
@@ -35,6 +34,7 @@ type postJob struct {
 	r     *row
 	id    int32
 	index int
+	lp    *TokenLogprob
 }
 
 func newStepPost(posted *atomic.Int64) *stepPost {
@@ -48,15 +48,15 @@ func (p *stepPost) serve() {
 		for _, j := range jobs {
 			r := j.r
 			chunk, _, _ := r.stream.push(r.out[:j.index+1])
-			r.push(Event{Kind: EventToken, Token: &Token{ID: j.id, Text: chunk, Index: j.index}})
+			r.push(Event{Kind: EventToken, Token: &Token{ID: j.id, Text: chunk, Index: j.index, Logprob: j.lp}})
 		}
 		p.ended <- len(jobs)
 	}
 }
 
 // add queues a token of r for the next start. r.out holds it already.
-func (p *stepPost) add(r *row, id int32, index int) {
-	p.jobs = append(p.jobs, postJob{r, id, index})
+func (p *stepPost) add(r *row, id int32, index int, lp *TokenLogprob) {
+	p.jobs = append(p.jobs, postJob{r, id, index, lp})
 }
 
 // start hands the queued jobs to the helper.

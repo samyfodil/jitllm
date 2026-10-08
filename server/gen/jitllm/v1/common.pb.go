@@ -522,6 +522,67 @@ func (x *SamplingParams) GetMinP() float32 {
 	return 0
 }
 
+// SpeculationParams turns on speculative decoding for a generate: a round
+// drafts tokens -- with the model's own multi-token-prediction block where
+// it carries one, by prompt lookup (the tokens that followed the sequence's
+// last n-gram earlier in it) otherwise -- and verifies them in one pass of
+// the model. Greedy output is token for token what plain greedy decode
+// gives. A sampled generate with prompt lookup drafts nothing (it is plain
+// sampled decode): the rejection rule that keeps sampling exact is built for
+// the prediction block's drafts only.
+type SpeculationParams struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Enabled bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	// Tokens drafted a round. Zero takes the engine's choice.
+	DraftTokens   int32 `protobuf:"varint,2,opt,name=draft_tokens,json=draftTokens,proto3" json:"draft_tokens,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SpeculationParams) Reset() {
+	*x = SpeculationParams{}
+	mi := &file_jitllm_v1_common_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SpeculationParams) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SpeculationParams) ProtoMessage() {}
+
+func (x *SpeculationParams) ProtoReflect() protoreflect.Message {
+	mi := &file_jitllm_v1_common_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SpeculationParams.ProtoReflect.Descriptor instead.
+func (*SpeculationParams) Descriptor() ([]byte, []int) {
+	return file_jitllm_v1_common_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *SpeculationParams) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+func (x *SpeculationParams) GetDraftTokens() int32 {
+	if x != nil {
+		return x.DraftTokens
+	}
+	return 0
+}
+
 // ByteSize is bytes. It exists so a field can carry a human-readable form
 // beside the number without the two ever disagreeing: `human` is derived.
 type ByteSize struct {
@@ -534,7 +595,7 @@ type ByteSize struct {
 
 func (x *ByteSize) Reset() {
 	*x = ByteSize{}
-	mi := &file_jitllm_v1_common_proto_msgTypes[2]
+	mi := &file_jitllm_v1_common_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -546,7 +607,7 @@ func (x *ByteSize) String() string {
 func (*ByteSize) ProtoMessage() {}
 
 func (x *ByteSize) ProtoReflect() protoreflect.Message {
-	mi := &file_jitllm_v1_common_proto_msgTypes[2]
+	mi := &file_jitllm_v1_common_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -559,7 +620,7 @@ func (x *ByteSize) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ByteSize.ProtoReflect.Descriptor instead.
 func (*ByteSize) Descriptor() ([]byte, []int) {
-	return file_jitllm_v1_common_proto_rawDescGZIP(), []int{2}
+	return file_jitllm_v1_common_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ByteSize) GetBytes() uint64 {
@@ -599,7 +660,10 @@ const file_jitllm_v1_common_proto_rawDesc = "" +
 	"\x05_seedB\x11\n" +
 	"\x0f_repeat_penaltyB\x10\n" +
 	"\x0e_repeat_last_nB\b\n" +
-	"\x06_min_p\"6\n" +
+	"\x06_min_p\"P\n" +
+	"\x11SpeculationParams\x12\x18\n" +
+	"\aenabled\x18\x01 \x01(\bR\aenabled\x12!\n" +
+	"\fdraft_tokens\x18\x02 \x01(\x05R\vdraftTokens\"6\n" +
 	"\bByteSize\x12\x14\n" +
 	"\x05bytes\x18\x01 \x01(\x04R\x05bytes\x12\x14\n" +
 	"\x05human\x18\x02 \x01(\tR\x05human*l\n" +
@@ -651,17 +715,18 @@ func file_jitllm_v1_common_proto_rawDescGZIP() []byte {
 }
 
 var file_jitllm_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_jitllm_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_jitllm_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_jitllm_v1_common_proto_goTypes = []any{
-	(Backend)(0),           // 0: jitllm.v1.Backend
-	(DeviceKind)(0),        // 1: jitllm.v1.DeviceKind
-	(BlockLocation)(0),     // 2: jitllm.v1.BlockLocation
-	(BlockKind)(0),         // 3: jitllm.v1.BlockKind
-	(ExecutionMode)(0),     // 4: jitllm.v1.ExecutionMode
-	(FinishReason)(0),      // 5: jitllm.v1.FinishReason
-	(*DeviceRef)(nil),      // 6: jitllm.v1.DeviceRef
-	(*SamplingParams)(nil), // 7: jitllm.v1.SamplingParams
-	(*ByteSize)(nil),       // 8: jitllm.v1.ByteSize
+	(Backend)(0),              // 0: jitllm.v1.Backend
+	(DeviceKind)(0),           // 1: jitllm.v1.DeviceKind
+	(BlockLocation)(0),        // 2: jitllm.v1.BlockLocation
+	(BlockKind)(0),            // 3: jitllm.v1.BlockKind
+	(ExecutionMode)(0),        // 4: jitllm.v1.ExecutionMode
+	(FinishReason)(0),         // 5: jitllm.v1.FinishReason
+	(*DeviceRef)(nil),         // 6: jitllm.v1.DeviceRef
+	(*SamplingParams)(nil),    // 7: jitllm.v1.SamplingParams
+	(*SpeculationParams)(nil), // 8: jitllm.v1.SpeculationParams
+	(*ByteSize)(nil),          // 9: jitllm.v1.ByteSize
 }
 var file_jitllm_v1_common_proto_depIdxs = []int32{
 	0, // 0: jitllm.v1.DeviceRef.backend:type_name -> jitllm.v1.Backend
@@ -684,7 +749,7 @@ func file_jitllm_v1_common_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_jitllm_v1_common_proto_rawDesc), len(file_jitllm_v1_common_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

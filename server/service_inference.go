@@ -7,6 +7,8 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/samyfodil/jitllm/engine/grammar"
+
 	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
 )
 
@@ -27,6 +29,19 @@ func generateOptions(m *v1.GenerateRequest) (GenerateOptions, error) {
 		Echo:         m.EchoPrompt,
 		QueueTimeout: time.Duration(m.QueueTimeoutMillis) * time.Millisecond,
 		IgnoreEOS:    m.IgnoreEos,
+		Speculation:  pbSpeculation(m.Speculation),
+	}
+	switch {
+	case m.Grammar != "" && m.JsonSchema != "":
+		return o, invalid("generate: grammar and json_schema are one constraint each; give one")
+	case m.JsonSchema != "":
+		g, err := grammar.FromJSONSchema([]byte(m.JsonSchema))
+		if err != nil {
+			return o, invalid("generate: json_schema: %v", err)
+		}
+		o.Grammar = g
+	default:
+		o.Grammar = m.Grammar
 	}
 	switch p := m.Prompt.GetInput().(type) {
 	case *v1.PromptInput_Text:

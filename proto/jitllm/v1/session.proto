@@ -100,6 +100,25 @@ message CreateSessionRequest {
 
   // Sampler defaults for generate calls that do not carry their own.
   SamplingParams sampling = 7;
+
+  // Keep the session's blocks off the host when its context outgrows the
+  // device: the token takes the device's refusal rather than a block coming
+  // home. Contradicts relocate_while_serving; both set is refused.
+  bool keep_off_host = 8;
+
+  // Keep this session's prompt prefixes in the server's prompt store
+  // (`jitllmd serve -kv-cache DIR`), so a prompt that starts as an earlier one
+  // resumes from its cached keys and values. Refused when the server has no
+  // store. Such a session prefills alone, not as a row of a batched step.
+  bool prompt_cache = 9;
+
+  // Names what the prompt store may share between sessions. Needs
+  // prompt_cache.
+  string cache_key = 10;
+
+  // Speculative decoding for generate calls that do not carry their own.
+  // Off by default.
+  SpeculationParams speculation = 30;
 }
 
 message CreateSessionResponse {

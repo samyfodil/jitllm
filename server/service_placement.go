@@ -192,6 +192,9 @@ func (s *PlacementService) TuneSeam(ctx context.Context, req *connect.Request[v1
 	}
 	sess.mu.Lock()
 	sess.st.SetSeamTuning(true)
+	m := req.Msg
+	sess.st.SetSeamSchedule(int(m.WarmupTokens), int(m.TokensPerRun), int(m.Rounds))
+	sess.refresh()
 	sess.mu.Unlock()
 
 	if err := st.Send(&v1.TuneSeamResponse{
@@ -212,7 +215,9 @@ func (s *PlacementService) TuneSeam(ctx context.Context, req *connect.Request[v1
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-tick.C:
-			blocks, settled := sess.st.SeamTuned()
+			// The snapshot, not the State: Forward writes the tuner with no
+			// lock, so it is read as of the session's last refresh.
+			blocks, settled := int(sess.snapSeam.Load()), sess.snapSeamSettled.Load()
 			if blocks == lastBlocks && !settled {
 				continue
 			}

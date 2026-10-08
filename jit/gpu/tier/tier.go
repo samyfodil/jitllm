@@ -195,10 +195,12 @@ type Config struct {
 	// before it grows a page at a time; 0 is devKVReserve (see initKVCap).
 	// devKVPage reproduces the one-page start a growth gate needs.
 	KVReserve int
-	// Sessions is how many concurrent sessions each placed block reserves a
-	// history for; 0 and 1 are one. See devTier.reserved. Without it the first
-	// State fills the card and a second finds no room for its own cache, so
-	// its blocks run on the host.
+	// Sessions is how many concurrent sessions each placed linear block
+	// reserves a recurrent pair for; 0 and 1 are one. See devTier.reserved.
+	// Without it the first State fills the card and a second finds no room for
+	// its own state, so its blocks run on the host. An attention block reserves
+	// nothing per session: its history is paged, and a session takes pages as
+	// it writes rows.
 	Sessions int
 	// FlashAttention enables experimental generated online attention for GPU decode.
 	// Prefill, MLA, vision and devices without guaranteed 32-lane subgroups use

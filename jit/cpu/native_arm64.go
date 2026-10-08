@@ -6,19 +6,11 @@ import "github.com/samyfodil/jitllm/format/quant"
 
 // The native emitter for this GOARCH; see native_amd64.go.
 //
-// SupportedNative is "can this host run it": what EmitA64 can produce and the
-// chip having the instructions. Every quantized arm64 kernel emits SDOT
-// (FEAT_DotProd, absent on Cortex-A53/A57/A72/A73); the float kernels are
-// baseline NEON and always run.
-func SupportedNative(t quant.Type) bool {
-	if !SupportedA64(t) {
-		return false
-	}
-	if t == quant.F32 || t == quant.F16 || t == quant.BF16 {
-		return true // baseline ARMv8-A: LDRq, FMLA4s, FADDP4s, UBFM, FCVTL, SHLL
-	}
-	return hasDotProd()
-}
+// SupportedNative is "can this host run it": what EmitA64 can produce. Every
+// kernel runs on ARMv8.0 NEON: the quantized ones use SDOT where the chip has
+// FEAT_DotProd and widen it to SMULL/SADDLP/ADDP where it does not
+// (sdotemu.go), so a Cortex-A53/A57/A72/A73 runs the same list.
+func SupportedNative(t quant.Type) bool { return SupportedA64(t) }
 func EmitNative(s Spec) ([]byte, error) { return EmitA64(s) }
 
 // rowMajorPF is EmitNative: the amd64 prefetch has no arm64 form.

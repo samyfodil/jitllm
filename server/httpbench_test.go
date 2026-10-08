@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -42,9 +43,16 @@ func TestHTTPBenchAgainstTheRealServer(t *testing.T) {
 				if s.Err != "" {
 					t.Fatalf("http2=%v c=%d: %s", h2, lv.Level, s.Err)
 				}
-				if !s.UsageSeen || s.CompletionTokens != 8 || s.PromptTokens < 4 || s.Chunks == 0 || s.TTFT <= 0 ||
+				if !s.UsageSeen || s.CompletionTokens != 8 || s.PromptTokens < 4 || s.Chunks == 0 ||
 					s.FinishReason != "length" || s.Model != "small" {
 					t.Fatalf("http2=%v c=%d: sample %+v", h2, lv.Level, s)
+				}
+				// The times are ordered on any clock. Go's monotonic clock on
+				// Windows moves in timer ticks (about 1 to 15 ms) and this
+				// model's whole request fits inside one, so there they may all
+				// read 0; elsewhere the first token takes measurable time.
+				if s.TTFB < 0 || s.TTFT < s.TTFB || s.Total < s.TTFT || (runtime.GOOS != "windows" && s.TTFT <= 0) {
+					t.Fatalf("http2=%v c=%d: times out of order: %+v", h2, lv.Level, s)
 				}
 				if want := map[bool]string{false: "HTTP/1.1", true: "HTTP/2.0"}[h2]; s.Proto != want {
 					t.Fatalf("http2=%v: the response came over %s", h2, s.Proto)
