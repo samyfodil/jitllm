@@ -222,6 +222,22 @@ type LoadedModel struct {
 
 	tokensGenerated atomic.Int64
 	tokensPrefilled atomic.Int64
+
+	// generates, prefillNanos and decodeNanos are every finished generate's
+	// count and the time it spent in its prefill (the time to its first
+	// token, queueing aside) and its decode: /metrics' summaries.
+	generates    atomic.Int64
+	prefillNanos atomic.Int64
+	decodeNanos  atomic.Int64
+}
+
+// finished records one generate: n tokens decoded, after a prefill of prefill,
+// in decode.
+func (lm *LoadedModel) finished(n int, prefill, decode time.Duration) {
+	lm.finished(n, prefill, decode)
+	lm.generates.Add(1)
+	lm.prefillNanos.Add(int64(prefill))
+	lm.decodeNanos.Add(int64(decode))
 }
 
 // gateIDs is what a session of this model must hold to run: one gate per
@@ -1217,7 +1233,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	}
 	decode := time.Since(decodeStart)
 	s.generated.Add(int64(n))
-	lm.tokensGenerated.Add(int64(n))
+	lm.finished(n, prefill, decode)
 	s.lastUsed.Store(time.Now().UnixMilli())
 	s.refresh()
 	// The history grew by what this generate committed.

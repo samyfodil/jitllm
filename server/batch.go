@@ -704,7 +704,7 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 
 	res := r.result
 	s.generated.Add(int64(res.n))
-	lm.tokensGenerated.Add(int64(res.n))
+	lm.finished(res.n, r.prefill, res.decode)
 	s.lastUsed.Store(time.Now().UnixMilli())
 	s.refresh()
 	// The history grew by what this generate committed.
