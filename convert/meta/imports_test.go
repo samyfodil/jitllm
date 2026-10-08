@@ -124,15 +124,18 @@ func TestOnlyTheConverterReachesGGUF(t *testing.T) {
 		modPath + "/ui/mock":      uiConverts,
 		// The packager draws the window's icon from ui/app, which links the
 		// app whole; it converts nothing itself.
-		modPath + "/ui/cmd/pack":        uiConverts,
-		modPath + "/ui/stage":           uiConverts,
-		modPath + "/common/catalog":     frontConverts,
-		modPath + "/common/config":      frontConverts,
-		modPath + "/common/convertjob":  frontConverts,
-		modPath + "/common/discover":    frontConverts,
-		modPath + "/common/engine":      frontConverts,
-		modPath + "/tui":                frontConverts,
-		modPath + "/server":             daemonConverts,
+		modPath + "/ui/cmd/pack":       uiConverts,
+		modPath + "/ui/stage":          uiConverts,
+		modPath + "/common/catalog":    frontConverts,
+		modPath + "/common/config":     frontConverts,
+		modPath + "/common/convertjob": frontConverts,
+		modPath + "/common/discover":   frontConverts,
+		modPath + "/common/engine":     frontConverts,
+		modPath + "/tui":               frontConverts,
+		modPath + "/server":            daemonConverts,
+		// The front ends' API serves server.Engine, which carries the daemon's
+		// Convert RPC with it.
+		modPath + "/common/api":         daemonConverts,
 		modPath + "/server/cmd/jitllmd": daemonConverts,
 		// docs/models.md is rendered from the converter's lists themselves
 		// (convert.Architectures, HFClasses, Projectors); it converts nothing.
