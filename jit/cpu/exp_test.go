@@ -27,7 +27,10 @@ func TestEmitExpPS(t *testing.T) {
 	a.VZEROUPPER()
 	a.RET()
 
-	code := mustMap(t, a.Bytes())
+	code := avx2Primitive(t, a.Bytes(), "TestEmitExpSSE")
+	if code == nil {
+		return
+	}
 	defer code.Close()
 	consts := expConsts()
 

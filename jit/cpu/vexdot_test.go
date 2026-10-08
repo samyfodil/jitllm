@@ -63,7 +63,12 @@ func TestExecuteVEXDotMatchesVPDPBUSD(t *testing.T) {
 		}
 	}
 
-	// The VEX arm runs on every amd64 host.
+	// The VEX arm runs on every AVX2 host; an SSE-only host must refuse it.
+	probe := avx2Primitive(t, build(DotVEX), "TestSSEDotMatchesVPDPBUSD")
+	if probe == nil {
+		return
+	}
+	probe.Close()
 	vex := run(build(DotVEX))
 	for lane := range want {
 		if vex[lane] != want[lane] {

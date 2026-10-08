@@ -36,7 +36,7 @@ func TestEmitActMulMatchesReference(t *testing.T) {
 		return refSiLU(g) * u
 	}
 	for _, k := range Gated {
-		code := mustMap(t, EmitActMul(k))
+		code := onHost(t)(hostTable().ActMul(k))
 		n := 1024
 		dst := make([]float32, n)
 		up := make([]float32, n)
@@ -105,7 +105,7 @@ func TestEmitActMulMatchesReference(t *testing.T) {
 // where |g| is near 1 and a SiLU kernel would otherwise pass.
 func TestEmitSigmoidMulMatchesReference(t *testing.T) {
 	consts := actConsts()
-	code := mustMap(t, EmitSigmoidMul())
+	code := onHost(t)(hostTable().SigmoidMul())
 	defer code.Close()
 
 	n := 1024

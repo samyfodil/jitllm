@@ -64,10 +64,12 @@ func hcMixRef(mix, scale, base []float32, eps float64, iters int, head bool) []f
 	return out
 }
 
-// hcTiers is every tier this host can execute the two kernels on.
+// hcTiers is every tier this host can execute the two kernels on: the host
+// tier, and the SSE tier wherever it is a second one (on an SSE-only host the
+// host tier is it).
 func hcTiers() []*Emitters {
-	ts := []*Emitters{EmittersFor(primaryTier)}
-	if runtime.GOARCH == "amd64" {
+	ts := []*Emitters{hostTable()}
+	if runtime.GOARCH == "amd64" && HostTier() != TierSSE {
 		ts = append(ts, EmittersFor(TierSSE))
 	}
 	return ts
@@ -95,7 +97,7 @@ func TestHCMixMatchesReference(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			c := mustMap(t, code)
+			c := onHost(t)(code, nil)
 			out := make([]float32, n+8)
 			for i := range out {
 				out[i] = 7
@@ -127,7 +129,7 @@ func TestHCMixMatchesReference(t *testing.T) {
 		for i := range out {
 			out[i] = 7
 		}
-		mustMap(t, code).Call(&Args{Out: &out[0], Q32: &mix[0], AScale: &scale[0], Q2: &base[0],
+		onHost(t)(code, nil).Call(&Args{Out: &out[0], Q32: &mix[0], AScale: &scale[0], Q2: &base[0],
 			Scr: (*byte)(unsafe.Pointer(&kons[0]))})
 		for i, w := range hcMixRef(mix, scale, base, eps, 0, true) {
 			if d := math.Abs(float64(out[i]) - w); d > 2e-6 {
@@ -152,7 +154,7 @@ func TestColPoolMatchesReference(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		c := mustMap(t, code)
+		c := onHost(t)(code, nil)
 		for w := 1; w <= 3*ElemLanes+3; w++ {
 			for _, s := range []int{1, 2, 4, 8, 9} {
 				kv, gate := make([]float32, s*w), make([]float32, s*w)

@@ -21,11 +21,7 @@ func TestEmitGatedDeltaMatchesReference(t *testing.T) {
 	// scalar code, and a wrong tail shows in the state check below as well as
 	// in the output.
 	for _, n := range []int{8, 16, 64, 128, 1, 5, 12, 20, 33, 130} {
-		b, err := cpu.EmitGatedDelta(n)
-		if err != nil {
-			t.Fatalf("n=%d: %v", n, err)
-		}
-		code := hybMapRunnable(t, b)
+		code := onHost(t)(hostTable().GatedDelta(n))
 		defer code.Close()
 
 		rnd := rand.New(rand.NewSource(int64(n)))
@@ -114,11 +110,7 @@ func TestEmitGatedDeltaRefusesEmptyWidths(t *testing.T) {
 func TestEmitConv1dMatchesReference(t *testing.T) {
 	for _, taps := range []int{2, 3, 4, 6} {
 		for _, chans := range []int{8, 64, 512, 1, 5, 12, 20, 33} {
-			b, err := cpu.EmitConv1d(taps, chans)
-			if err != nil {
-				t.Fatalf("taps=%d chans=%d: %v", taps, chans, err)
-			}
-			code := hybMapRunnable(t, b)
+			code := onHost(t)(hostTable().Conv1d(taps, chans))
 			rnd := rand.New(rand.NewSource(int64(taps*1000 + chans)))
 			st := make([]float32, (taps-1)*chans)
 			w := make([]float32, taps*chans)
@@ -172,11 +164,7 @@ func TestEmitConv1dMatchesReference(t *testing.T) {
 // in the engine, because the convolution replaces the projection it reads.
 func TestEmitConv1dAliases(t *testing.T) {
 	const taps, chans = 4, 64
-	b, err := cpu.EmitConv1d(taps, chans)
-	if err != nil {
-		t.Fatal(err)
-	}
-	code := hybMapRunnable(t, b)
+	code := onHost(t)(hostTable().Conv1d(taps, chans))
 	defer code.Close()
 	rnd := rand.New(rand.NewSource(3))
 	st := make([]float32, (taps-1)*chans)
@@ -217,7 +205,7 @@ func TestEmitConv1dAliases(t *testing.T) {
 // branch-free |z| identity, and z = +-200 is where a wrong identity becomes Inf
 // or 0.
 func TestEmitDeltaGateMatchesReference(t *testing.T) {
-	code := hybMapRunnable(t, cpu.EmitDeltaGate())
+	code := onHost(t)(hostTable().DeltaGate())
 	defer code.Close()
 	consts := cpu.DeltaGateConsts()
 

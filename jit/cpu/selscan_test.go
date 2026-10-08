@@ -61,11 +61,7 @@ func TestEmitSelScanMatchesOracle(t *testing.T) {
 	consts := cpu.DeltaGateConsts()
 	for _, sh := range ssdShapes {
 		n, rows := sh[0], sh[1]
-		b, err := cpu.EmitSelScan(n)
-		if err != nil {
-			t.Fatalf("n=%d: %v", n, err)
-		}
-		code := hybMapRunnable(t, b)
+		code := onHost(t)(hostTable().SelScan(n))
 		rnd := rand.New(rand.NewSource(int64(97*n + rows)))
 		st := make([]float32, rows*n)
 		for i := range st {

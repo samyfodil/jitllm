@@ -12,7 +12,7 @@ import (
 // The lengths are deliberately not round: a score row is pos+1, and every
 // ragged length exercises the tail.
 func TestEmitSoftmaxMatchesReference(t *testing.T) {
-	code := mustMap(t, EmitSoftmax())
+	code := onHost(t)(hostTable().Softmax())
 	defer code.Close()
 	consts := expConsts()
 
@@ -72,7 +72,7 @@ func TestEmitSoftmaxMatchesReference(t *testing.T) {
 // only once x-m passes exp's +88 clamp, and a single over-clamped entry still
 // normalises to ~1; two saturating entries tie instead of being 50 nats apart.
 func TestEmitSoftmaxMaxIsTheRealMax(t *testing.T) {
-	code := mustMap(t, EmitSoftmax())
+	code := onHost(t)(hostTable().Softmax())
 	defer code.Close()
 	consts := expConsts()
 
@@ -105,7 +105,7 @@ func TestEmitSoftmaxMaxIsTheRealMax(t *testing.T) {
 // neutral, or a maximum seeded from a constant, would become the row's maximum
 // there.
 func TestEmitSoftmaxDeepNegativeRow(t *testing.T) {
-	code := mustMap(t, EmitSoftmax())
+	code := onHost(t)(hostTable().Softmax())
 	defer code.Close()
 	consts := expConsts()
 

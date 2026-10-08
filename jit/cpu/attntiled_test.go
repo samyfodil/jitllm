@@ -28,14 +28,7 @@ func attnTiledCase(t *testing.T, hd int) {
 		npos        = 37  // and not a multiple of anything
 	)
 	for _, qt := range []int{2, 4, 8} {
-		b, err := EmitAttnScoresTiled(hd, stride, stride, scoreStride, qt, false)
-		if err != nil {
-			t.Fatalf("qt=%d: %v", qt, err)
-		}
-		code, err := Map(b)
-		if err != nil {
-			t.Skipf("qt=%d: cannot map on this host: %v", qt, err)
-		}
+		code := onHost(t)(hostTable().AttnScoresTiled(hd, stride, stride, scoreStride, qt, false))
 		defer code.Close()
 
 		k := make([]float32, npos*stride)

@@ -88,11 +88,11 @@ func TestRowStatsMatchReference(t *testing.T) {
 			kc   []float32
 			ref  []float32
 		}{
-			{RowGauss, EmitGaussTopK(n), []float32{1 / float32(n), 0, c}, nil},
-			{RowMag, EmitMagMatch(n), []float32{1 / float32(n), eps, 1}, ref},
+			{RowGauss, hostBytes(t)(hostTable().RowStat(n, RowGauss)), []float32{1 / float32(n), 0, c}, nil},
+			{RowMag, hostBytes(t)(hostTable().RowStat(n, RowMag)), []float32{1 / float32(n), eps, 1}, ref},
 		} {
 			name := map[RowMode]string{RowGauss: "gausstopk", RowMag: "magmatch"}[m.mode]
-			code := mustMap(t, m.code)
+			code := onHost(t)(m.code, nil)
 			got := runRowStat(t, code, name, x, m.ref, m.kc)
 			code.Close()
 			want := rowStatRef(m.mode, x, ref, c, eps)

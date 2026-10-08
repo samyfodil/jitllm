@@ -21,11 +21,7 @@ func TestEmitGatedDeltaChanMatchesReference(t *testing.T) {
 	// Ragged widths on both hosts: the tail is baked scalar code, and a tail
 	// that reads the wrong decay lane shows up here and nowhere else.
 	for _, n := range []int{8, 16, 64, 128, 1, 5, 12, 20, 33, 130} {
-		b, err := cpu.EmitGatedDeltaChan(n)
-		if err != nil {
-			t.Fatalf("n=%d: %v", n, err)
-		}
-		code := hybMapRunnable(t, b)
+		code := onHost(t)(hostTable().GatedDeltaChan(n))
 		defer code.Close()
 
 		rnd := rand.New(rand.NewSource(int64(n) + 7))
@@ -82,11 +78,7 @@ func TestEmitGatedDeltaChanMatchesReference(t *testing.T) {
 		if n == 1 {
 			continue
 		}
-		sb, err := cpu.EmitGatedDelta(n)
-		if err != nil {
-			t.Fatalf("n=%d scalar: %v", n, err)
-		}
-		scode := hybMapRunnable(t, sb)
+		scode := onHost(t)(hostTable().GatedDelta(n))
 		defer scode.Close()
 		bcast := make([]float32, n)
 		bcastSt := append([]float32(nil), st...)

@@ -49,11 +49,7 @@ func TestAttnF16MatchesF32OnExactHalves(t *testing.T) {
 			}
 
 			scores := func(useF16 bool, cache []float32) []float32 {
-				b, err := cpu.EmitAttnScores(hd, stride, useF16)
-				if err != nil {
-					t.Fatal(err)
-				}
-				c := hybMapRunnable(t, b)
+				c := onHost(t)(hostTable().AttnScores(hd, stride, useF16))
 				defer c.Close()
 				out := make([]float32, npos)
 				args := cpu.Args{Out: &out[0], W: (*byte)(unsafe.Pointer(&cache[0])),
@@ -70,14 +66,7 @@ func TestAttnF16MatchesF32OnExactHalves(t *testing.T) {
 			}
 
 			acc := func(useF16 bool, cache []float32) []float32 {
-				bb, err := cpu.EmitAttnAcc(hd, stride, useF16)
-				if err != nil {
-					t.Fatal(err)
-				}
-				c, err := cpu.Map(bb)
-				if err != nil {
-					t.Fatal(err)
-				}
+				c := onHost(t)(hostTable().AttnAcc(hd, stride, useF16))
 				defer c.Close()
 				out := make([]float32, hd)
 				args := cpu.Args{Out: &out[0], W: (*byte)(unsafe.Pointer(&cache[0])),

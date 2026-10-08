@@ -27,18 +27,19 @@ func TestElementwiseEveryWidth(t *testing.T) {
 		scr  unsafe.Pointer
 	}
 	var ks []kern
-	ks = append(ks, kern{"axpy", EmitAxpy(), true, unsafe.Pointer(&alpha)})
-	ks = append(ks, kern{"scale", EmitScale(), false, unsafe.Pointer(&alpha)})
+	host := hostTable()
+	ks = append(ks, kern{"axpy", hostBytes(t)(host.Axpy()), true, unsafe.Pointer(&alpha)})
+	ks = append(ks, kern{"scale", hostBytes(t)(host.Scale()), false, unsafe.Pointer(&alpha)})
 	// softcap reads {2/c, c} through W, set in call below.
-	ks = append(ks, kern{"softcap", EmitSoftcap(), false, unsafe.Pointer(&consts[0])})
+	ks = append(ks, kern{"softcap", hostBytes(t)(host.Softcap()), false, unsafe.Pointer(&consts[0])})
 	clampLH := [2]float32{-2.5, 4} // the inputs reach +-11, so both bounds bite
-	ks = append(ks, kern{"clamp", EmitClamp(), false, unsafe.Pointer(&clampLH[0])})
-	ks = append(ks, kern{"sigmoidmul", EmitSigmoidMul(), true, unsafe.Pointer(&consts[0])})
+	ks = append(ks, kern{"clamp", hostBytes(t)(host.Clamp()), false, unsafe.Pointer(&clampLH[0])})
+	ks = append(ks, kern{"sigmoidmul", hostBytes(t)(host.SigmoidMul()), true, unsafe.Pointer(&consts[0])})
 	for _, k := range Gated {
-		ks = append(ks, kern{"actmul/" + k.String(), EmitActMul(k), true, unsafe.Pointer(&consts[0])})
+		ks = append(ks, kern{"actmul/" + k.String(), hostBytes(t)(host.ActMul(k)), true, unsafe.Pointer(&consts[0])})
 	}
 	for _, k := range Ungated {
-		ks = append(ks, kern{"act/" + k.String(), EmitAct(k), false, unsafe.Pointer(&consts[0])})
+		ks = append(ks, kern{"act/" + k.String(), hostBytes(t)(host.Act(k)), false, unsafe.Pointer(&consts[0])})
 	}
 	const guard = 2 * ElemLanes
 	sentinel := math.Float32frombits(0x7fc0beef)
@@ -56,7 +57,7 @@ func TestElementwiseEveryWidth(t *testing.T) {
 		return
 	}
 	for _, k := range ks {
-		c := mustMap(t, k.code)
+		c := onHost(t)(k.code, nil)
 		call := func(dst, src []float32, n int) {
 			args := Args{
 				Out:  &dst[0],
@@ -96,7 +97,7 @@ func TestElementwiseEveryWidth(t *testing.T) {
 // TestEmitSoftcapMatchesReference gates the cap against float64 tanh, over a
 // range that saturates both ways.
 func TestEmitSoftcapMatchesReference(t *testing.T) {
-	c := mustMap(t, EmitSoftcap())
+	c := onHost(t)(hostTable().Softcap())
 	defer c.Close()
 	consts := actConsts()
 	for _, cap := range []float32{30, 50} {
@@ -131,7 +132,7 @@ func TestEmitSoftcapMatchesReference(t *testing.T) {
 // inside them, so a kernel that applies one bound only, or swaps them, or
 // clamps to [-hi, hi] when lo != -hi, fails.
 func TestEmitClampMatchesReference(t *testing.T) {
-	c := mustMap(t, EmitClamp())
+	c := onHost(t)(hostTable().Clamp())
 	defer c.Close()
 	for _, lh := range [][2]float32{{-1.5, 1.5}, {-0.25, 3}} {
 		inside, below, above := 0, 0, 0

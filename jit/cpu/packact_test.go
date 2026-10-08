@@ -15,6 +15,10 @@ import (
 // instead of half away. The zero window is routine: MatMul zero-fills a ragged
 // tile's padding rows, and 1/0 = +Inf, 0*Inf = NaN without the mask.
 func TestPackActMatchesGoPacker(t *testing.T) {
+	// The packer feeds the GGUF GEMM, the AVX2 tier's alone.
+	if ggufDeclined(t, quant.Q4_0) {
+		return
+	}
 	for _, tok := range []int{1, 4, 16} {
 		for _, tp := range []quant.Type{quant.Q4_0, quant.Q3_K, quant.Q6_K, quant.Q4_K} {
 			for _, window := range []int{32, 256} {
@@ -60,8 +64,6 @@ func packActCase(t *testing.T, tok int, tp quant.Type, window int, mode string) 
 	// call per (token, window).
 	dB, sB, mB, hB := mk()
 	wantHalf := NeedsHalfSums(tp)
-	// mustMap skips by name where the host cannot run it: the packer feeds the
-	// GGUF GEMM, which is the AVX2 tier's alone (RowMajorGGUF is false on SSE).
 	code := mustMap(t, EmitPackAct(tok, wantHalf))
 	defer code.Close()
 	konst := []float32{127, 1, 0.5,

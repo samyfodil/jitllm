@@ -32,7 +32,7 @@ func TestRMSNormKernelMatchesReference(t *testing.T) {
 	// carries a guard so a write past n fails by name.
 	for _, n := range []int{8, 32, 64, 128, 256, 576, 1152, 2048, 2304, 4096, 8192,
 		1, 2, 3, 5, 7, 9, 13, 31, 33, 35, 63, 100, 2047} {
-		code := mustMap(t, EmitRMSNorm(n))
+		code := onHost(t)(hostTable().RMSNorm(n))
 		x := make([]float32, n)
 		w := make([]float32, n)
 		for i := range x {

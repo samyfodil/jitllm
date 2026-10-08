@@ -22,6 +22,9 @@ func TestQ40Throughput(t *testing.T) {
 	if testing.Short() {
 		t.Skip("allocates 64 MB of weights")
 	}
+	if ggufDeclined(t, quant.Q4_0) {
+		return
+	}
 	const k = 2048                   // tinyllama's attention width
 	const rowBytes = k / 32 * 18     // 1152 bytes per Q4_0 row
 	const rows = 64 << 20 / rowBytes // ~64 MB, far past the last-level cache

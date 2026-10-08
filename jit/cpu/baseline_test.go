@@ -13,12 +13,13 @@ func TestMapRefusesWhatTheHostCannotRun(t *testing.T) {
 	if !BaselineForceable() {
 		t.Skip("this build cannot force the baseline absent")
 	}
-	code := EmitRMSNorm(64)
+	// The host tier's kernel: the one this host maps, on either tier.
+	code := hostBytes(t)(hostTable().RMSNorm(64))
 	if len(code) == 0 {
-		t.Fatal("EmitRMSNorm produced nothing; this test would prove nothing")
+		t.Fatal("the RMSNorm emitter produced nothing; this test would prove nothing")
 	}
 
-	c := mustMap(t, code)
+	c := onHost(t)(code, nil)
 	c.Close()
 
 	// The violation: the exact condition a pre-AVX2 host is in.

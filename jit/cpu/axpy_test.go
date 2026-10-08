@@ -13,7 +13,7 @@ import (
 // a kernel that ignored Scr entirely would pass the first and fail the second,
 // and a kernel that read the wrong offset would do the reverse.
 func TestEmitAxpyMatchesReference(t *testing.T) {
-	code := mustMap(t, EmitAxpy())
+	code := onHost(t)(hostTable().Axpy())
 	defer code.Close()
 
 	for _, alpha := range []float32{1, 0.37, -2.5} {
