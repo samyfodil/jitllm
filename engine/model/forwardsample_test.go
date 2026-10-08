@@ -47,10 +47,15 @@ func forwardSampleMatches(t *testing.T, name string) {
 	}
 	defer m.Close()
 	ids := m.Vocab.Encode("Once upon a time", true)
-	const n = 24
+	// Past one whole probe (4*sampleProbeRounds tokens), so the auto arm
+	// decides inside the run.
+	const n = 4*sampleProbeRounds + 8
 	var lastVals []float32
 	var lastIDs []uint32
-	run := func(device bool) (out []int32, onDev int64, reads int, allocs float64) {
+	var probes int64
+	run := func(device bool, mode DeviceSampleMode) (out []int32, onDev int64, reads int, allocs float64) {
+		m.opt.devSample = mode
+		m.sampleChoices = sampleChoices{}
 		g := swaTier(t)
 		defer g.Close()
 		st := m.NewState(256)
@@ -81,10 +86,17 @@ func forwardSampleMatches(t *testing.T, name string) {
 				next = sm.Sample(logits)
 			}
 		}
-		onDev, reads = st.SampledOnDevice, g.Stats().SampleReads-reads0
+		onDev, reads, probes = st.SampledOnDevice, g.Stats().SampleReads-reads0, st.SampleProbes
 		if device {
-			lastVals = slices.Clone(st.sampleVals[:sm.TopK])
-			lastIDs = slices.Clone(st.sampleIDs[:sm.TopK])
+			if mode == DeviceSampleOn {
+				lastVals = slices.Clone(st.sampleVals[:sm.TopK])
+				lastIDs = slices.Clone(st.sampleIDs[:sm.TopK])
+			}
+			if mode == DeviceSampleAuto {
+				// The warm steps below are probe steps: a fresh probe.
+				c := st.sampleChoiceFor(st.sampleKeyOf(sm))
+				c.step, c.dev, c.host = 0, 0, 0
+			}
 			// Warm: the same step again allocates nothing on the engine's side.
 			allocs = testing.AllocsPerRun(4, func() {
 				sm.Observe(next)
@@ -95,8 +107,21 @@ func forwardSampleMatches(t *testing.T, name string) {
 		}
 		return out, onDev, reads, allocs
 	}
-	want, _, _, _ := run(false)
-	got, onDev, reads, allocs := run(true)
+	want, _, _, _ := run(false, DeviceSampleOn)
+	// Forced off: every token reads the row back.
+	off, offDev, offReads, offAllocs := run(true, DeviceSampleOff)
+	if offDev != 0 || offReads != 0 || !slices.Equal(off, want) || offAllocs != 0 {
+		t.Fatalf("forced off: %d tokens selected on the device (tier %d), %.1f warm allocations, tokens equal %v",
+			offDev, offReads, offAllocs, slices.Equal(off, want))
+	}
+	// Auto: a probe ran, decided, and every token is the host's.
+	auto, autoDev, _, autoAllocs := run(true, DeviceSampleAuto)
+	if probes != 4*sampleProbeRounds || !slices.Equal(auto, want) || autoAllocs != 0 {
+		t.Fatalf("auto: %d probe tokens (want %d), %.1f warm allocations in a probe, tokens equal %v",
+			probes, 4*sampleProbeRounds, autoAllocs, slices.Equal(auto, want))
+	}
+	t.Logf("auto: %d probe tokens, %d of %d selected on the device", probes, autoDev, n)
+	got, onDev, reads, allocs := run(true, DeviceSampleOn)
 	if onDev != n || reads != n {
 		t.Fatalf("the device selected %d of %d sampled tokens (tier: %d): the rest read the row back",
 			onDev, n, reads)

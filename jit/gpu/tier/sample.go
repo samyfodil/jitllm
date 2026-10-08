@@ -98,16 +98,21 @@ func (g *devTier) prepSample(head *nn.Head) bool {
 	return true
 }
 
-// launchSample is the sampler's three launches over the head's n logits.
-func (g *devTier) launchSample(lc *launcher, logits backend.Buf, n, k int) error {
+// launchSample is the sampler's launches over the head's n logits: the
+// penalty when it is on (pen), then the two top-k passes.
+func (g *devTier) launchSample(lc *launcher, logits backend.Buf, n, k int, pen bool) error {
 	ks := g.sampleKs[k]
 	groups := kernels.SampleSlices(n)
-	if err := lc.launch(g.samplePenK, kernels.SampleGroups(n), kernels.SampleGroup,
-		logits, g.sampleArgs, g.samplePen); err != nil {
-		return err
+	src := logits
+	if pen {
+		if err := lc.launch(g.samplePenK, kernels.SampleGroups(n), kernels.SampleGroup,
+			logits, g.sampleArgs, g.samplePen); err != nil {
+			return err
+		}
+		src = g.samplePen
 	}
 	if err := lc.launch(ks.p1, groups, kernels.SampleGroup,
-		g.samplePen, g.samplePen, g.sampleV1, g.sampleI1); err != nil {
+		src, src, g.sampleV1, g.sampleI1); err != nil {
 		return err
 	}
 	return lc.launch(ks.p2, 1, kernels.SampleGroup, g.sampleV1, g.sampleI1, g.sampleV, g.sampleI)

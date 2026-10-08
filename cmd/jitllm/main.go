@@ -1548,6 +1548,14 @@ func loadOpts(t []tok.Option, budget uint64) []model.Option {
 		}
 	}
 	o = append(o, model.WithPreload(preload))
+	// JITLLM_DEVICE_SAMPLE=on|off forces where a sampled token's candidates
+	// are selected (model.WithDeviceSample); unset or auto measures.
+	switch os.Getenv("JITLLM_DEVICE_SAMPLE") {
+	case "on":
+		o = append(o, model.WithDeviceSample(model.DeviceSampleOn))
+	case "off":
+		o = append(o, model.WithDeviceSample(model.DeviceSampleOff))
+	}
 	return append(o, modelOptions()...)
 }
 

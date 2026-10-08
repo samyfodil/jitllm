@@ -19,6 +19,8 @@ import (
 // modelOpts is the resolved set of per-model knobs. It is copied onto the Model
 // at Open and onto the Tower beside it, so two models cannot collide.
 type modelOpts struct {
+	// devSample is WithDeviceSample's setting (devsample.go).
+	devSample DeviceSampleMode
 	// profile arms the per-op nanosecond counters OpProfile reports. The
 	// counters stay process-wide; only the gate is per model.
 	profile bool

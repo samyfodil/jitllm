@@ -5907,6 +5907,9 @@ type graphKey struct {
 	// launches follow the head, so a recording without them cannot serve a
 	// call with them, nor one of another k.
 	sampleK int
+	// samplePen says the sampler's penalty launch runs: with no history it
+	// is skipped and the first top-k pass reads the logits.
+	samplePen bool
 	// rag is a LayersRows step's sequence count, 0 for any other call: ragged
 	// attention and a per-row head, and on a hybrid the per-count linear
 	// kernels (ragLin), which a recording names by address.
@@ -6396,9 +6399,9 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// only there is dead once a longer one appears; lo/hi/head is a placement,
 	// and a partial seam alternates two of them every token.
 	argmax := head != nil && head.ArgmaxOnly && g.argmaxK != nil && R == 1
-	sampleK := 0
+	sampleK, samplePen := 0, false
 	if head != nil && !argmax && head.SampleK > 0 && R == 1 && rag == nil && !allRows && !fold && g.prepSample(head) {
-		sampleK = head.SampleK
+		sampleK, samplePen = head.SampleK, head.SampleArgs[0] > 0
 	}
 	ragN, ragRuns, ragHead := 0, 0, 0
 	if rag != nil {
@@ -6418,7 +6421,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		ragHead = head.WantedRows(nrow)
 	}
 	key := graphKey{lo, hi, nCap, R, head != nil, g.TableSplit, g.ScalarSoftmax, g.flashOn(), g.KVF16,
-		ropeDev, argmax, sampleK, ragN, ragRuns, par, pagedVar, ragHead, hNormID, sid}
+		ropeDev, argmax, sampleK, samplePen, ragN, ragRuns, par, pagedVar, ragHead, hNormID, sid}
 	if _, live := g.recs[key]; !live {
 		for k, r := range g.recs {
 			older := k
@@ -6465,7 +6468,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		hx: hx, hcs: hcs, hcsSWA: hcsSWA, pn: pn, koffs: koffs, kposs: kposs, rposs: rposs,
 		p: p, rag: rag, pe: pe, key: key, R: R, nrow: nrow, kvDim: kvDim, qdim: qdim,
 		kst: kst, nCap: nCap, gatherN: gatherN, rrows: rrows, sm: sm, smG: smG, smW: smW,
-		fold: fold, ropeDev: ropeDev, argmax: argmax, sampleK: sampleK, ragHead: ragHead, parOK: parOK,
+		fold: fold, ropeDev: ropeDev, argmax: argmax, sampleK: sampleK, samplePen: samplePen, ragHead: ragHead, parOK: parOK,
 		allRows: allRows, hNorm: hNorm,
 	}
 	if g.subFn == nil {
@@ -6558,6 +6561,7 @@ type submitArgs struct {
 	ragHead                 int
 	fold, ropeDev, argmax   bool
 	sampleK                 int
+	samplePen               bool
 	parOK, allRows          bool
 	hNorm                   backend.Buf
 	// What the session hands back.
@@ -6577,7 +6581,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	p, rag, pe, key := a.p, a.rag, a.pe, a.key
 	R, nrow, kvDim, qdim, kst, nCap, gatherN, rrows := a.R, a.nrow, a.kvDim, a.qdim, a.kst, a.nCap, a.gatherN, a.rrows
 	sm, smG, smW := a.sm, a.smG, a.smW
-	fold, ropeDev, argmax, sampleK := a.fold, a.ropeDev, a.argmax, a.sampleK
+	fold, ropeDev, argmax, sampleK, samplePen := a.fold, a.ropeDev, a.argmax, a.sampleK, a.samplePen
 	ragHead, parOK, allRows, hNorm := a.ragHead, a.parOK, a.allRows, a.hNorm
 	var err error
 	direct := false
@@ -8139,7 +8143,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				err = lc.launch(g.argmaxK, 1, kernels.ArgmaxGroup, bs.headOut(), g.argmaxOut)
 			}
 			if sampleK > 0 && err == nil {
-				err = g.launchSample(lc, bs.headOut(), bs.mvHead.rows, sampleK)
+				err = g.launchSample(lc, bs.headOut(), bs.mvHead.rows, sampleK, samplePen)
 			}
 		}
 	}
@@ -8253,7 +8257,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		}
 	}
 	w(bs.n, pn)
-	if sampleK > 0 {
+	if samplePen {
 		// The history changes every token; the recording reads its count.
 		w(g.sampleArgs, u32b(head.SampleArgs))
 	}
@@ -8352,7 +8356,12 @@ func (g *devTier) layersSession(s backend.Session) {
 			err = s.Read(g.sampleI, u32b(head.SampleIDs[:sampleK]))
 		}
 		head.Sampled = err == nil
+		// Counted here, not at the launches, which a replayed recording skips.
 		g.SampleReads++
+		g.SampleLaunches += 2
+		if samplePen {
+			g.SampleLaunches++
+		}
 		direct = true
 	case argmax:
 		tok := g.subBytes.one[:]

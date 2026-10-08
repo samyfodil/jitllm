@@ -91,6 +91,9 @@ type State struct {
 	sampleVals      []float32
 	sampleIDs       []uint32
 	SampledOnDevice int64
+	// SampleProbes counts the tokens ForwardSample timed to decide between
+	// the device and the host sampler (devsample.go).
+	SampleProbes int64
 	// parked and parkedSeam are Park's: the session is preempted, and the
 	// seam it held on the device. ParkedOut and ParkedIn count the KV pages
 	// Park sent to the store and Resume brought back (park.go).
@@ -3114,7 +3117,19 @@ func (s *State) ForwardSample(token int32, smp *Sampler) (int32, error) {
 		return s.ForwardGreedy(token)
 	}
 	h := s.head
-	onDev := h != nil && s.m.outB == nil && s.c.LogitScale == 1 && smp.Bounded(s.c.NVocab)
+	onDev := h != nil && s.m.outB == nil && s.c.LogitScale == 1 && smp.Bounded(s.c.NVocab) &&
+		s.m.opt.devSample != DeviceSampleOff
+	// Auto: the key's verdict, or the probe's arm for this token
+	// (devsample.go). Both arms return the same token.
+	var choice *sampleChoice
+	probe := false
+	if onDev && s.m.opt.devSample == DeviceSampleAuto {
+		choice = s.sampleChoiceFor(s.sampleKeyOf(smp))
+		cs := &s.m.sampleChoices
+		cs.mu.Lock()
+		onDev, probe = choice.arm()
+		cs.mu.Unlock()
+	}
 	if onDev {
 		k := smp.TopK
 		s.sampleArgs = smp.DeviceArgs(s.sampleArgs)
@@ -3125,15 +3140,29 @@ func (s *State) ForwardSample(token int32, smp *Sampler) (int32, error) {
 		h.SampleK, h.SampleArgs, h.SampleVals, h.SampleIDs, h.Sampled = k, s.sampleArgs, s.sampleVals, s.sampleIDs[:k], false
 		defer func() { h.SampleK, h.Sampled = 0, false }()
 	}
+	t0 := time.Now()
 	logits, err := s.Forward(token)
 	if err != nil {
 		return 0, err
 	}
+	var tok int32
 	if onDev && h.Sampled {
 		s.SampledOnDevice++
-		return smp.SampleFrom(h.SampleVals, h.SampleIDs), nil
+		tok = smp.SampleFrom(h.SampleVals, h.SampleIDs)
+	} else {
+		tok = smp.Sample(logits)
 	}
-	return smp.Sample(logits), nil
+	if choice != nil {
+		d := time.Since(t0)
+		cs := &s.m.sampleChoices
+		cs.mu.Lock()
+		choice.record(onDev, probe, d)
+		cs.mu.Unlock()
+		if probe {
+			s.SampleProbes++
+		}
+	}
+	return tok, nil
 }
 
 // forward runs one decode step over whatever fill() puts in s.x.

@@ -612,6 +612,9 @@ type Stats struct {
 	// SampleReads counts tokens whose sampler ran on the device and read
 	// back k candidates instead of the vocabulary (nn.Head.SampleK).
 	SampleReads int
+	// SampleLaunches counts the sampler's launches: two top-k passes a
+	// token, and the penalty's when it runs.
+	SampleLaunches int
 	// VoltaGemm counts those of them that are the shared-memory-staged
 	// kernels.GemmVolta rather than MatVecMMA70.
 	VoltaGemm int
@@ -978,6 +981,7 @@ func (s *Stats) add(o Stats) {
 	s.RagGateFused += o.RagGateFused
 	s.RagHeadOne += o.RagHeadOne
 	s.SampleReads += o.SampleReads
+	s.SampleLaunches += o.SampleLaunches
 	s.GroupedMoE += o.GroupedMoE
 	s.GroupedFloat += o.GroupedFloat
 	s.MLABatched += o.MLABatched

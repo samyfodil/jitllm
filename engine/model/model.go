@@ -1147,6 +1147,9 @@ type Model struct {
 	// writes only what moved (see sameSpan), so when the model fits the writes
 	// stop after the first token and concurrent sessions only ever read.
 	bind sync.Mutex
+	// sampleChoices is the device sampler's measured verdicts, per key
+	// (devsample.go).
+	sampleChoices sampleChoices
 	// preloadStop, preloadDone and preloadErr are WithPreload's background
 	// read: Close closes the first and waits on the second.
 	preloadStop, preloadDone chan struct{}
