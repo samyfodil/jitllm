@@ -292,3 +292,50 @@ func (p *runsPlan) placed(t *testing.T, m *Model, g *tier.GPU, maxSeq int) *Stat
 	}
 	return st
 }
+
+// TestStepRunsStepsTheSeamTuner: a session decoding as a row of a joint step
+// steps its seam tuner once a token, as Forward does, so a server's step loop
+// can tune a seam. The warm-up is set past the steps so no arm migrates. The
+// selection check is that every row ran across sessions.
+func TestStepRunsStepsTheSeamTuner(t *testing.T) {
+	m := openStepDense(t)
+	defer m.Close()
+	for _, dev := range stepDevices() {
+		t.Run(dev, func(t *testing.T) {
+			g := stepTier(t, m, dev, false)
+			defer g.Close()
+			p := &runsPlan{}
+			const steps = 5
+			var sts []*State
+			for _, pr := range []string{"The capital of France is", "Water boils at"} {
+				ids := m.Vocab.Encode(pr, true)
+				st := p.placed(t, m, g, len(ids)+steps+2)
+				defer st.Close()
+				if _, err := st.Prefill(ids); err != nil {
+					t.Fatal(err)
+				}
+				st.SetSeamTuning(true)
+				if st.seam == nil {
+					t.Skip("SEAM TUNER NOT ARMED: no device seam -- this gate proved nothing here")
+				}
+				st.SetSeamSchedule(1000, 0, 0)
+				sts = append(sts, st)
+			}
+			s0 := g.Stats()
+			for range steps {
+				runs := []Run{{State: sts[0], Tokens: []int32{1}, Logits: true}, {State: sts[1], Tokens: []int32{1}, Logits: true}}
+				if _, err := StepRuns(runs); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if n := g.Stats().SessionRows - s0.SessionRows; n != 2*steps {
+				t.Fatalf("%d rows ran across sessions, want %d (%s)", n, 2*steps, g.Err())
+			}
+			for i, st := range sts {
+				if st.seam.tok != steps {
+					t.Fatalf("session %d's seam tuner counted %d tokens of %d joint steps", i, st.seam.tok, steps)
+				}
+			}
+		})
+	}
+}

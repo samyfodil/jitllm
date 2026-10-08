@@ -2,14 +2,12 @@ package main
 
 import (
 	"fmt"
-	"math"
 	"os"
 	"runtime"
 	"runtime/debug"
 	"runtime/metrics"
 	"runtime/pprof"
 
-	"github.com/samyfodil/jitllm/engine/sched"
 	"github.com/samyfodil/jitllm/format/jlm"
 )
 
@@ -35,29 +33,6 @@ func gcSummary() {
 		float64(s[1].Value.Uint64())/(1<<30), float64(g.heapGoal)/(1<<30),
 		float64(debug.SetMemoryLimit(-1))/(1<<30),
 		float64(jlm.OffHeapBytes())/(1<<30), float64(maxRSS)/(1<<30))
-}
-
-// offHeapLimit re-derives the collector's memory limit once a model's weight
-// memory is off the heap: the runtime cannot see those bytes and the cgroup
-// can, so they come off the limit goheap.Cap set. maxmem is the page budget the
-// frames will grow to; what is mapped already (the dense region and the frames
-// Open faulted) is added on top, conservatively.
-//
-// The limit is a backstop, set only when it leaves the real heap at least
-// GCHeadroom: where the frames fill the cgroup, a limit just above the heap is
-// the spiral moved rather than removed, so the collector is left on GOGC,
-// whose goal is then a multiple of the heap it actually collects.
-func offHeapLimit(maxmem uint64) {
-	if jlm.OffHeapBytes() == 0 {
-		return
-	}
-	lim := sched.MemLimit()
-	off := maxmem + uint64(jlm.OffHeapBytes())
-	if lim == 0 || lim < 2*sched.GCHeadroom+off {
-		debug.SetMemoryLimit(math.MaxInt64)
-		return
-	}
-	debug.SetMemoryLimit(int64(lim - sched.GCHeadroom - off))
 }
 
 // gcSample is the collector's counters at one instant. Every field is

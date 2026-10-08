@@ -436,6 +436,13 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 			st.hot.endToken()
 		}
 		st.reap()
+		// A decoding row's token is complete, so it steps the seam tuner as
+		// Forward does: a session stepping as a row of a server's step loop
+		// would otherwise never measure. A prompt chunk steps it no more than
+		// Prefill does.
+		if k == 1 {
+			st.seamStep()
+		}
 		if err := st.kvCheck(); err != nil {
 			return nil, err
 		}

@@ -120,11 +120,18 @@ func (e *Engine) rebudget() {
 	e.mu.Lock()
 	sh := e.sharesLocked("")
 	models := make([]*LoadedModel, 0, len(e.models))
+	var sum uint64
 	for id, lm := range e.models {
 		lm.mu.Lock()
 		lm.budget = sh[id]
 		lm.mu.Unlock()
+		sum += sh[id]
 		models = append(models, lm)
+	}
+	// Under e.mu, so two rebudgets cannot hand the limit their sums out of
+	// order.
+	if e.cfg.OffHeap != nil {
+		e.cfg.OffHeap(sum)
 	}
 	e.mu.Unlock()
 	for _, lm := range models {
