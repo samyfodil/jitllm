@@ -609,6 +609,12 @@ type Stats struct {
 	// the one row that wanted logits, rather than a batched twin over every
 	// row (a prompt chunk's last row, alone in wanting the head).
 	RagHeadOne int
+	// SampleReads counts tokens whose sampler ran on the device and read
+	// back k candidates instead of the vocabulary (nn.Head.SampleK).
+	SampleReads int
+	// SampleLaunches counts the sampler's launches: two top-k passes a
+	// token, and the penalty's when it runs.
+	SampleLaunches int
 	// VoltaGemm counts those of them that are the shared-memory-staged
 	// kernels.GemmVolta rather than MatVecMMA70.
 	VoltaGemm int
@@ -974,6 +980,8 @@ func (s *Stats) add(o Stats) {
 	s.RagResFused += o.RagResFused
 	s.RagGateFused += o.RagGateFused
 	s.RagHeadOne += o.RagHeadOne
+	s.SampleReads += o.SampleReads
+	s.SampleLaunches += o.SampleLaunches
 	s.GroupedMoE += o.GroupedMoE
 	s.GroupedFloat += o.GroupedFloat
 	s.MLABatched += o.MLABatched
@@ -1466,8 +1474,12 @@ type devShared struct {
 	convN   int
 	ragSeg  map[segShapeKey]segLaunch // a few-sequence step's q/k/v; see groupQKV
 	argmaxK backend.Kernel            // kernels.Argmax over the head's rows; see PrepHead
-	hostA   []uint32
-	hostAX  []float32
+	// samplePenK and sampleKs are the device sampler's kernels: the penalty
+	// over the head's rows and, per k, the two top-k passes (sample.go).
+	samplePenK backend.Kernel
+	sampleKs   map[int]sampleKerns
+	hostA      []uint32
+	hostAX     []float32
 
 	// Host-side scratch, reused rather than allocated per matvec. It is per
 	// device even though it is host memory, because lastX/staged say "the
@@ -2134,6 +2146,8 @@ func (g *devTier) Close() {
 		g.argmaxK.Close()
 		g.argmaxOut.Free()
 	}
+	g.closeSample()
+	g.lane0.freeSample()
 	for _, k := range g.recCopies {
 		k.Close()
 	}

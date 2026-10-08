@@ -322,6 +322,19 @@ type Head struct {
 	// See model.State.ForwardGreedy.
 	ArgmaxOnly bool
 	Token      int32
+	// SampleK, when positive, asks for the sampler's candidates in place of
+	// the logits: the SampleK best of the row after the repeat penalty in
+	// SampleArgs ([count, the penalty's bits, the history's ids], the layout
+	// of kernels.SampleArgsWords), best first and the lower id on a tie --
+	// exactly the host sampler's top-k (model.Sampler). A tier that serves it
+	// fills SampleVals and SampleIDs, leaves Logits untouched and sets
+	// Sampled; one that cannot fills Logits as always. See
+	// model.State.ForwardSample.
+	SampleK    int
+	SampleArgs []uint32
+	SampleVals []float32
+	SampleIDs  []uint32
+	Sampled    bool
 	// Tokens is RowsDevice.LayersRows' output: each row's greedy token.
 	Tokens []int32
 	// RowLogits asks LayersRows to read every row's logits back as well, into

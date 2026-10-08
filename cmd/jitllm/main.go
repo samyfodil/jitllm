@@ -861,6 +861,12 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 			if pending, err = st.ForwardGreedy(next); err != nil {
 				return withDeviceErr(err, dev)
 			}
+		} else if top == 0 {
+			// No logits are printed, so the token alone is wanted: a device
+			// holding the head selects the sampler's candidates.
+			if pending, err = st.ForwardSample(next, sm); err != nil {
+				return withDeviceErr(err, dev)
+			}
 		} else if logits, err = st.Forward(next); err != nil {
 			return withDeviceErr(err, dev)
 		}
@@ -1532,6 +1538,23 @@ func loadOpts(t []tok.Option, budget uint64) []model.Option {
 	}
 	if c := pagerChunk(); c > 0 {
 		o = append(o, model.WithChunk(c))
+	}
+	// JITLLM_PRELOAD=n keeps n pages in flight behind Open (model.WithPreload),
+	// 0 reads each page when a token faults it in. 4 when unset.
+	preload := 4
+	if v := os.Getenv("JITLLM_PRELOAD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			preload = n
+		}
+	}
+	o = append(o, model.WithPreload(preload))
+	// JITLLM_DEVICE_SAMPLE=on|off forces where a sampled token's candidates
+	// are selected (model.WithDeviceSample); unset or auto measures.
+	switch os.Getenv("JITLLM_DEVICE_SAMPLE") {
+	case "on":
+		o = append(o, model.WithDeviceSample(model.DeviceSampleOn))
+	case "off":
+		o = append(o, model.WithDeviceSample(model.DeviceSampleOff))
 	}
 	return append(o, modelOptions()...)
 }
