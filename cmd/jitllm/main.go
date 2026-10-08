@@ -1574,6 +1574,15 @@ func loadOpts(t []tok.Option, budget uint64) []model.Option {
 	if c := pagerChunk(); c > 0 {
 		o = append(o, model.WithChunk(c))
 	}
+	// JITLLM_PRELOAD=n keeps n pages in flight behind Open (model.WithPreload),
+	// 0 reads each page when a token faults it in. 4 when unset.
+	preload := 4
+	if v := os.Getenv("JITLLM_PRELOAD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			preload = n
+		}
+	}
+	o = append(o, model.WithPreload(preload))
 	return append(o, modelOptions()...)
 }
 

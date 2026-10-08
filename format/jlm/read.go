@@ -50,6 +50,11 @@ type File struct {
 	// reads counts readAt calls, the quantity the pager is priced in. Atomic
 	// because EnsureRanges' run goroutines call it unlocked.
 	reads int64
+	// inIO, peakIO and readBytes are ReadConcurrency's and ReadBytes'
+	// counters: requests outstanding now, the most ever, and bytes asked for.
+	inIO, peakIO, readBytes atomic.Int64
+	// inPages and peakPages are PreloadDepth's: pages Preload has in flight.
+	inPages, peakPages atomic.Int64
 	// waitNs is wall time a caller spent blocked in EnsureRanges waiting for
 	// its runs to land: serial time on the decode path, which is what a
 	// prefetch would have to hide. It is the only exposed-I/O number on the
@@ -650,6 +655,8 @@ func (f *File) readAt(dst []byte, off int64) error {
 	// Below a few MiB the goroutines cost more than the queue depth buys, and
 	// the metadata reads above go through here too.
 	if len(dst) < 4<<20 || g < 2 {
+		f.ioStart(len(dst))
+		defer f.ioEnd()
 		_, err := h.ReadAt(dst, off)
 		return err
 	}
@@ -673,6 +680,8 @@ func (f *File) readAt(dst []byte, off int64) error {
 		wg.Add(1)
 		go func(w, lo, hi int) {
 			defer wg.Done()
+			f.ioStart(hi - lo)
+			defer f.ioEnd()
 			_, errs[w] = h.ReadAt(dst[lo:hi], off+int64(lo))
 		}(w, lo, hi)
 	}

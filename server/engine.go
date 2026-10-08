@@ -63,6 +63,12 @@ type Config struct {
 	Probe func() ([]DeviceInfo, error)
 }
 
+// preloadDepth is how many pages a load keeps in flight behind model.Open
+// (model.WithPreload): a server's model is opened to be used, so its pages are
+// read while the JIT and the device placement run rather than when the first
+// request faults them in.
+const preloadDepth = 4
+
 func (c *Config) withDefaults() {
 	if c.ModelDir == "" {
 		c.ModelDir = "models"
@@ -409,7 +415,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		}
 	}
 
-	opts := []model.Option{model.WithPageBudget(hostBudget)}
+	opts := []model.Option{model.WithPageBudget(hostBudget), model.WithPreload(preloadDepth)}
 	if o.KVF16 != nil {
 		opts = append(opts, model.WithKVF16(*o.KVF16))
 	}

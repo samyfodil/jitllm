@@ -1,0 +1,111 @@
+package jlm
+
+import (
+	"sync"
+	"sync/atomic"
+)
+
+// Preload reads every page into memory in the background of whatever the
+// caller does next, depth pages at a time, and returns once all are in or stop
+// is closed.
+//
+// A cold model otherwise reads its pages where the first token faults them in:
+// one block at a time, each read only when the forward pass reaches it, with
+// the generated code compiled and run in between. That leaves the drive idle
+// while a kernel is emitted and the cores idle while a page lands. Preload
+// keeps depth pages in flight (each already split ReadThreads ways by readAt,
+// so the queue holds up to depth*ReadThreads requests) in block order, so the
+// first token finds its early blocks resident and the JIT runs beside the
+// reads rather than between them.
+//
+// Preload only runs when the budget holds every page: below that the forward
+// pass's own order decides residency (MRU over a cyclic scan, see EnsurePage),
+// and reading ahead would evict pages the pass is about to use. It is a
+// returned no-op there, not an error. It reads exactly what EnsurePage reads,
+// through the same claim, pin and fill bookkeeping, so a page the forward pass
+// reaches first is not read twice and the answer cannot depend on which got
+// there first.
+func (f *File) Preload(depth int, stop <-chan struct{}) error {
+	if f == nil || depth < 1 || f.CanEvict() {
+		return nil
+	}
+	n := f.NPages()
+	var (
+		next  atomic.Int64
+		wg    sync.WaitGroup
+		errMu sync.Mutex
+		first error
+	)
+	for w := 0; w < min(depth, n); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				i := int(next.Add(1) - 1)
+				if i >= n {
+					return
+				}
+				// The budget can narrow after Open (a device on the host's
+				// memory comes off it); a preload that keeps going then
+				// evicts what it just read.
+				if f.CanEvict() {
+					return
+				}
+				f.pageStart()
+				err := f.EnsurePage(i)
+				f.inPages.Add(-1)
+				if err != nil {
+					errMu.Lock()
+					if first == nil {
+						first = err
+					}
+					errMu.Unlock()
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	return first
+}
+
+// ReadConcurrency is the most read requests that were ever outstanding at
+// once on this File, and ReadBytes the bytes every request asked for: the
+// queue depth a load reached and what it moved, deterministic beside a
+// stopwatch that is not.
+func (f *File) ReadConcurrency() int64 { return f.peakIO.Load() }
+func (f *File) ReadBytes() int64       { return f.readBytes.Load() }
+
+// ioStart and ioEnd bracket one ReadAt for ReadConcurrency.
+func (f *File) ioStart(n int) {
+	f.readBytes.Add(int64(n))
+	c := f.inIO.Add(1)
+	for {
+		p := f.peakIO.Load()
+		if c <= p || f.peakIO.CompareAndSwap(p, c) {
+			return
+		}
+	}
+}
+
+func (f *File) ioEnd() { f.inIO.Add(-1) }
+
+// PreloadDepth is the most pages Preload ever had in flight at once: the
+// page-level queue depth, where ReadConcurrency counts requests (one page-in
+// alone issues up to ReadThreads of those).
+func (f *File) PreloadDepth() int64 { return f.peakPages.Load() }
+
+func (f *File) pageStart() {
+	c := f.inPages.Add(1)
+	for {
+		p := f.peakPages.Load()
+		if c <= p || f.peakPages.CompareAndSwap(p, c) {
+			return
+		}
+	}
+}

@@ -1147,6 +1147,10 @@ type Model struct {
 	// writes only what moved (see sameSpan), so when the model fits the writes
 	// stop after the first token and concurrent sessions only ever read.
 	bind sync.Mutex
+	// preloadStop, preloadDone and preloadErr are WithPreload's background
+	// read: Close closes the first and waits on the second.
+	preloadStop, preloadDone chan struct{}
+	preloadErr               error
 	// hostUse[li] counts the live States that run block li on the host, under
 	// bind. A State placing a block gives its host page back only when the
 	// count is zero: placement is per State and the binding per Model, so
@@ -1354,6 +1358,19 @@ type loadOpts struct {
 	place jlm.Placement
 	// chunk overrides the container's fill granularity; see WithChunk.
 	chunk uint64
+	// preload is how many pages Open keeps in flight behind it; see
+	// WithPreload.
+	preload int
+}
+
+// WithPreload has Open start reading every page in the background, depth
+// pages in flight, so a cold model's first token finds its blocks resident and
+// the JIT compiles beside the reads instead of between them (jlm.File.Preload).
+// Zero, the default, reads a page only when a token faults it in. It does
+// nothing on a budget below the model, where the forward pass's own order
+// decides residency.
+func WithPreload(depth int) Option {
+	return func(l *loadOpts) { l.preload = depth }
 }
 
 // WithTokenizerOption carries a tok.Option through Open, for a caller that
@@ -1563,7 +1580,56 @@ func openContainer(path string, options ...Option) (*Model, error) {
 			m.hardEmbd = tw.mn.hardRows(m.Cfg.EmbdScale)
 		}
 	}
+	if lo.preload > 0 {
+		m.startPreload(lo.preload)
+	}
 	return m, nil
+}
+
+// startPreload runs the container's Preload behind Open. Close stops it and
+// waits for it, so no read lands in a frame Close has unmapped.
+func (m *Model) startPreload(depth int) {
+	m.preloadStop, m.preloadDone = make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(m.preloadDone)
+		m.preloadErr = m.container.Preload(depth, m.preloadStop)
+	}()
+}
+
+// WaitPreload blocks until a WithPreload read has finished and returns its
+// error; nil at once when there was none. A failed preload is not fatal: the
+// page it could not read is read again, and its error returned, when a token
+// faults it in.
+func (m *Model) WaitPreload() error {
+	if m.preloadDone == nil {
+		return nil
+	}
+	<-m.preloadDone
+	return m.preloadErr
+}
+
+// ReadConcurrency is the most read requests the container ever had
+// outstanding at once, and ReadBytes the bytes they asked for.
+func (m *Model) ReadConcurrency() int64 {
+	if m.container == nil {
+		return 0
+	}
+	return m.container.ReadConcurrency()
+}
+
+// PreloadDepth is the most pages a WithPreload read had in flight at once.
+func (m *Model) PreloadDepth() int64 {
+	if m.container == nil {
+		return 0
+	}
+	return m.container.PreloadDepth()
+}
+
+func (m *Model) ReadBytes() int64 {
+	if m.container == nil {
+		return 0
+	}
+	return m.container.ReadBytes()
 }
 
 // Tower is the vision tower this container carries, or nil for a text-only
@@ -1860,6 +1926,11 @@ func (m *Model) pageInSelected(li int, sel []uint32) error {
 func (m *Model) Close() error {
 	if m.container == nil {
 		return nil
+	}
+	if m.preloadStop != nil {
+		close(m.preloadStop)
+		<-m.preloadDone
+		m.preloadStop = nil
 	}
 	// The devices give this model's blocks back first, so a device another
 	// model is offered next is free; then the container's memory goes, and
