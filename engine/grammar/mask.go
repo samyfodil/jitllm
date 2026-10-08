@@ -31,10 +31,11 @@ type State struct {
 	cp      rune
 }
 
-// vocabIndex is a tokenizer's pieces sorted by their bytes, built once per
-// tokenizer: the trie the mask walks is ranges of this list, a node being the
-// pieces that share a prefix.
-type vocabIndex struct {
+// Tokens is a tokenizer's pieces sorted by their bytes, built once per
+// tokenizer and shared by every grammar over it: the trie the mask walks is
+// ranges of this list, a node being the pieces that share a prefix. The
+// caller keeps it beside the tokenizer it was built from (IndexTokens).
+type Tokens struct {
 	pieces []string
 	ids    []int32
 	eog    []int32
@@ -42,13 +43,9 @@ type vocabIndex struct {
 	at []int32
 }
 
-var vocabIndexes sync.Map // Vocabulary -> *vocabIndex
-
-func indexOf(v Vocabulary) *vocabIndex {
-	if x, ok := vocabIndexes.Load(v); ok {
-		return x.(*vocabIndex)
-	}
-	x := &vocabIndex{}
+// IndexTokens indexes v's tokens.
+func IndexTokens(v Vocabulary) *Tokens {
+	x := &Tokens{}
 	for id := range int32(v.Size()) {
 		if v.IsEOG(id) {
 			x.eog = append(x.eog, id)
@@ -76,8 +73,7 @@ func indexOf(v Vocabulary) *vocabIndex {
 	for i, id := range is {
 		x.at[id] = int32(i)
 	}
-	got, _ := vocabIndexes.LoadOrStore(v, x)
-	return got.(*vocabIndex)
+	return x
 }
 
 // allowed is the tokens a state allows, and whether it may end.
@@ -92,7 +88,7 @@ type allowed struct {
 type Matcher struct {
 	mu    sync.Mutex
 	a     *automaton
-	v     *vocabIndex
+	v     *Tokens
 	first int32
 	masks map[State]*allowed
 	// bias is 0 at the allowed tokens and -inf elsewhere while a mask is
@@ -100,9 +96,9 @@ type Matcher struct {
 	bias []float32
 }
 
-// NewMatcher is g over v's tokens.
-func NewMatcher(g *Grammar, v Vocabulary) *Matcher {
-	m := &Matcher{a: newAutomaton(g), v: indexOf(v), masks: map[State]*allowed{}}
+// NewMatcher is g over a tokenizer's indexed tokens.
+func NewMatcher(g *Grammar, v *Tokens) *Matcher {
+	m := &Matcher{a: newAutomaton(g), v: v, masks: map[State]*allowed{}}
 	m.first = m.a.start()
 	return m
 }

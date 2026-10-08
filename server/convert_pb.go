@@ -348,6 +348,14 @@ func pbResidency(lm *LoadedModel) *v1.Residency {
 	}
 }
 
+// pbSpeculation is the wire's speculation, nil when the request carries none.
+func pbSpeculation(p *v1.SpeculationParams) *Speculation {
+	if p == nil {
+		return nil
+	}
+	return &Speculation{Enabled: p.Enabled, Draft: max(int(p.DraftTokens), 0)}
+}
+
 func pbSampling(p *v1.SamplingParams) *model.Sampler {
 	if p == nil {
 		return nil

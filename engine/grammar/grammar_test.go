@@ -68,7 +68,7 @@ x ::= "ab"`, []string{"abab", "ababab"}, []string{"ab", "abababab"}},
 		{`root ::= . . `, []string{"ab", "日本"}, []string{"a"}},
 	}
 	for _, c := range cases {
-		m := NewMatcher(mustParse(t, c.src), v)
+		m := NewMatcher(mustParse(t, c.src), IndexTokens(v))
 		for _, s := range c.yes {
 			if !accepts(m, s) {
 				t.Errorf("%q refuses %q", c.src, s)
@@ -104,7 +104,7 @@ x ::= y? root`,
 func TestTokenBoundaries(t *testing.T) {
 	v := newToyVocab(`":`, `"a":`, "\xc3", "é", `{"`)
 	id := func(p string) int32 { return int32(slices.Index(v.pieces, p)) }
-	m := NewMatcher(mustParse(t, `root ::= "{" "\"" [a-z]+ "\"" ":" "é" "}"`), v)
+	m := NewMatcher(mustParse(t, `root ::= "{" "\"" [a-z]+ "\"" ":" "é" "}"`), IndexTokens(v))
 	st := m.Start()
 	step := func(p string, want bool) {
 		t.Helper()
@@ -135,7 +135,7 @@ func TestTokenBoundaries(t *testing.T) {
 		t.Fatal("the end token is refused at the end")
 	}
 	// A lead byte whose every completion is refused is not in the mask.
-	m2 := NewMatcher(mustParse(t, `root ::= [a-z]`), v)
+	m2 := NewMatcher(mustParse(t, `root ::= [a-z]`), IndexTokens(v))
 	toks, _ := m2.Allowed(m2.Start())
 	if _, in := slices.BinarySearch(toks, id("\xc3")); in {
 		t.Fatal("a lead byte nothing can complete is allowed")
@@ -144,7 +144,7 @@ func TestTokenBoundaries(t *testing.T) {
 
 func TestMaskSendsTheRestToMinusInfinity(t *testing.T) {
 	v := newToyVocab()
-	m := NewMatcher(mustParse(t, `root ::= [ab] "c"?`), v)
+	m := NewMatcher(mustParse(t, `root ::= [ab] "c"?`), IndexTokens(v))
 	lg := make([]float32, v.Size()+3) // a padded head
 	for i := range lg {
 		lg[i] = float32(i % 7)
@@ -199,7 +199,7 @@ func TestSchemaGrammarAcceptsAndRefuses(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", c.schema, err)
 		}
-		m := NewMatcher(mustParse(t, src), v)
+		m := NewMatcher(mustParse(t, src), IndexTokens(v))
 		if !accepts(m, c.yes) {
 			t.Errorf("%s refuses %s\n%s", c.schema, c.yes, src)
 		}
@@ -220,7 +220,7 @@ func TestSchemaRandomWalksValidate(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		m := NewMatcher(mustParse(t, src), v)
+		m := NewMatcher(mustParse(t, src), IndexTokens(v))
 		var schema any
 		if err := json.Unmarshal([]byte(c.schema), &schema); err != nil {
 			t.Fatal(err)

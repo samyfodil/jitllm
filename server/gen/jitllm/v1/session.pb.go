@@ -284,7 +284,10 @@ type CreateSessionRequest struct {
 	// device's share as memory frees. This is the `-gpu-grow` behaviour.
 	RelocateWhileServing bool `protobuf:"varint,6,opt,name=relocate_while_serving,json=relocateWhileServing,proto3" json:"relocate_while_serving,omitempty"`
 	// Sampler defaults for generate calls that do not carry their own.
-	Sampling      *SamplingParams `protobuf:"bytes,7,opt,name=sampling,proto3" json:"sampling,omitempty"`
+	Sampling *SamplingParams `protobuf:"bytes,7,opt,name=sampling,proto3" json:"sampling,omitempty"`
+	// Speculative decoding for generate calls that do not carry their own.
+	// Off by default.
+	Speculation   *SpeculationParams `protobuf:"bytes,30,opt,name=speculation,proto3" json:"speculation,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -364,6 +367,13 @@ func (x *CreateSessionRequest) GetRelocateWhileServing() bool {
 func (x *CreateSessionRequest) GetSampling() *SamplingParams {
 	if x != nil {
 		return x.Sampling
+	}
+	return nil
+}
+
+func (x *CreateSessionRequest) GetSpeculation() *SpeculationParams {
+	if x != nil {
+		return x.Speculation
 	}
 	return nil
 }
@@ -943,7 +953,7 @@ const file_jitllm_v1_session_proto_rawDesc = "" +
 	"\x0fkv_bytes_in_use\x18\x02 \x01(\v2\x13.jitllm.v1.ByteSizeR\fkvBytesInUse\x12#\n" +
 	"\rsessions_open\x18\x03 \x01(\x05R\fsessionsOpen\x12?\n" +
 	"\x1csessions_per_device_measured\x18\x04 \x01(\bR\x19sessionsPerDeviceMeasured\x12'\n" +
-	"\x0funmeasured_note\x18\x05 \x01(\tR\x0eunmeasuredNote\"\xbc\x02\n" +
+	"\x0funmeasured_note\x18\x05 \x01(\tR\x0eunmeasuredNote\"\xfc\x02\n" +
 	"\x14CreateSessionRequest\x12\x19\n" +
 	"\bmodel_id\x18\x01 \x01(\tR\amodelId\x12\x1d\n" +
 	"\n" +
@@ -953,7 +963,8 @@ const file_jitllm_v1_session_proto_rawDesc = "" +
 	"device_ids\x18\x04 \x03(\tR\tdeviceIds\x12/\n" +
 	"\x11max_device_blocks\x18\x05 \x01(\x05H\x00R\x0fmaxDeviceBlocks\x88\x01\x01\x124\n" +
 	"\x16relocate_while_serving\x18\x06 \x01(\bR\x14relocateWhileServing\x125\n" +
-	"\bsampling\x18\a \x01(\v2\x19.jitllm.v1.SamplingParamsR\bsamplingB\x14\n" +
+	"\bsampling\x18\a \x01(\v2\x19.jitllm.v1.SamplingParamsR\bsampling\x12>\n" +
+	"\vspeculation\x18\x1e \x01(\v2\x1c.jitllm.v1.SpeculationParamsR\vspeculationB\x14\n" +
 	"\x12_max_device_blocks\"w\n" +
 	"\x15CreateSessionResponse\x12,\n" +
 	"\asession\x18\x01 \x01(\v2\x12.jitllm.v1.SessionR\asession\x120\n" +
@@ -1030,6 +1041,7 @@ var file_jitllm_v1_session_proto_goTypes = []any{
 	(*ByteSize)(nil),               // 14: jitllm.v1.ByteSize
 	(ExecutionMode)(0),             // 15: jitllm.v1.ExecutionMode
 	(*SamplingParams)(nil),         // 16: jitllm.v1.SamplingParams
+	(*SpeculationParams)(nil),      // 17: jitllm.v1.SpeculationParams
 }
 var file_jitllm_v1_session_proto_depIdxs = []int32{
 	14, // 0: jitllm.v1.Session.kv_bytes:type_name -> jitllm.v1.ByteSize
@@ -1037,30 +1049,31 @@ var file_jitllm_v1_session_proto_depIdxs = []int32{
 	14, // 2: jitllm.v1.SessionBudget.kv_bytes_per_session:type_name -> jitllm.v1.ByteSize
 	14, // 3: jitllm.v1.SessionBudget.kv_bytes_in_use:type_name -> jitllm.v1.ByteSize
 	16, // 4: jitllm.v1.CreateSessionRequest.sampling:type_name -> jitllm.v1.SamplingParams
-	0,  // 5: jitllm.v1.CreateSessionResponse.session:type_name -> jitllm.v1.Session
-	1,  // 6: jitllm.v1.CreateSessionResponse.budget:type_name -> jitllm.v1.SessionBudget
-	0,  // 7: jitllm.v1.GetSessionResponse.session:type_name -> jitllm.v1.Session
-	1,  // 8: jitllm.v1.GetSessionResponse.budget:type_name -> jitllm.v1.SessionBudget
-	0,  // 9: jitllm.v1.ListSessionsResponse.sessions:type_name -> jitllm.v1.Session
-	0,  // 10: jitllm.v1.ResetSessionResponse.session:type_name -> jitllm.v1.Session
-	15, // 11: jitllm.v1.GetDeviceQueueResponse.execution:type_name -> jitllm.v1.ExecutionMode
-	2,  // 12: jitllm.v1.SessionService.CreateSession:input_type -> jitllm.v1.CreateSessionRequest
-	4,  // 13: jitllm.v1.SessionService.GetSession:input_type -> jitllm.v1.GetSessionRequest
-	6,  // 14: jitllm.v1.SessionService.ListSessions:input_type -> jitllm.v1.ListSessionsRequest
-	8,  // 15: jitllm.v1.SessionService.CloseSession:input_type -> jitllm.v1.CloseSessionRequest
-	10, // 16: jitllm.v1.SessionService.ResetSession:input_type -> jitllm.v1.ResetSessionRequest
-	12, // 17: jitllm.v1.SessionService.GetDeviceQueue:input_type -> jitllm.v1.GetDeviceQueueRequest
-	3,  // 18: jitllm.v1.SessionService.CreateSession:output_type -> jitllm.v1.CreateSessionResponse
-	5,  // 19: jitllm.v1.SessionService.GetSession:output_type -> jitllm.v1.GetSessionResponse
-	7,  // 20: jitllm.v1.SessionService.ListSessions:output_type -> jitllm.v1.ListSessionsResponse
-	9,  // 21: jitllm.v1.SessionService.CloseSession:output_type -> jitllm.v1.CloseSessionResponse
-	11, // 22: jitllm.v1.SessionService.ResetSession:output_type -> jitllm.v1.ResetSessionResponse
-	13, // 23: jitllm.v1.SessionService.GetDeviceQueue:output_type -> jitllm.v1.GetDeviceQueueResponse
-	18, // [18:24] is the sub-list for method output_type
-	12, // [12:18] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	17, // 5: jitllm.v1.CreateSessionRequest.speculation:type_name -> jitllm.v1.SpeculationParams
+	0,  // 6: jitllm.v1.CreateSessionResponse.session:type_name -> jitllm.v1.Session
+	1,  // 7: jitllm.v1.CreateSessionResponse.budget:type_name -> jitllm.v1.SessionBudget
+	0,  // 8: jitllm.v1.GetSessionResponse.session:type_name -> jitllm.v1.Session
+	1,  // 9: jitllm.v1.GetSessionResponse.budget:type_name -> jitllm.v1.SessionBudget
+	0,  // 10: jitllm.v1.ListSessionsResponse.sessions:type_name -> jitllm.v1.Session
+	0,  // 11: jitllm.v1.ResetSessionResponse.session:type_name -> jitllm.v1.Session
+	15, // 12: jitllm.v1.GetDeviceQueueResponse.execution:type_name -> jitllm.v1.ExecutionMode
+	2,  // 13: jitllm.v1.SessionService.CreateSession:input_type -> jitllm.v1.CreateSessionRequest
+	4,  // 14: jitllm.v1.SessionService.GetSession:input_type -> jitllm.v1.GetSessionRequest
+	6,  // 15: jitllm.v1.SessionService.ListSessions:input_type -> jitllm.v1.ListSessionsRequest
+	8,  // 16: jitllm.v1.SessionService.CloseSession:input_type -> jitllm.v1.CloseSessionRequest
+	10, // 17: jitllm.v1.SessionService.ResetSession:input_type -> jitllm.v1.ResetSessionRequest
+	12, // 18: jitllm.v1.SessionService.GetDeviceQueue:input_type -> jitllm.v1.GetDeviceQueueRequest
+	3,  // 19: jitllm.v1.SessionService.CreateSession:output_type -> jitllm.v1.CreateSessionResponse
+	5,  // 20: jitllm.v1.SessionService.GetSession:output_type -> jitllm.v1.GetSessionResponse
+	7,  // 21: jitllm.v1.SessionService.ListSessions:output_type -> jitllm.v1.ListSessionsResponse
+	9,  // 22: jitllm.v1.SessionService.CloseSession:output_type -> jitllm.v1.CloseSessionResponse
+	11, // 23: jitllm.v1.SessionService.ResetSession:output_type -> jitllm.v1.ResetSessionResponse
+	13, // 24: jitllm.v1.SessionService.GetDeviceQueue:output_type -> jitllm.v1.GetDeviceQueueResponse
+	19, // [19:25] is the sub-list for method output_type
+	13, // [13:19] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_jitllm_v1_session_proto_init() }

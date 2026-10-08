@@ -100,6 +100,10 @@ message CreateSessionRequest {
 
   // Sampler defaults for generate calls that do not carry their own.
   SamplingParams sampling = 7;
+
+  // Speculative decoding for generate calls that do not carry their own.
+  // Off by default.
+  SpeculationParams speculation = 30;
 }
 
 message CreateSessionResponse {
