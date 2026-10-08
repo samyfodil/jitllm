@@ -18,7 +18,6 @@ import (
 	"context"
 	"runtime"
 	"runtime/pprof"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -183,8 +182,10 @@ type Pool struct {
 	crew *Pool
 	// mu is held by a view's region on the crew, shared with every crew
 	// whose cores overlap this one's (Shared); key and views are the crew's
-	// registry entry and how many views are open.
-	mu    *sync.Mutex
+	// registry entry and how many views are open. wake is a view's channel
+	// for mu's handoff.
+	mu    *turn
+	wake  chan struct{}
 	key   string
 	views int
 }
@@ -598,7 +599,7 @@ func (p *Pool) dispatch(j job) {
 		// and the published job are the crew's. The participant count is the
 		// view's own, so each user's tuner keeps its answer.
 		c := p.crew
-		c.mu.Lock()
+		c.mu.Lock(p.wake)
 		defer c.mu.Unlock()
 		if c.stopped.Load() {
 			p.nSerial.Add(1)
