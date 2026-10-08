@@ -8429,8 +8429,12 @@ Found on the way:
   weights.
 
 The safetensors path, which reads the release's compressed-tensors MXFP4,
-came after: "The release from safetensors" below. The vision tower and the
-multi-token-prediction blocks are not built.
+came after: "The release from safetensors" below. The vision tower is not
+built. Kimi-K3 has no multi-token-prediction blocks to build: the release
+(93 trunk layers, 497,220 tensors, none an MTP tensor) and every reachable
+checkpoint state num_nextn_predict_layers 0, Moonshot's modeling code defines
+no MTP module, and llama.cpp's kimi-k3 graph has none; convert/hfkimik3.go
+refuses a nonzero count, which is the guard should a release add them.
 
 ### Real trained weights: Kimi-K3-0.40B
 
