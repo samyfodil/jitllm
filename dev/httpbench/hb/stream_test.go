@@ -23,8 +23,11 @@ data: {"choices":[{"index":0,"delta":{},"finish_reason":"length"}],"usage":{"pro
 data: [DONE]
 
 `
+	// The request started a millisecond ago: a stream read from memory ends
+	// inside one tick of a coarse clock (Windows), and TTFT must still count
+	// from the request's start, not read 0.
 	var s Sample
-	if err := readStream(strings.NewReader(body), time.Now(), &s); err != nil {
+	if err := readStream(strings.NewReader(body), time.Now().Add(-time.Millisecond), &s); err != nil {
 		t.Fatal(err)
 	}
 	if s.Chunks != 2 || len(s.ITL) != 1 || s.CompletionTokens != 3 || s.PromptTokens != 5 ||
