@@ -39,7 +39,7 @@ func TestAttnKernels(t *testing.T) {
 		}
 
 		// scores
-		kern := onHost(t)(hostTable().AttnScores(shape.hd, shape.kvStride, false))
+		kern := onHost(t)(hostTable().AttnScores(shape.hd, shape.kvStride, KVF32))
 		got := sentinelRow(shape.npos)
 		args := Args{Out: &got[0], W: (*byte)(nil), Rows: int64(shape.npos), Q32: &q[0]}
 		args.W = f32bytes(kv)
@@ -66,7 +66,7 @@ func TestAttnKernels(t *testing.T) {
 		}
 
 		// weighted accumulation
-		kern = onHost(t)(hostTable().AttnAcc(shape.hd, shape.kvStride, false))
+		kern = onHost(t)(hostTable().AttnAcc(shape.hd, shape.kvStride, KVF32))
 		out := sentinelRow(shape.hd)
 		args = Args{Out: &out[0], W: f32bytes(kv), AScale: &att[0], Rows: int64(shape.npos)}
 		kern.Call(&args)

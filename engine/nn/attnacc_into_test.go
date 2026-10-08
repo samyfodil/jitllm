@@ -9,6 +9,7 @@ import (
 
 	"github.com/samyfodil/jitllm/engine/nn"
 	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/samyfodil/jitllm/jit/cpu"
 )
 
 // TestAttnAccIntoSplitsBitIdentically: accumulating a window in pieces must give
@@ -26,7 +27,7 @@ func TestAttnAccIntoSplitsBitIdentically(t *testing.T) {
 
 	for _, hd := range []int{64, 128, 256, 12, 17} {
 		for _, npos := range []int{16, 129, 512} {
-			f.AddAttn(hd, hd, false)
+			f.AddAttn(hd, hd, cpu.KVF32)
 			r := rand.New(rand.NewSource(int64(hd*1000 + npos)))
 			v := make([]float32, npos*hd)
 			for i := range v {
@@ -91,7 +92,7 @@ func TestAttnAcc2IntoSplitsBitIdentically(t *testing.T) {
 	ran := 0
 	for _, hd := range []int{64, 128, 256, 12, 17} {
 		for _, npos := range []int{16, 129, 512} {
-			f.AddAttn(hd, hd, false)
+			f.AddAttn(hd, hd, cpu.KVF32)
 			r := rand.New(rand.NewSource(int64(hd*7919 + npos)))
 			v := make([]float32, npos*hd)
 			for i := range v {

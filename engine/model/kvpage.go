@@ -17,6 +17,7 @@ import (
 	"unsafe"
 
 	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/samyfodil/jitllm/jit/cpu"
 )
 
 // The KV cache is paged, and its pages are its own.
@@ -503,7 +504,7 @@ func newKVCacheRange(c *Config, id string, nseq int, l kvLayout, store KVStore, 
 		// DeepSeek V4's value is its key: one row, as MLA's.
 		kc.layers[li].latent = c.MLA() || c.DSV4()
 		if p > 0 {
-			kc.layers[li].pp = l.slots(nseq * p * c.KVRowAt(li))
+			kc.layers[li].pp = l.atLayer(c, li).slots(nseq * p * c.KVRowAt(li))
 			// The window Config.AttnWindow applies, whatever sized the page.
 			if c.SWA(li) && c.SWAWindow > 0 {
 				kc.layers[li].win, kc.layers[li].chunked = c.SWAWindow, c.SWAChunked
@@ -701,13 +702,13 @@ func (s *State) migrateKV(li, pos int, toDevice bool) bool {
 		return s.migrateKVRows(li, toDevice)
 	}
 	kvl := s.kvlAt(li)
-	n := kvl.slots(pos * kvl.kvDim())
-	k := make([]float32, n)
-	v := make([]float32, n)
+	k, v, fk, fv := kvMigBufs(kvl, pos)
 	if toDevice && !pg.gather(kvl, 0, pos, k, v) {
 		return false
 	}
-	if !s.ld.MigrateKV(li, k, v, pos, toDevice) {
+	if !s.migrateKVAs(kvl, pos, k, v, fk, fv, toDevice, func() bool {
+		return s.ld.MigrateKV(li, fk, fv, pos, toDevice)
+	}) {
 		return false
 	}
 	// A DeepSeek V4 block's entries travel with its rows (ds4dev.go).
@@ -723,6 +724,45 @@ func (s *State) migrateKV(li, pos int, toDevice bool) bool {
 	// What scatter left out lies behind the window: released, as far as
 	// seal and the read walk are concerned.
 	pg.gone = max(pg.gone, pg.liveFrom(pos))
+	return true
+}
+
+// kvMigBufs is the buffers a migration of n positions of layout kvl moves
+// through: k and v in the host cache's format, which gather fills and scatter
+// reads, and fk and fv in the float32 a device takes (MigrateKV's contract).
+// They are the same buffers unless the cache is q8.
+func kvMigBufs(kvl kvLayout, n int) (k, v, fk, fv []float32) {
+	k = make([]float32, kvl.slots(n*kvl.kvDim()))
+	v = make([]float32, len(k))
+	if kvl.fmt != cpu.KVQ8 {
+		return k, v, k, v
+	}
+	fk = make([]float32, n*kvl.kvDim())
+	fv = make([]float32, len(fk))
+	return k, v, fk, fv
+}
+
+// migrateKVAs runs move between the q8 rows and the float32 a device holds: a
+// q8 history leaves widened to d*q (nn.WidenKVRows) and comes home quantized
+// again (nn.QuantizeKVRows). Widening then quantizing gives the same int8
+// back and each scale to within an ulp (the block's amax widens to 127*d), so
+// a history that travels and returns keeps its rows; what the device wrote
+// while it held the block is quantized as the host would have quantized it.
+// The device holds float32 pages: a q8 cache resident on a device is not
+// implemented (kvtype.go).
+func (s *State) migrateKVAs(kvl kvLayout, n int, k, v, fk, fv []float32, toDevice bool, move func() bool) bool {
+	rows := n * kvl.nKV
+	if kvl.fmt == cpu.KVQ8 && toDevice {
+		s.jit.WidenKVRows(fk, k, kvl.headDim, rows)
+		s.jit.WidenKVRows(fv, v, kvl.headDim, rows)
+	}
+	if !move() {
+		return false
+	}
+	if kvl.fmt == cpu.KVQ8 && !toDevice {
+		s.jit.QuantizeKVRows(k, fk, kvl.headDim, rows)
+		s.jit.QuantizeKVRows(v, fv, kvl.headDim, rows)
+	}
 	return true
 }
 
@@ -756,9 +796,7 @@ func (s *State) migrateKVRows(li int, toDevice bool) bool {
 	}
 	kvl := s.kvlAt(li)
 	kvDim := kvl.kvDim()
-	n := kvl.slots(ext * kvDim)
-	k := make([]float32, n)
-	v := make([]float32, n)
+	k, v, fk, fv := kvMigBufs(kvl, ext)
 	for r, p := range s.bpos {
 		if !toDevice || p == 0 {
 			continue
@@ -768,7 +806,9 @@ func (s *State) migrateKVRows(li int, toDevice bool) bool {
 			return false
 		}
 	}
-	if !s.ld.MigrateKV(li, k, v, ext, toDevice) {
+	if !s.migrateKVAs(kvl, ext, k, v, fk, fv, toDevice, func() bool {
+		return s.ld.MigrateKV(li, fk, fv, ext, toDevice)
+	}) {
 		return false
 	}
 	if toDevice {
@@ -793,18 +833,17 @@ func (s *State) migrateKVRows(li int, toDevice bool) bool {
 func (s *State) migrateKVSeqs(sd nn.SeqKVDevice, li int, toDevice bool) bool {
 	pg := &s.kv.layers[li]
 	kvl := s.kvlAt(li)
-	kvDim := kvl.kvDim()
 	for r, p := range s.bpos {
 		if p == 0 {
 			continue
 		}
-		n := kvl.slots(p * kvDim)
-		k := make([]float32, n)
-		v := make([]float32, n)
+		k, v, fk, fv := kvMigBufs(kvl, p)
 		if toDevice && !pg.gather(kvl, r, p, k, v) {
 			return false
 		}
-		if !sd.MigrateKVSeq(li, r*s.maxSeq, k, v, p, toDevice) {
+		if !s.migrateKVAs(kvl, p, k, v, fk, fv, toDevice, func() bool {
+			return sd.MigrateKVSeq(li, r*s.maxSeq, fk, fv, p, toDevice)
+		}) {
 			return false
 		}
 		if !toDevice && !pg.scatter(kvl, r, p, k, v) {
@@ -1986,8 +2025,8 @@ func (s *State) kvWritable(li, pos int) {
 // identity (two fine-tunes of one architecture) remains the namespace's job.
 func geomDigest(c *Config, nseq int, l kvLayout) []byte {
 	h := sha256.New()
-	fmt.Fprintf(h, "kvgeom1|nseq=%d|elem=%d|hm=%t|nkv=%d|hd=%d|L=%d|embd=%d|head=%d|rot=%d|ffn=%d|vocab=%d|rope=%g|swa=%d/%d|arch=%s|exp=%d/%d",
-		nseq, l.elem, l.headMajor, c.NKVHead, c.HeadDim, c.NLayer,
+	fmt.Fprintf(h, "kvgeom1|nseq=%d|elem=%s|hm=%t|nkv=%d|hd=%d|L=%d|embd=%d|head=%d|rot=%d|ffn=%d|vocab=%d|rope=%g|swa=%d/%d|arch=%s|exp=%d/%d",
+		nseq, l.elemTag(), l.headMajor, c.NKVHead, c.HeadDim, c.NLayer,
 		c.NEmbd, c.NHead, c.NRot, c.NFFN, c.NVocab, c.RopeBase,
 		c.SWAWindow, c.SWAPeriod, c.Arch, c.NExpert, c.NExpertUsed)
 	// The sliding layers' own geometry, only where it is their own: every

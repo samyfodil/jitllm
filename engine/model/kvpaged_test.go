@@ -1401,12 +1401,16 @@ func TestFileStoreStaysInsideItsLimit(t *testing.T) {
 // what is under test is the gather/migrate/scatter seam in model/.
 func TestKVPagesRelocateWithTheLayer(t *testing.T) {
 	for _, name := range relocModels() {
-		t.Run(name, func(t *testing.T) { kvPagesRelocateWithTheLayer(t, jlmOf(t, testmodels.Path(name))) })
+		t.Run(name, func(t *testing.T) { kvPagesRelocateWithTheLayer(t, jlmOf(t, testmodels.Path(name)), KVF32) })
+		// The q8_0 cache travels widened to float32 and comes home quantized
+		// again (State.migrateKVAs): the round trip must give back every int8
+		// and every scale, or the logits below move.
+		t.Run(name+"/q8_0", func(t *testing.T) { kvPagesRelocateWithTheLayer(t, jlmOf(t, testmodels.Path(name)), KVQ8_0) })
 	}
 }
 
 // kvPagesRelocateWithTheLayer is TestKVPagesRelocateWithTheLayer on one model.
-func kvPagesRelocateWithTheLayer(t *testing.T, path string) {
+func kvPagesRelocateWithTheLayer(t *testing.T, path string, kt KVType) {
 	// Untuned: the logit sum below is held bit for bit, and a kernel pick
 	// timed mid-run (the arm64 per-shape choice) moves the reduction order
 	// between the two arms.
@@ -1415,6 +1419,9 @@ func kvPagesRelocateWithTheLayer(t *testing.T, path string) {
 		t.Fatal(err)
 	}
 	defer m.Close()
+	if err := m.Cfg.KVTypeRefusal(kt); err != nil {
+		t.Skipf("refused by name: %v", err)
+	}
 	// A model every block of which is recurrent (plain Mamba-2) keeps no
 	// attention history at all: there is no page to carry, and its summary's
 	// relocation is TestBatchSeamMovesCarryEveryRowSSM's and
@@ -1447,13 +1454,18 @@ func kvPagesRelocateWithTheLayer(t *testing.T, path string) {
 	run := func(move, corrupt bool) ([]int32, int) {
 		sum = 0
 		defer m.setKVPageForTest(page)()
-		// f32: an f16 host cache cannot migrate (MigrateKV takes []float32),
-		// so SetDeviceLayers refuses at a live position and the gate would
-		// place nothing.
-		m.SetKVF16(false)
+		// f32 or q8: an f16 host cache cannot migrate (MigrateKV takes
+		// []float32), so SetDeviceLayers refuses at a live position and the
+		// gate would place nothing.
+		if err := m.SetKVType(kt); err != nil {
+			t.Fatal(err)
+		}
 		defer m.ClearKVF16()
 		s := m.NewState(maxSeq)
 		defer s.Close()
+		if s.KVType() != kt {
+			t.Fatalf("asked for a %v cache and got %v", kt, s.KVType())
+		}
 		var lg []float32
 		for _, id := range prompt {
 			if lg, err = s.Forward(id); err != nil {
@@ -1482,7 +1494,7 @@ func kvPagesRelocateWithTheLayer(t *testing.T, path string) {
 			s.SetDeviceLayers(dev, 4)
 			if s.gpuLayers == 0 {
 				t.Fatalf("no block was placed, so nothing relocated and this gate is "+
-					"vacuous (kvF16=%v, headMajor=%v)", s.kvF16, s.kvl.headMajor)
+					"vacuous (kvF16=%v, headMajor=%v)", s.KVIsF16(), s.kvl.headMajor)
 			}
 			// Straight back down with nothing run in between, so what returns
 			// must be exactly what left.

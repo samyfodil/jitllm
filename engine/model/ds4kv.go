@@ -3,6 +3,8 @@ package model
 import (
 	"bytes"
 	"errors"
+
+	"github.com/samyfodil/jitllm/jit/cpu"
 )
 
 // DeepSeek V4's compressed history (ds4.go): a compressed block keeps, beside
@@ -53,7 +55,7 @@ func (kc *kvCache) entRate(li int) int {
 // always float32 (an entry is a pooled key, and the indexer selects over it).
 func (s *State) entLayout(li int) kvLayout {
 	l := s.kvl
-	l.nKV, l.headDim, l.elem, l.headMajor = 1, s.m.Cfg.EntRowAt(li), 4, false
+	l.nKV, l.headDim, l.fmt, l.jit, l.headMajor = 1, s.m.Cfg.EntRowAt(li), cpu.KVF32, nil, false
 	return l
 }
 

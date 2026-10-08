@@ -28,7 +28,7 @@ func attnTiledCase(t *testing.T, hd int) {
 		npos        = 37  // and not a multiple of anything
 	)
 	for _, qt := range []int{2, 4, 8} {
-		code := onHost(t)(hostTable().AttnScoresTiled(hd, stride, stride, scoreStride, qt, false))
+		code := onHost(t)(hostTable().AttnScoresTiled(hd, stride, stride, scoreStride, qt, KVF32))
 		defer code.Close()
 
 		k := make([]float32, npos*stride)

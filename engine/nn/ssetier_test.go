@@ -113,8 +113,8 @@ func TestForcedSSETierSelectsSSEKernels(t *testing.T) {
 	if _, err := sse.RowMajor(cpu.Spec{W: quant.F32, Rows: 1, Cols: 1, Accs: 1}); errors.Is(err, cpu.ErrNoSSEKernel) && f.code[quant.F32] != nil {
 		t.Error("the JIT built an F32 matvec on the SSE tier, which has none yet -- it came from another tier")
 	}
-	if _, err := sse.AttnScores(64, 256, false); errors.Is(err, cpu.ErrNoSSEKernel) {
-		if msg := panicked(func() { f.AddAttn(64, 256, false) }); !strings.Contains(msg, "SSE-tier") {
+	if _, err := sse.AttnScores(64, 256, cpu.KVF32); errors.Is(err, cpu.ErrNoSSEKernel) {
+		if msg := panicked(func() { f.AddAttn(64, 256, cpu.KVF32) }); !strings.Contains(msg, "SSE-tier") {
 			t.Errorf("AddAttn under the force: %q, want the missing SSE-tier kernel named", msg)
 		}
 	}
