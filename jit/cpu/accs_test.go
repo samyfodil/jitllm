@@ -1,4 +1,11 @@
-//go:build amd64 && linux
+//go:build jitllmbench && amd64 && linux
+
+// This file is a measurement instrument, not a gate, so it is opt-in by build
+// tag rather than run by every go test (AGENTS.md RULE 4): bench.AB's physics
+// guard panics when a loaded box reads a low memory wall, which took the
+// package's correctness gates down with it.
+//
+//	go test -tags jitllmbench -run <Name> ./jit/cpu
 
 package cpu
 

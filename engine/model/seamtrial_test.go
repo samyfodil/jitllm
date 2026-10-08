@@ -51,3 +51,30 @@ func TestStreamTrialTriesEveryArm(t *testing.T) {
 		t.Fatalf("settled %v on arm %d (%s), want arm 2", tu.settled, tu.best, tu.why)
 	}
 }
+
+// TestSeamScheduleReachesTheSessionsTuner: a session's schedule (the server's
+// TuneSeamRequest) shapes the tuner it armed -- more rounds take more runs to
+// decide -- a zero keeps what the tuner has, and the stream trial keeps the
+// load's schedule.
+func TestSeamScheduleReachesTheSessionsTuner(t *testing.T) {
+	runs := func(rounds int) int {
+		s := &State{seam: &seamTuner{on: true, cands: []int{93, 0}, best: 93, chal: 0, warmup: 32, perRun: 24, rounds: 3}}
+		s.SetSeamSchedule(0, 7, rounds)
+		if s.seam.warmup != 32 || s.seam.perRun != 7 {
+			t.Fatalf("schedule warmup %d perRun %d: want 32 kept and 7 taken", s.seam.warmup, s.seam.perRun)
+		}
+		n := 0
+		for ; !s.seam.settled && n < 1000; n++ {
+			s.seam.observe(nil, 1)
+		}
+		return n
+	}
+	if a, b := runs(0), runs(6); b <= a {
+		t.Fatalf("six rounds decided in %d runs, three in %d: the session's rounds did not reach the tuner", b, a)
+	}
+	tr := &State{seam: &seamTuner{trial: true, rounds: 3}}
+	tr.SetSeamSchedule(1, 1, 9)
+	if tr.seam.rounds != 3 {
+		t.Fatal("a session's schedule reshaped the stream trial")
+	}
+}

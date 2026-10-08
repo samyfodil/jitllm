@@ -215,6 +215,7 @@ func serve(args []string) {
 	}
 	e := server.New(server.Config{
 		KVF16:         kvWidth,
+		OffHeap:       goheap.OffHeap,
 		PromptStore:   store,
 		ModelDir:      *models,
 		MaxBatchRows:  *maxBatch,

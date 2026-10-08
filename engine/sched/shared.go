@@ -9,8 +9,9 @@ import (
 // core set, however many users run on it. Every model.State builds a JIT with
 // its own pool, and two pools on the same cores are two sets of spinning
 // workers behind two barriers -- the slowest worker of either is both regions'
-// end. Views take turns a region at a time instead, so several sessions run on
-// the cores without a lock held across a whole generate.
+// end. Views take turns a region at a time instead, in arrival order (turn),
+// so several sessions run on the cores without a lock held across a whole
+// generate and without one session's regions starving another's.
 //
 // A view has its own participant count (SetParticipants) and region counters;
 // SetSpinning is the crew's, so the last caller's choice holds for every view.
@@ -30,7 +31,7 @@ func Shared(cpus []int, opts ...Option) *Pool {
 		// Crews over overlapping cores take turns with each other too: a
 		// prefill on the wide set and a decode on the P-cores would otherwise
 		// both drive the same cores at once.
-		c.mu = &sync.Mutex{}
+		c.mu = &turn{}
 		// A set that overlaps two crews which do not overlap each other takes
 		// the first one's lock; the machine's core sets are nested (P inside
 		// P+E), so that case is not met, and a lock per core is the upgrade if
@@ -44,7 +45,7 @@ func Shared(cpus []int, opts ...Option) *Pool {
 		crews.m[key] = c
 	}
 	c.views++
-	v := &Pool{crew: c}
+	v := &Pool{crew: c, wake: make(chan struct{}, 1)}
 	v.part.Store(int64(len(c.cpus)))
 	return v
 }
