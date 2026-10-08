@@ -739,6 +739,25 @@ that dies at conversion.
 Evidence: `docs/engineering-history/gpu-kernels.md` ("RULE 11c's cases");
 `docs/engineering-history/placement.md` 15i.
 
+## RULE 11e: do not invent constraints. Name a limit's source before obeying it.
+
+Before code waits, locks, declines, serialises or falls back "because X",
+name what X is: a hardware or driver limit, cited from its documentation or
+measured, or a choice this code made. Only the first is a constraint; the
+second is a design, and the work is to find the way past it that gives the
+best rate.
+
+- **A lock is a claim about what it protects.** Name the state, then ask
+  whether that state needs to be shared at all.
+- **Inherited limits rot fastest.** A layer that copies the limit of the
+  layer below upward keeps it after the layer below is fixed, and widens it.
+- **"The hardware does X" needs the hardware's documentation or a
+  measurement**, not the way our backend happens to drive it.
+- **A real limit is where the search starts, not where it ends**: batch,
+  stage, queue or reorder around it before accepting its cost.
+
+Evidence: `docs/engineering-history/gpu-kernels.md` ("RULE 11e's cases").
+
 ## RULE 12: a comment explaining why something is NOT done is a claim about the code, and it rots.
 
 Before inheriting a "we do not do X because Y", check Y at the source. It costs
