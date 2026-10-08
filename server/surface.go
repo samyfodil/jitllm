@@ -39,6 +39,9 @@ type ModelSummary struct {
 	ID       string
 	Name     string
 	LoadedAt time.Time
+	// MaxModelLen is the KV capacity a session of this model gets when it
+	// asks for none: the prompt and the completion together.
+	MaxModelLen int
 }
 
 // compat carries the Backend into the two shims' handlers.
@@ -49,7 +52,8 @@ type compat struct{ b Backend }
 func (e *Engine) ListLoaded() []ModelSummary {
 	out := []ModelSummary{}
 	for _, lm := range e.Models() {
-		out = append(out, ModelSummary{ID: lm.id, Name: lm.name, LoadedAt: lm.loadedAt})
+		out = append(out, ModelSummary{ID: lm.id, Name: lm.name, LoadedAt: lm.loadedAt,
+			MaxModelLen: e.defaultMaxSeq(lm)})
 	}
 	return out
 }

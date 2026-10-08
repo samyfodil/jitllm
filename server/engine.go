@@ -76,7 +76,7 @@ func (c *Config) withDefaults() {
 }
 
 // Engine owns every loaded model, every open session, and the gates that
-// serialise them onto hardware. It is the whole of the server's state; the six
+// record which sessions run on which hardware (they never queue one). It is the whole of the server's state; the six
 // Connect services and the two HTTP shims are projections of it.
 type Engine struct {
 	cfg     Config
@@ -664,10 +664,7 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 	}
 	maxSeq := o.MaxSeq
 	if maxSeq <= 0 {
-		maxSeq = e.cfg.DefaultMaxSeq
-	}
-	if maxSeq <= 0 {
-		maxSeq = lm.m.Cfg.NCtx
+		maxSeq = e.defaultMaxSeq(lm)
 	}
 	id := o.SessionID
 	if id == "" {
@@ -1521,4 +1518,12 @@ func (e *Engine) applyPageBudget(lm *LoadedModel, newest *model.State) {
 		return // every block is on a device for every session; nothing faults here
 	}
 	lm.m.SetPageBudget(pagerBudget(avail))
+}
+
+// defaultMaxSeq is the KV capacity a session of lm gets when it asks for none.
+func (e *Engine) defaultMaxSeq(lm *LoadedModel) int {
+	if e.cfg.DefaultMaxSeq > 0 {
+		return e.cfg.DefaultMaxSeq
+	}
+	return lm.m.Cfg.NCtx
 }

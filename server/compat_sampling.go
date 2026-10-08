@@ -1,0 +1,112 @@
+package server
+
+import (
+	"encoding/json"
+	"fmt"
+	"math/rand/v2"
+
+	"github.com/samyfodil/jitllm/engine/model"
+)
+
+// oaSampling is every sampling field the two shims read, decoded in one place
+// so the OpenAI routes and the Anthropic route build the same sampler from the
+// same request.
+//
+// A request that names no sampling field gets the API's documented defaults,
+// temperature 1 and top_p 1, not the session's greedy sampler: an HTTP
+// benchmark sends one request body to every engine, and every other engine
+// samples it at temperature 1. Greedy is temperature 0, as the API spells it.
+// The one exception is a request naming a jitllm_session and no sampling field,
+// which keeps the sampler that session was opened with.
+//
+//	temperature         0 = greedy; default 1
+//	top_p               nucleus; default 1 (disabled)
+//	top_k               0 or -1 = disabled (vLLM spells disabled -1)
+//	min_p               0 = disabled
+//	repetition_penalty  1 = disabled; llama.cpp's repeat_penalty over the last 64
+//	seed                the draw's seed; without one each request draws its own
+//	presence_penalty,
+//	frequency_penalty   the engine's sampler has neither, so a non-zero value is
+//	                    refused rather than ignored
+//	n                   one choice per request; n > 1 is refused
+//	logprobs,
+//	top_logprobs        not produced; a request asking for them is refused
+type oaSampling struct {
+	Temperature       *float64        `json:"temperature"`
+	TopP              *float64        `json:"top_p"`
+	TopK              *int            `json:"top_k"`
+	MinP              *float64        `json:"min_p"`
+	RepetitionPenalty *float64        `json:"repetition_penalty"`
+	PresencePenalty   *float64        `json:"presence_penalty"`
+	FrequencyPenalty  *float64        `json:"frequency_penalty"`
+	Seed              *int64          `json:"seed"`
+	N                 *int            `json:"n"`
+	Logprobs          json.RawMessage `json:"logprobs"`
+	TopLogprobs       *int            `json:"top_logprobs"`
+}
+
+// sampler validates the fields and builds the sampler a request runs with. nil
+// means the session's own, which only a named session with no sampling field
+// gets.
+func (q *oaSampling) sampler(session string) (*model.Sampler, error) {
+	if q.N != nil && *q.N != 1 {
+		return nil, fmt.Errorf("n=%d: only one choice per request is supported", *q.N)
+	}
+	switch string(q.Logprobs) {
+	case "", "null", "false", "0":
+	default:
+		return nil, fmt.Errorf("logprobs are not supported")
+	}
+	if q.TopLogprobs != nil && *q.TopLogprobs != 0 {
+		return nil, fmt.Errorf("top_logprobs are not supported")
+	}
+	if q.PresencePenalty != nil && *q.PresencePenalty != 0 {
+		return nil, fmt.Errorf("presence_penalty is not supported; repetition_penalty is")
+	}
+	if q.FrequencyPenalty != nil && *q.FrequencyPenalty != 0 {
+		return nil, fmt.Errorf("frequency_penalty is not supported; repetition_penalty is")
+	}
+	if session != "" && q.Temperature == nil && q.TopP == nil && q.TopK == nil &&
+		q.MinP == nil && q.RepetitionPenalty == nil && q.Seed == nil {
+		return nil, nil
+	}
+	s := &model.Sampler{Temp: 1, TopP: 1}
+	if q.Temperature != nil {
+		if *q.Temperature < 0 {
+			return nil, fmt.Errorf("temperature %v is negative", *q.Temperature)
+		}
+		s.Temp = *q.Temperature
+	}
+	if q.TopP != nil {
+		if *q.TopP < 0 || *q.TopP > 1 {
+			return nil, fmt.Errorf("top_p %v is outside [0, 1]", *q.TopP)
+		}
+		s.TopP = *q.TopP
+	}
+	if q.TopK != nil {
+		if *q.TopK < -1 {
+			return nil, fmt.Errorf("top_k %d is below -1", *q.TopK)
+		}
+		s.TopK = max(*q.TopK, 0)
+	}
+	if q.MinP != nil {
+		if *q.MinP < 0 || *q.MinP > 1 {
+			return nil, fmt.Errorf("min_p %v is outside [0, 1]", *q.MinP)
+		}
+		s.MinP = *q.MinP
+	}
+	if q.RepetitionPenalty != nil {
+		if *q.RepetitionPenalty <= 0 {
+			return nil, fmt.Errorf("repetition_penalty %v is not positive", *q.RepetitionPenalty)
+		}
+		s.RepeatPen = *q.RepetitionPenalty
+	}
+	if q.Seed != nil {
+		s.Seed = *q.Seed
+	} else {
+		// Unseeded requests must not all draw the same sequence, which a zero
+		// seed would make them do.
+		s.Seed = rand.Int64()
+	}
+	return s, nil
+}

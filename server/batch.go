@@ -23,11 +23,11 @@ import (
 // path does, and its events go to an outbox its request goroutine drains, so a
 // slow client never holds up a step.
 //
-// The loop holds the model's gates while it has rows, as one generate held
-// them before; while another request waits on any of those gates it admits no
-// one new, lets its rows finish and hands the gates over, so a session on the
-// one-at-a-time path is delayed by a batch the way it was by a generate, and
-// never starved by one.
+// The loop is recorded on the model's gates while it has rows. Nothing queues
+// on a gate (gate.go), so the loop admits a waiting request as a row whenever
+// it has room (Config.MaxBatchRows), and a session on the one-at-a-time path runs
+// beside it, the two interleaving a step at a time rather than one waiting for
+// the other to finish.
 //
 // A joint step is not always the faster: for each row count the loop times it
 // against running the rows one session after another, in situ, and runs the

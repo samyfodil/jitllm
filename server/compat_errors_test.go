@@ -274,7 +274,7 @@ func TestFinishReasonsSpeakEachAPIsVocabulary(t *testing.T) {
 		{FinishMaxTokens, "", "length", "max_tokens", false},
 		{FinishStop, "END", "stop", "stop_sequence", true},
 		{FinishEOS, "", "stop", "end_turn", false},
-		{FinishCancelled, "", "cancelled", "end_turn", false},
+		{FinishCancelled, "", "stop", "end_turn", false},
 	} {
 		f := &fakeBackend{tokens: []string{"a", "b"}, reason: tc.reason, stopAt: tc.stopAt}
 		s := serve(t, f)
@@ -351,8 +351,9 @@ func TestRequestFieldsReachTheEngine(t *testing.T) {
 	if o.Sampling == nil || o.Sampling.Temp != 0.7 || o.Sampling.TopP != 0.9 || o.Sampling.Seed != 42 {
 		t.Fatalf("openai sampling reached the engine as %+v", o.Sampling)
 	}
-	if o := send(oaChat, `{"model":"m-1","messages":[{"role":"user","content":"hi"}]}`); o.Sampling != nil {
-		t.Fatalf("a request naming no sampling field overrode the session's sampler with %+v", o.Sampling)
+	o = send(oaChat, `{"model":"m-1","top_k":40,"min_p":0.05,"repetition_penalty":1.1,"presence_penalty":0,"n":1,"logprobs":false,"messages":[{"role":"user","content":"hi"}]}`)
+	if o.Sampling == nil || o.Sampling.TopK != 40 || o.Sampling.MinP != 0.05 || o.Sampling.RepeatPen != 1.1 || o.Sampling.Temp != 1 {
+		t.Fatalf("top_k, min_p and repetition_penalty reached the engine as %+v", o.Sampling)
 	}
 	o = send(anMsgs, `{"model":"m-1","max_tokens":8,"temperature":0.5,"top_p":0.8,"top_k":40,"messages":[{"role":"user","content":"hi"}]}`)
 	if o.Sampling == nil || o.Sampling.Temp != 0.5 || o.Sampling.TopP != 0.8 || o.Sampling.TopK != 40 {
@@ -367,8 +368,8 @@ func TestRequestFieldsReachTheEngine(t *testing.T) {
 	}
 
 	o = send(oaText, `{"model":"m-1","prompt":["first","second"],"echo":true,"stop":["a","b"]}`)
-	if o.Prompt.Kind != PromptText || o.Prompt.Text != "first" || !o.Echo || strings.Join(o.Stop, ",") != "a,b" {
-		t.Fatalf("a batched prompt reached the engine as %+v echo=%v stop=%v", o.Prompt, o.Echo, o.Stop)
+	if o.Prompt.Kind != PromptText || o.Prompt.Text != "second" || !o.Echo || strings.Join(o.Stop, ",") != "a,b" {
+		t.Fatalf("a batched prompt's last run reached the engine as %+v echo=%v stop=%v", o.Prompt, o.Echo, o.Stop)
 	}
 	o = send(oaText, `{"model":"m-1","prompt":[1,2,3],"max_tokens":5}`)
 	if o.Prompt.Kind != PromptIDs || len(o.Prompt.IDs) != 3 || o.Prompt.IDs[2] != 3 || o.MaxTokens != 5 {
