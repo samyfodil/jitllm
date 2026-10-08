@@ -1,6 +1,7 @@
 package sched
 
 import (
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -105,20 +106,45 @@ func TestOverlappingCrewsShareTheirTurn(t *testing.T) {
 	}
 }
 
-// A view waiting for the crew runs after at most the region in flight, however
-// fast the other view relocks and however few threads the runtime has: on a
-// three-core runner one session once ran a whole reply while another's
-// generate produced no token. Here a view loops regions back to back on
-// GOMAXPROCS=2 under a three-worker crew, and the other's every region must
-// come within two of its regions of the last.
+// A view waiting for the crew is handed the turn before the holder takes it
+// again: on a three-core runner one session once ran a whole reply while
+// another's generate produced no token. View a loops regions back to back on
+// GOMAXPROCS 1, 2 and 3 under a three-worker crew while b runs regions too, and the
+// lock reports each time b queues (onTurnQueue). From b queuing to b's region
+// starting, a may finish the one region it already held and start none: a
+// count, not a timing, so a runner too loaded to schedule b promptly changes
+// how often b queues and never the bound. (Counting a's regions between two
+// of b's measured scheduling: with b not yet back in Lock, a rightly runs on.)
+//
+// VIOLATION SIGNATURE. With the turn's Lock and Unlock a plain sync.Mutex
+// (and the hook called when a TryLock fails), a re-takes the turn past the
+// waiting b and this fails with "view a started N regions while b was queued".
 func TestSharedViewsAlternateUnderContention(t *testing.T) {
-	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(2))
+	for _, procs := range []int{1, 2, 3} {
+		t.Run(fmt.Sprintf("procs=%d", procs), func(t *testing.T) { alternate(t, procs) })
+	}
+}
+
+func alternate(t *testing.T, procs int) {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(procs))
 	cpus := []int{0, 1, 2}
 	a, b := Shared(cpus), Shared(cpus)
 	defer a.Close()
 	defer b.Close()
 
-	var aRegions atomic.Int64
+	var bQueued atomic.Bool
+	var queued, worst, cur, aRuns atomic.Int64
+	onTurnQueue = func(w chan struct{}) {
+		if w == b.wake {
+			// The count restarts before the flag goes up, or a region of a
+			// reading the new flag adds to the last wait's count.
+			cur.Store(0)
+			queued.Add(1)
+			bQueued.Store(true)
+		}
+	}
+	defer func() { onTurnQueue = nil }()
+
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
@@ -129,30 +155,37 @@ func TestSharedViewsAlternateUnderContention(t *testing.T) {
 				return
 			default:
 			}
-			a.Do(64, 1, func(_, lo, hi int) {})
-			aRegions.Add(1)
+			// Counted on the first chunk only: the region is one turn.
+			a.Do(64, 1, func(_, lo, hi int) {
+				if lo == 0 && bQueued.Load() {
+					if n := cur.Add(1); n > worst.Load() {
+						worst.Store(n)
+					}
+				}
+			})
+			aRuns.Add(1)
 		}
 	}()
-	for aRegions.Load() < 100 {
-		runtime.Gosched() // a is running back to back before b asks
+	for aRuns.Load() < 100 {
+		runtime.Gosched() // a is looping back to back before b asks
 	}
 	const regions = 500
-	worst := int64(0)
-	last := aRegions.Load()
 	for r := 0; r < regions; r++ {
-		b.Do(64, 1, func(_, lo, hi int) {})
-		now := aRegions.Load()
-		if d := now - last; d > worst {
-			worst = d
-		}
-		last = now
+		b.Do(64, 1, func(_, lo, hi int) {
+			if lo == 0 {
+				bQueued.Store(false)
+			}
+		})
 	}
 	close(stop)
 	<-done
-	// The region a has in flight when b queues, and the one a's goroutine
-	// counts after b's handoff, are the most a can run between two of b's.
-	if worst > 2 {
-		t.Fatalf("view a ran %d regions between two of b's: a waiting view is not handed the turn", worst)
+	if queued.Load() == 0 {
+		t.Fatal("b never queued behind a in 500 regions: the gate exercised no contention")
 	}
-	t.Logf("a ran at most %d region(s) between two of b's; %d in all", worst, aRegions.Load())
+	// The region a held when b queued may count once, if its first chunk ran
+	// after b queued; any further one started past the waiting b.
+	if worst.Load() > 1 {
+		t.Fatalf("view a started %d regions while b was queued: a waiting view is not handed the turn", worst.Load())
+	}
+	t.Logf("b queued %d time(s); a ran at most %d region(s) while b waited", queued.Load(), worst.Load())
 }
