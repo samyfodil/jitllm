@@ -10,7 +10,7 @@ The desktop app is a window on the same engine as `jitllm` and `jitllmd`. It run
 Install it with the [install script](/docs/install/#install-a-release):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/samyfodil/jitllm/main/scripts/install.sh | sh -s -- desktop
+curl -fsSL https://jitllm.org/install.sh | sh -s -- desktop
 jitllm-desktop
 ```
 

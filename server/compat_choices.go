@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 
@@ -36,17 +37,6 @@ func oaChoiceSeeds(n *int, seed *int64) ([]int64, error) {
 		out[i] = base + int64(i)
 	}
 	return out, nil
-}
-
-// oaSampling is the request's sampler, with a seed of its own when the
-// request asked for several choices (Engine.generateN overrides it per
-// choice, so it only has to exist).
-func oaSampling(temp, topP *float64, seed *int64, seeds []int64) *model.Sampler {
-	s := samplerFrom(temp, topP, seed)
-	if s == nil && len(seeds) > 0 {
-		s = &model.Sampler{}
-	}
-	return s
 }
 
 // oaTopLogprob is one alternative in the chat shape.
@@ -119,10 +109,16 @@ func (r oaLogprobRequest) apply(o *GenerateOptions) {
 	o.Logprobs, o.TopLogprobs = r.on, r.top
 }
 
-// oaChatLogprobsOf reads chat's `logprobs` (bool) and `top_logprobs`
+// oaChatLogprobsOf reads chat's `logprobs` (a bool) and `top_logprobs`
 // (0..20, only with logprobs), as the API refuses them.
-func oaChatLogprobsOf(on *bool, top *int) (oaLogprobRequest, error) {
-	r := oaLogprobRequest{on: on != nil && *on}
+func oaChatLogprobsOf(raw json.RawMessage, top *int) (oaLogprobRequest, error) {
+	var on bool
+	if len(raw) > 0 && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &on); err != nil {
+			return oaLogprobRequest{}, fmt.Errorf("logprobs must be true or false on chat completions")
+		}
+	}
+	r := oaLogprobRequest{on: on}
 	if top != nil {
 		if !r.on {
 			return r, fmt.Errorf("top_logprobs needs logprobs set to true")
@@ -135,13 +131,21 @@ func oaChatLogprobsOf(on *bool, top *int) (oaLogprobRequest, error) {
 	return r, nil
 }
 
-// oaLegacyLogprobsOf reads /v1/completions' `logprobs`, an alternative count.
-func oaLegacyLogprobsOf(n *int) (oaLogprobRequest, error) {
-	if n == nil {
+// oaLegacyLogprobsOf reads /v1/completions' `logprobs`, an alternative count;
+// top_logprobs is chat's field and is refused here rather than ignored.
+func oaLegacyLogprobsOf(raw json.RawMessage, top *int) (oaLogprobRequest, error) {
+	if top != nil {
+		return oaLogprobRequest{}, fmt.Errorf("top_logprobs is a chat field; /v1/completions takes logprobs as a count")
+	}
+	if len(raw) == 0 || string(raw) == "null" {
 		return oaLogprobRequest{}, nil
 	}
-	if *n < 0 || *n > model.MaxTopLogprobs {
+	var n int
+	if err := json.Unmarshal(raw, &n); err != nil {
+		return oaLogprobRequest{}, fmt.Errorf("logprobs must be a count on /v1/completions")
+	}
+	if n < 0 || n > model.MaxTopLogprobs {
 		return oaLogprobRequest{}, fmt.Errorf("logprobs must be between 0 and %d", model.MaxTopLogprobs)
 	}
-	return oaLogprobRequest{on: true, top: *n}, nil
+	return oaLogprobRequest{on: true, top: n}, nil
 }
