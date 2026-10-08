@@ -227,6 +227,13 @@ type kvPages struct {
 	genuine int
 	// spare is released pages, reused before the pool or a fresh one.
 	spare [][]float32
+	// shared[n] says page n aliases sh's single copy (kvshare.go): it is
+	// never written in place, never pooled, and its reference is dropped
+	// wherever the page is let go. cowFault is the sharing gate's violation:
+	// a write into a shared page lands in place.
+	shared   []bool
+	sh       *SharedStore
+	cowFault bool
 }
 
 // keyStart is the first key position pos attends on this layer: the window's
@@ -273,6 +280,10 @@ func (s *kvPages) release(low int, fault bool) {
 // holds at most what a window and its slack turn over (spareMax); a page past
 // that goes to the collector.
 func (s *kvPages) recycle(n int) {
+	if s.isShared(n) {
+		s.drop(n) // others read it: the reference goes, the memory stays
+		return
+	}
 	for _, b := range [2][]float32{s.k[n], s.v[n]} {
 		if b != nil && len(b) == s.pp && len(s.spare) < s.spareMax() {
 			s.spare = append(s.spare, b)
@@ -320,6 +331,7 @@ func (s *kvPages) reserve(maxSeq int) {
 
 // drop lets page n go for good: nothing is to be faulted back into it.
 func (s *kvPages) drop(n int) {
+	s.unshare(n)
 	s.k[n], s.v[n] = nil, nil
 	if n < len(s.out) {
 		s.out[n] = false
@@ -371,6 +383,11 @@ func (s *kvPages) extend(n int) {
 	for len(s.out) <= n {
 		s.out = append(s.out, false)
 	}
+	if s.sh != nil {
+		for len(s.shared) <= n {
+			s.shared = append(s.shared, false)
+		}
+	}
 }
 
 // bytes is what this layer's pages occupy right now -- what has actually been
@@ -381,8 +398,13 @@ func (s *kvPages) bytes() uint64 {
 	}
 	// Counted by what is resident, not by the slice's length: eviction nils a
 	// slot and leaves the length unchanged.
+	// A shared page is the store's, held once however many sessions read it
+	// (KVSharedBytes counts it).
 	var n uint64
 	for i := range s.k {
+		if s.isShared(i) {
+			continue
+		}
 		if s.k[i] != nil {
 			n++
 		}
@@ -475,6 +497,11 @@ type kvCache struct {
 	// walkWindow is the prefix gate's violation (TestPrefixCacheRestoresAWindowedLayer):
 	// a windowed layer's coverage is walked from zero, as a full layer's is.
 	walkWindow bool
+	// share is the store this session's sealed pages are held once in
+	// (State.ShareKV), nil when it shares nothing; shareRefused counts the
+	// device moves a shared page refused.
+	share        *SharedStore
+	shareRefused int64
 }
 
 func newKVCache(c *Config, id string, nseq int, l kvLayout, store KVStore, pin int) *kvCache {
@@ -581,6 +608,7 @@ func (s *kvPages) write(l kvLayout, slot, pos int, k, v []float32) {
 	}
 	pg, off := s.page(pos)
 	s.grow(pg)
+	s.cow(pg) // a shared page is never written in place
 	pl := s.layout(l)
 	pl.Write(s.k[pg], slot, off, k)
 	pl.Write(s.v[pg], slot, off, v)
@@ -598,6 +626,11 @@ func (s *kvPages) write(l kvLayout, slot, pos int, k, v []float32) {
 func (s *kvPages) gather(l kvLayout, slot, n int, k, v []float32) bool {
 	if s.p == 0 || n <= 0 {
 		return true
+	}
+	// A shared page does not move to a device for one of its holders: the
+	// block stays home (kvshare.go).
+	if s.anyShared() {
+		return false
 	}
 	pl := s.layout(l)
 	kvDim := l.kvDim()
@@ -650,6 +683,7 @@ func (s *kvPages) scatter(l kvLayout, slot, n int, k, v []float32) bool {
 	kvDim := l.kvDim()
 	for pos := live * s.p; pos < n; pos++ {
 		pg, off := s.page(pos)
+		s.cow(pg)
 		i := pl.At(slot, off, 0)
 		o := l.slots(pos * kvDim)
 		w := l.slots(kvDim)
@@ -700,6 +734,12 @@ func (s *State) migrateKV(li, pos int, toDevice bool) bool {
 	}
 	if s.nseq > 1 {
 		return s.migrateKVRows(li, toDevice)
+	}
+	// A shared page does not move to a device for one of its holders: the
+	// block stays home (kvshare.go).
+	if toDevice && pg.anyShared() {
+		s.kv.shareRefused++
+		return false
 	}
 	kvl := s.kvlAt(li)
 	k, v, fk, fv := kvMigBufs(kvl, pos)
@@ -1730,6 +1770,13 @@ func (kc *kvCache) seal(pos int) {
 			if key == "" {
 				break // the tokens behind this page are not known; it cannot be named
 			}
+			if kc.share != nil {
+				// Held once: the page becomes the store's copy, or the
+				// store's copy replaces it (kvshare.go).
+				kc.publishSealed(li, n, key)
+				kc.stored += 2
+				continue
+			}
 			if err := kc.store.Set(key, li*2, n, bytes.NewReader(kvBytesOf(s.k[n]))); err != nil {
 				kc.failed++
 				break
@@ -1762,6 +1809,7 @@ func (kc *kvCache) trim(pos int) {
 			if n >= len(s.k) || s.k[n] == nil {
 				continue
 			}
+			s.unshare(n)
 			s.k[n], s.v[n] = nil, nil
 			s.out[n] = true
 			kc.evicted += 2
@@ -1782,14 +1830,17 @@ func (kc *kvCache) fault(li, n int) error {
 	// failure path below leaves it nil: a zeroed page present would read as
 	// history.
 	s.k[n], s.v[n] = nil, nil
-	k := make([]float32, s.pp)
-	v := make([]float32, s.pp)
-	// The length is checked here, where the geometry is: a short page would
-	// leave zeros read back as keys the model never wrote.
 	key := kc.pageKey(li, n)
 	if key == "" {
 		return ErrNoPage // nothing names this page, so nothing can hold it
 	}
+	if kc.share != nil {
+		return kc.faultShared(li, n, key)
+	}
+	// The length is checked here, where the geometry is: a short page would
+	// leave zeros read back as keys the model never wrote.
+	k := make([]float32, s.pp)
+	v := make([]float32, s.pp)
 	kw := newSliceWriter(kvBytesOf(k))
 	if err := kc.store.Get(key, li*2, n, kw); err != nil {
 		return kc.miss(key, err)
@@ -1813,6 +1864,9 @@ func (kc *kvCache) fault(li, n int) error {
 // faultFill is fault for a page stored under its fill rather than as a whole
 // one. A short read is still a miss.
 func (kc *kvCache) faultFill(li, n, fill int) error {
+	if kc.share != nil {
+		return ErrNoPage // a sharing session stores no partial page (sealTail)
+	}
 	s := &kc.layers[li]
 	key := kc.pageKeyFill(li, n, fill)
 	if key == "" {
@@ -1902,6 +1956,12 @@ func (kc *kvCache) sealTail(pos int) int {
 		return 0
 	}
 	if kc.ns == "" || pos <= 0 {
+		return 0
+	}
+	// A partial page is still being written, so it cannot be held once: a
+	// sharing session's divergent page is its own, and the next session
+	// computes its copy (kvshare.go).
+	if kc.share != nil {
 		return 0
 	}
 	stored := 0
