@@ -33,6 +33,10 @@ type Config struct {
 	// (default "models", relative to the working directory).
 	ModelDir string
 
+	// BatchDir is where the OpenAI Files and Batch APIs keep their files
+	// (default ".jitllm-batch" under ModelDir).
+	BatchDir string
+
 	// MaxBatchRows bounds how many generates of one device model decode as
 	// rows of one step (batch.go). Zero takes the engine's bound, the widest
 	// step a device runs across sessions; 1 turns batching off, and every
@@ -908,6 +912,17 @@ type GenerateOptions struct {
 	// MaxTokens: the token is emitted and fed like any other (vLLM's
 	// ignore_eos). Stop strings still end the generate.
 	IgnoreEOS bool
+	// Logprobs puts each sampled token's log-probability on its Token event,
+	// with the TopLogprobs (0..model.MaxTopLogprobs) most likely alternatives.
+	// They are the model's raw distribution, before temperature and penalties
+	// (model.Logprobs).
+	Logprobs    bool
+	TopLogprobs int
+	// Seeds, when it holds more than one, asks for that many continuations
+	// of one prompt (OpenAI's n): choice i samples with Seeds[i] and its
+	// events carry Event.Choice = i. The prompt is prefilled once; every
+	// other choice restores its pages and its logits (generateN).
+	Seeds []int64
 }
 
 // EventKind discriminates Event.
@@ -939,6 +954,10 @@ type Started struct {
 	// Batched is set when the generate decodes as a row of its model's step
 	// loop (batch.go) rather than alone on its gates.
 	Batched bool
+	// Restored is how many of the prompt's positions came out of a prompt
+	// store rather than being computed: all of them for every choice of an
+	// n > 1 request but the first.
+	Restored int
 }
 
 // Token is one step of the output. Every sampled token is sent, its Text
@@ -948,6 +967,46 @@ type Token struct {
 	ID    int32
 	Text  string
 	Index int
+	// Logprob is set on a sampled token when the request asked for logprobs.
+	Logprob *TokenLogprob
+}
+
+// TokenLogprob is a sampled token's log-probability and the most likely
+// alternatives at its step, most likely first. Text is the token alone,
+// decoded on its own: its bytes, which may be part of a rune.
+type TokenLogprob struct {
+	Text    string
+	Logprob float32
+	Top     []TopToken
+}
+
+// TopToken is one alternative at a step.
+type TopToken struct {
+	ID      int32
+	Text    string
+	Logprob float32
+}
+
+// newLogprobs is a generate's logprobs working set, nil when it asked for none.
+func newLogprobs(o GenerateOptions) *model.Logprobs {
+	if !o.Logprobs {
+		return nil
+	}
+	return &model.Logprobs{N: o.TopLogprobs}
+}
+
+// takeLogprob is the event's copy of one step's logprobs: the working set is
+// reused next step, so the event owns its own slice.
+func takeLogprob(l *model.Logprobs, v vocabDecoder, logits []float32, next int32) *TokenLogprob {
+	if l == nil {
+		return nil
+	}
+	out := &TokenLogprob{Text: v.Decode([]int32{next}), Logprob: l.Take(logits, next)}
+	out.Top = make([]TopToken, len(l.Top))
+	for i, t := range l.Top {
+		out.Top[i] = TopToken{ID: t.ID, Text: v.Decode([]int32{t.ID}), Logprob: t.Logprob}
+	}
+	return out
 }
 
 // FinishReason mirrors the proto enum.
@@ -982,6 +1041,9 @@ type Finished struct {
 // Event is one message of a generate's stream: Kind says which of Started,
 // Token and Finished is set.
 type Event struct {
+	// Choice is the continuation an event belongs to, 0 unless the request
+	// asked for several (GenerateOptions.Seeds).
+	Choice   int
 	Kind     EventKind
 	Started  *Started
 	Token    *Token
@@ -1005,6 +1067,17 @@ func tokenLimit(asked, room int) int {
 // request queued -- for a gate, or for a row of its model's step loop -- and
 // how many were ahead, so a caller does not mistake a queue for a slow model.
 func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Event) error) (err error) {
+	if len(o.Seeds) > 1 {
+		return e.generateN(ctx, o, emit)
+	}
+	if len(o.Seeds) == 1 {
+		if o.Sampling == nil {
+			return fmt.Errorf("%w: a seed with no sampler", ErrInvalid)
+		}
+		sm := *o.Sampling
+		sm.Seed = o.Seeds[0]
+		o.Sampling = &sm
+	}
 	s, ephemeral, err := e.resolveSession(o)
 	if err != nil {
 		return err
@@ -1090,6 +1163,10 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	if err != nil {
 		return err
 	}
+	restored := 0
+	if s.cached {
+		restored = s.st.KVRestored()
+	}
 	s.prefilled.Add(int64(prompted))
 	lm.tokensPrefilled.Add(int64(prompted))
 	prefill := time.Since(prefillStart)
@@ -1107,6 +1184,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		DeviceIDs:    lm.deviceIDs,
 		Prefill:      prefill,
 		Execution:    ExecutionParallel,
+		Restored:     restored,
 	}}); err != nil {
 		return err
 	}
@@ -1133,6 +1211,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	decodeStart := time.Now()
 	n := 0
 
+	lpw := newLogprobs(o)
 	for ; n < maxTokens; n++ {
 		if ctx.Err() != nil {
 			reason = FinishCancelled
@@ -1140,6 +1219,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		}
 		next := sampler.Sample(logits)
 		sampler.Observe(next)
+		tlp := takeLogprob(lpw, lm.m.Vocab, logits, next)
 		if !o.IgnoreEOS && lm.m.Vocab.IsEOG(next) {
 			reason = FinishEOS
 			break
@@ -1150,7 +1230,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		// or a possible stop string's start): a client counting ids must see
 		// all of them, as GenerateToken says.
 		chunk, hit, match := st.push(out)
-		if err := emit(Event{Kind: EventToken, Token: &Token{ID: next, Text: chunk, Index: n}}); err != nil {
+		if err := emit(Event{Kind: EventToken, Token: &Token{ID: next, Text: chunk, Index: n, Logprob: tlp}}); err != nil {
 			return err
 		}
 		if hit {
@@ -1194,6 +1274,66 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		BytesPerToken: lm.m.BytesPerToken(),
 		Position:      s.st.Pos(),
 	}})
+}
+
+// generateN is Generate for several continuations of one prompt (OpenAI's
+// n). The prompt is prefilled once: every choice runs on a fresh session of
+// the model sharing one request-scoped prompt store under one namespace, so
+// the first choice's prefill seals the prompt's pages and its final logits
+// into it and every later choice restores them (State.PrefillCached) and
+// computes no prompt position -- the prefix cache's own path, which is how
+// the engine forks a sequence. Started.Restored reports it per choice.
+//
+// The choices run one after another, each alone on the model's gates: a
+// State owns a pool, and n of them at once on the same cores is the worst
+// configuration the engine has. Each samples with its own seed and its events
+// carry its index.
+func (e *Engine) generateN(ctx context.Context, o GenerateOptions, emit func(Event) error) error {
+	if o.SessionID != "" || o.Continue {
+		return fmt.Errorf("%w: several choices run on fresh sessions of a model; "+
+			"a named session or continue_session takes one", ErrInvalid)
+	}
+	if o.Prompt.Kind == PromptSpans {
+		return fmt.Errorf("%w: several choices of a span prompt are not built", ErrInvalid)
+	}
+	lm, err := e.Model(o.ModelID)
+	if err != nil {
+		return err
+	}
+	store := model.NewMemStore()
+	ns := "n/" + lm.id + "/" + e.nextID("fork")
+	for i, seed := range o.Seeds {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		s, err := e.CreateSession(SessionOptions{ModelID: o.ModelID, KVStore: store, CacheKey: ns})
+		if err != nil {
+			return err
+		}
+		oi := o
+		oi.Seeds = nil
+		oi.ModelID, oi.SessionID = "", s.id
+		sm := s.sampling
+		if o.Sampling != nil {
+			sm = *o.Sampling
+		}
+		sm.Seed = seed
+		oi.Sampling = &sm
+		err = e.Generate(ctx, oi, func(ev Event) error {
+			ev.Choice = i
+			if ev.Started != nil {
+				st := *ev.Started
+				st.Ephemeral = true
+				ev.Started = &st
+			}
+			return emit(ev)
+		})
+		e.CloseSession(s.id)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // resolveSession returns the named session, or creates an ephemeral one for a
