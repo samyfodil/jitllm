@@ -1,8 +1,8 @@
 #!/bin/sh
 # Installs jitllm from a GitHub release on Linux or macOS.
 #
-#   curl -fsSL https://raw.githubusercontent.com/samyfodil/jitllm/main/scripts/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/samyfodil/jitllm/main/scripts/install.sh | sh -s -- all
+#   curl -fsSL https://jitllm.org/install.sh | sh
+#   curl -fsSL https://jitllm.org/install.sh | sh -s -- all
 #
 # Arguments name the programs to install: jitllm (the CLI), jitllmd (the
 # server), desktop (jitllm-desktop), tui (jitllm-tui), or all. With none it

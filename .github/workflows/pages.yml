@@ -5,7 +5,7 @@ name: pages
 on:
   push:
     branches: [main]
-    paths: ["website/**", ".github/workflows/pages.yml"]
+    paths: ["website/**", "scripts/install.sh", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
 permissions: {}
@@ -34,6 +34,9 @@ jobs:
       # astro.config.mjs prefixes every root-absolute link with it.
       - id: pages
         uses: actions/configure-pages@v6
+      # The install command is curl https://jitllm.org/install.sh: the site
+      # serves the repository's own script, so there is one copy of it.
+      - run: cp ../scripts/install.sh public/install.sh
       - run: npm ci
       - run: npm run build
         env:
