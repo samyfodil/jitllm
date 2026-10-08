@@ -5458,3 +5458,30 @@ broadcasts stay in registers for the whole table:
 	word 8*S            mscale  (rope.scaling.attn_factor, or 1)
 
 where S = RopeTabStride(npairs).
+
+## RULE 11e's cases
+
+Four limits that read as hardware and were choices, found while making
+sessions run at once on one device:
+
+- **A lock per request.** The server held a device for a whole generate
+  because the tier "serialises sessions on a device". The tier took its
+  scratch per step; the server had copied that limit up to the whole
+  request, so a long API answer blocked a chat until it finished.
+- **The device-wide current session.** `devTier.cur` and `switchTo` made the
+  session an implicit argument read in about sixty places, which forced one
+  session per device at a time. Passed as an argument, it went.
+- **"CUDA runs one stream in order."** One stream does; the backend had put
+  every session on the legacy stream. Two sessions on non-blocking streams
+  ran their kernels at once only after the next case was found.
+- **Pageable copies.** With a stream per session the two still took 1.92x
+  of one alone: a copy from pageable memory is staged by the driver
+  synchronously and held the other stream's kernels back. Through a pinned
+  arena per queue, 0.95x.
+
+And one that was real: NVIDIA's laptop Vulkan driver runs dispatches from
+two submissions one after another, on two queues or one (2.00x both ways),
+while its datacenter driver on the V100 overlaps them (1.00x). The way past
+it on that driver is to record the sessions' work into one submission,
+which is the step loop's batching.
+
