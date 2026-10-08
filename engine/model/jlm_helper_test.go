@@ -191,7 +191,9 @@ func convertPair(path, mmproj string) (string, error) {
 		// process, and two concurrent `go test` runs would otherwise let a
 		// reader open a half-written container. The loser of the race writes a
 		// byte-identical result.
-		tmp := fmt.Sprintf("%s.tmp-%d", dst, os.Getpid())
+		// The private name keeps the container's extension: on Windows place
+		// may serve it as it is, and Open reads nothing but a .jlm.
+		tmp := servedName(dst, os.Getpid())
 		sweepServedCopies(dst)
 		if _, err := convert.FromGGUFs(path, mmproj, tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}); err != nil {
 			os.Remove(tmp)
@@ -232,6 +234,12 @@ func place(tmp, dst string) (string, error) {
 	return "", err
 }
 
+// servedName is a conversion's private name for process pid: dst with the
+// pid before its extension.
+func servedName(dst string, pid int) string {
+	return fmt.Sprintf("%s.tmp-%d%s", strings.TrimSuffix(dst, jlm.Ext), pid, jlm.Ext)
+}
+
 // sweepServedCopies removes the copies place kept in earlier runs. Windows
 // refuses to remove a file that is open, so a copy a running test binary still
 // reads survives this; elsewhere place never keeps one.
@@ -239,7 +247,7 @@ func sweepServedCopies(dst string) {
 	if runtime.GOOS != "windows" {
 		return
 	}
-	old, _ := filepath.Glob(dst + ".tmp-*")
+	old, _ := filepath.Glob(strings.TrimSuffix(dst, jlm.Ext) + ".tmp-*" + jlm.Ext)
 	for _, f := range old {
 		os.Remove(f)
 	}
@@ -273,7 +281,7 @@ func convertDir(dir string) (string, error) {
 				}
 			}
 		}
-		tmp := fmt.Sprintf("%s.tmp-%d", dst, os.Getpid())
+		tmp := servedName(dst, os.Getpid())
 		sweepServedCopies(dst)
 		if _, err := convert.FromSafetensors(dir, tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}); err != nil {
 			os.Remove(tmp)
@@ -433,4 +441,22 @@ func modelFiles() []string {
 	}
 	p := testmodels.Glob("*.jlm")
 	return p
+}
+
+// TestAServedCopyOpens: the copy place serves on Windows, when another test
+// binary holds the container and the rename is refused, is a container Open
+// reads. Named <dst>.tmp-<pid> it was refused for its extension, and every
+// gate that drew it failed with "is not a .jlm container".
+func TestAServedCopyOpens(t *testing.T) {
+	src := testmodels.Path("stories260K.gguf")
+	dst := filepath.Join(t.TempDir(), "stories260K"+jlm.Ext)
+	tmp := servedName(dst, os.Getpid())
+	if _, err := convert.FromGGUFs(src, "", tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}); err != nil {
+		t.Skipf("MODEL MISSING: %v", err)
+	}
+	m, err := Open(tmp)
+	if err != nil {
+		t.Fatalf("the served copy %s does not open: %v", filepath.Base(tmp), err)
+	}
+	m.Close()
 }
