@@ -140,7 +140,7 @@ func TestMoERouteDivergencesAreRecorded(t *testing.T) {
 func TestMoERouteReadsNothingPastTheExperts(t *testing.T) {
 	for _, cfg := range moeV3Cfgs {
 		n, k := cfg.n, cfg.k
-		b, err := EmitMoERoute(n, k, cfg.g)
+		b, err := EmittersFor(HostTier()).MoERoute(n, k, cfg.g) // this host's tier, SSE on an Atom
 		if err != nil {
 			t.Fatalf("%s: %v", cfg.name, err)
 		}

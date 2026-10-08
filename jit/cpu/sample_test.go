@@ -18,7 +18,8 @@ import (
 // does no arithmetic and the draw is sequential in lane 0.
 
 // sampleMapPair maps both x86 tiers' bytes for one op, and checks the SSE ones
-// declare the SSE tier and carry no VEX prefix before either executes.
+// declare the SSE tier and carry no VEX prefix before either executes. On a
+// host without AVX2 only the SSE arm is mapped (tierArmRuns).
 func sampleMapPair(t *testing.T, name string, avx, sse []byte) []struct {
 	name string
 	c    *Code
@@ -37,6 +38,9 @@ func sampleMapPair(t *testing.T, name string, avx, sse []byte) []struct {
 		n string
 		b []byte
 	}{{"avx2", avx}, {"sse", sse}} {
+		if !tierArmRuns(t, e.n+" "+name, e.b) {
+			continue
+		}
 		c, err := MapNamed(e.b, name+"_"+e.n)
 		if err != nil {
 			t.Fatalf("mapping the %s %s: %v", e.n, name, err)
@@ -139,6 +143,7 @@ func TestSampleSegMaxWalksAWholeRowInOrder(t *testing.T) {
 		f    func(first, idsMem bool) ([]byte, error)
 	}{{"avx2", EmitSampleSegMax}, {"sse", EmitSampleSegMaxSSE}} {
 		k := kern{name: tier.name}
+		runs := true
 		for _, e := range []struct {
 			dst           **Code
 			first, idsMem bool
@@ -147,6 +152,10 @@ func TestSampleSegMaxWalksAWholeRowInOrder(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s(%v,%v): %v", tier.name, e.first, e.idsMem, err)
 			}
+			if !tierArmRuns(t, tier.name+" sample_walk", b) {
+				runs = false
+				break
+			}
 			c, err := MapNamed(b, "sample_walk")
 			if err != nil {
 				t.Fatalf("mapping: %v", err)
@@ -154,7 +163,9 @@ func TestSampleSegMaxWalksAWholeRowInOrder(t *testing.T) {
 			t.Cleanup(func() { c.Close() })
 			*e.dst = c
 		}
-		arms = append(arms, k)
+		if runs {
+			arms = append(arms, k)
+		}
 	}
 	for _, row := range sampleRows() {
 		for _, segLen := range []int{1, 2, 4, 8, 16} {
@@ -296,7 +307,10 @@ func TestSampleKernelsRefuseTheirViolations(t *testing.T) {
 			return segMaxGo(row, ids, segLen+1, segs, true, 0, 0)
 		}},
 	}
-	b, err := EmitSampleSegMax(true, false)
+	// The violations run against this host's tier: the SSE kernels on an
+	// SSE-only host, the AVX2 ones above it.
+	tab := EmittersFor(HostTier())
+	b, err := tab.SampleSegMax(true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +319,7 @@ func TestSampleKernelsRefuseTheirViolations(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	be, err := EmitSampleSegMax(false, false)
+	be, err := tab.SampleSegMax(false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +357,7 @@ func TestSampleKernelsRefuseTheirViolations(t *testing.T) {
 		{0.5, 0.5},
 		{0.25, 0.25, 0.25, 0.25},
 	}
-	bd, err := EmitSampleDraw()
+	bd, err := tab.SampleDraw()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +442,7 @@ func TestSampleKernelsRefuseTheirViolations(t *testing.T) {
 	}
 
 	// And the penalty's.
-	bp, err := EmitSamplePenalty()
+	bp, err := tab.SamplePenalty()
 	if err != nil {
 		t.Fatal(err)
 	}

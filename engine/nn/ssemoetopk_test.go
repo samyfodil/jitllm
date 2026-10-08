@@ -10,12 +10,28 @@ import (
 	"github.com/samyfodil/jitllm/jit/cpu"
 )
 
+// skipOnAnSSEHost skips a gate that warms the host's own tier and then forces
+// SSE: on a host whose probe already answers SSE the warm call maps the SSE
+// kernel, so there is no second tier to tell apart. proves names what the gate
+// would have shown and where this host's SSE half is covered instead.
+func skipOnAnSSEHost(t *testing.T, proves string) {
+	t.Helper()
+	if cpu.HostTier() == cpu.TierSSE {
+		t.Skipf("this host's tier is SSE (no AVX2, FMA, F16C), so there is no AVX2 kernel to "+
+			"warm before forcing SSE; a host above SSE runs this gate, which proves %s", proves)
+	}
+}
+
 // TestMoETopK32JITIsKeyedByTier checks a forced SSE run actually selects an
 // SSE kernel: a cache keyed without the tier would hand it the AVX2 kernel an
 // earlier call mapped, which answers correctly. So this warms the host's own
 // tier first, then forces SSE and requires a new kernel to be mapped on the
 // SSE tier and none on the AVX2 one.
 func TestMoETopK32JITIsKeyedByTier(t *testing.T) {
+	skipOnAnSSEHost(t, "that a forced SSE call maps its own top-k rather than the warmed "+
+		"AVX2 one, and that the two tiers agree bit for bit; the SSE kernel itself is "+
+		"held to the Go loops here by TestMoETopK32JITMatchesTheGoLoops and "+
+		"jit/cpu's TestMoETopKMatchesTheGoLoops")
 	const n, k = 128, 8
 	rng := rand.New(rand.NewSource(11))
 	p := make([]float32, n)

@@ -46,6 +46,9 @@ func moeKernels(t *testing.T, n, k int, norm bool) ([]struct {
 		name string
 		body []byte
 	}{{"avx2", avx}, {"sse", sse}} {
+		if !tierArmRuns(t, e.name, e.body) {
+			continue
+		}
 		c, err := MapNamed(e.body, "moe_topk_gate_"+e.name)
 		if err != nil {
 			t.Fatalf("mapping the %s top-k: %v", e.name, err)

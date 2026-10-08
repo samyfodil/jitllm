@@ -80,7 +80,14 @@ func TestMatVecPickArmsGiveTheirKernelsAnswer(t *testing.T) {
 	defer j.Close()
 	if j.tier != cpu.TierNEON {
 		// x86 times prefetch distances per shape, not kernels; see
-		// TestPrefetchDistanceIsPickedPerShape.
+		// TestPrefetchDistanceIsPickedPerShape. A tier whose fused kernel has
+		// no prefetch form (SSE) has nothing to time.
+		if _, err := cpu.EmittersFor(j.tier).PackedFusedAhead(gt, cpu.FusedAheadWords); err != nil {
+			if p := j.pickFor(gt, rows, k, rows); p != nil {
+				t.Fatalf("tier %v has no prefetch form, yet a chooser was made: %+v", j.tier, p)
+			}
+			return
+		}
 		if p := j.pickFor(gt, rows, k, rows); p == nil || !p.dist {
 			t.Fatalf("tier %v: default chooser %+v, want the prefetch-distance one", j.tier, p)
 		}

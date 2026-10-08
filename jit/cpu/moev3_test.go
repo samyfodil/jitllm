@@ -36,6 +36,9 @@ func moeV3Kernels(t *testing.T, cfg moeV3Cfg) ([]moeV3Kernel, func()) {
 		name string
 		body []byte
 	}{{"avx2", avx}, {"sse", sse}} {
+		if !tierArmRuns(t, e.name, e.body) {
+			continue
+		}
 		c, err := MapNamed(e.body, "moe_route_"+e.name)
 		if err != nil {
 			t.Fatalf("mapping the %s router: %v", e.name, err)

@@ -32,6 +32,19 @@ func ranGEMM(t *testing.T, f *JIT, pk *Packed) bool {
 	return f.PackedGEMMCalls() > before
 }
 
+// tierHasGEMM reports whether f's tier emits either GEMM ranGEMM probes. The
+// SSE tier declines both by design (the GGUF row-major machinery,
+// cpu.Emitters.RowMajorGGUF, and the weight-stationary GEMM,
+// cpu.EmitPackedGEMMSSE), so there WithoutGEMM has nothing to turn off and a
+// GEMM must not run whatever the option says.
+func tierHasGEMM(f *JIT) bool {
+	if f.em.RowMajorGGUF {
+		return true
+	}
+	_, err := f.em.PackedGEMM(quant.Q4_K, 256, 64, 0)
+	return err == nil
+}
+
 // Two JITs in one process must each behave per their own options. The two
 // knobs below are read at call time rather than at construction, which makes a
 // leak between JITs observable without a stopwatch:
@@ -63,9 +76,16 @@ func TestTwoJITsKeepTheirOwnOptions(t *testing.T) {
 	if ranGEMM(t, a, pk) {
 		t.Error("A ran the GEMM although it was built WithoutGEMM(true) -- it read B's option")
 	}
-	if !ranGEMM(t, b, pk) {
+	switch ran := ranGEMM(t, b, pk); {
+	case tierHasGEMM(b) && !ran:
 		t.Error("B declined the GEMM although it was built WithoutGEMM(false); " +
 			"the gate's other arm proves nothing without this one")
+	case !tierHasGEMM(b) && ran:
+		t.Errorf("B ran a GEMM on tier %v, which emits none", b.tier)
+	case !tierHasGEMM(b):
+		// Only the prefill chunk below tells the two JITs apart here.
+		t.Logf("tier %v emits no GEMM: WithoutGEMM is not observable on this host, "+
+			"and the prefill chunk pin carries the isolation check", b.tier)
 	}
 
 	if got := a.PrefillChunk(); got != 17 {
@@ -93,16 +113,32 @@ func TestConcurrentNewJITKeepsEachJITsOptions(t *testing.T) {
 	}
 	wg.Wait()
 
-	for i, f := range js {
+	for _, f := range js {
 		if f == nil {
 			t.Skip("no generated tier")
 		}
+	}
+	defer func() {
+		for _, f := range js {
+			f.Close()
+		}
+	}()
+	if !tierHasGEMM(js[0]) {
+		// The decline itself still holds: no JIT may run a GEMM here.
+		for i, f := range js {
+			if ranGEMM(t, f, pk) {
+				t.Errorf("JIT %d ran a GEMM on tier %v, which emits none", i, f.tier)
+			}
+		}
+		t.Skipf("tier %v emits no GEMM (the SSE tier declines the row-major and the "+
+			"weight-stationary one by design), so WithoutGEMM -- the only option this "+
+			"gate reads back -- is not observable on this host; an AVX2 or NEON host "+
+			"runs the isolation check", js[0].tier)
+	}
+	for i, f := range js {
 		want := i%2 != 0 // WithoutGEMM(false) means MatMul should run
 		if got := ranGEMM(t, f, pk); got != want {
 			t.Errorf("JIT %d: MatMul ran = %v, want %v", i, got, want)
 		}
-	}
-	for _, f := range js {
-		f.Close()
 	}
 }

@@ -14,6 +14,9 @@ import (
 // engine/nn/ssemoetopk_test.go gates for the router). It only runs where the tier
 // can be forced.
 func TestRopeTableIsKeyedByTier(t *testing.T) {
+	skipOnAnSSEHost(t, "that a forced SSE call maps its own rotary-table kernel rather than "+
+		"the warmed AVX2 one; the SSE kernel itself is held to the oracle here by the "+
+		"host-tier rotary-table gates (ropetab_test.go)")
 	r := Rope{NRot: 128, Base: 1000000}
 	cs := make([]float32, r.NRot)
 	r.Table(cs, 4097)

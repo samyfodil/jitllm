@@ -28,10 +28,13 @@ import (
 const Shipped = "JITLLM_SHIPPED_BINARY"
 
 // SourceTree skips t, loudly, in a shipped test binary: a gate that reads the
-// module's source has none beside it there, and the build tree runs it.
+// module's source has none beside it there, and the build tree runs it. A
+// binary with no go.mod declaring this module above its working directory is
+// shipped whether or not Shipped was set: a gate reading the source there
+// would fail on the absence of the tree, not on anything the tree holds.
 func SourceTree(t testing.TB) {
 	t.Helper()
-	if os.Getenv(Shipped) != "" {
+	if os.Getenv(Shipped) != "" || root() == "" {
 		t.Skip("LOUD SKIP -- NOT A PASS: this reads the module's source, and this is a shipped test " +
 			"binary running away from the tree it was built from. That tree runs this check.")
 	}

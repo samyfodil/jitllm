@@ -131,9 +131,10 @@ func (f *JIT) settleDist(t quant.Type, size, d int) {
 // compares token rates, which on a two-socket host could not resolve a
 // 4-6% difference: two identical runs settled on different distances, and the
 // worse one cost several percent of decode. A shape's own calls,
-// timed in place, are tight to a few percent over thousands of samples.
+// timed in place, are tight to a few percent over thousands of samples. A
+// tier with no prefetch form (SSE) has nothing to pick between.
 func (f *JIT) distPick() bool {
-	return f.tier != cpu.TierNEON && f.cfg.FusedPrefetch < 0 && f.cfg.MatVecPick == 0 && f.cfg.Tune != TuneOff
+	return f.tier != cpu.TierNEON && f.aheadForm && f.cfg.FusedPrefetch < 0 && f.cfg.MatVecPick == 0 && f.cfg.Tune != TuneOff
 }
 
 // fpfStart runs only once the pack width has settled: two duels at once would
