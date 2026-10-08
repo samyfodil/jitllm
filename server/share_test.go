@@ -74,3 +74,32 @@ func TestASessionWithAStoreReusesItsPrompt(t *testing.T) {
 		t.Fatal("the second generate of the same prompt restored nothing: the store was not used")
 	}
 }
+
+// TestASessionDoesNotStarveThePager: a session's history is committed as it
+// grows, so creating one must not charge the host budget for its whole
+// context at once. Llama-3.2-1B's context is 131072 positions, whose f32
+// history over every block is far more than the 3 GiB this model is pinned to,
+// while its weights fit several times over: charged up front, the pager was
+// left one byte and every token read its weights from disk.
+func TestASessionDoesNotStarveThePager(t *testing.T) {
+	const pin = 3 << 30
+	e, lm, _ := loadedEngine(t, "Llama-3.2-1B-Instruct-Q4_K_M.jlm", "m", LoadOptions{PageBudgetBytes: pin})
+	if !lm.m.PagesFit() {
+		t.Fatalf("the model does not fit %d bytes before any session: budget %d", pin, lm.m.PageBudget())
+	}
+	s, err := e.CreateSession(SessionOptions{ModelID: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !lm.m.PagesFit() {
+		t.Fatalf("creating one session of %d positions left the pager %d bytes: the budget was charged "+
+			"for the whole context's history up front", s.st.MaxSeq(), lm.m.PageBudget())
+	}
+	o := GenerateOptions{SessionID: s.ID(), Prompt: Prompt{Kind: PromptText, Text: "Once upon a time"}, MaxTokens: 4}
+	if err := e.Generate(context.Background(), o, func(Event) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !lm.m.PagesFit() {
+		t.Fatalf("after a generate the pager holds %d bytes and the weights do not fit", lm.m.PageBudget())
+	}
+}

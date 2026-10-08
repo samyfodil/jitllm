@@ -823,6 +823,8 @@ func (e *Engine) CloseSession(id string) error {
 	delete(s.lm.sessions, id)
 	e.mu.Unlock()
 	s.close()
+	// Its history is given back: the model's weights may take the bytes.
+	e.applyPageBudget(s.lm, nil)
 	return nil
 }
 
@@ -1173,6 +1175,8 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	lm.tokensGenerated.Add(int64(n))
 	s.lastUsed.Store(time.Now().UnixMilli())
 	s.refresh()
+	// The history grew by what this generate committed.
+	e.applyPageBudget(lm, nil)
 
 	rate := 0.0
 	if decode > 0 && n > 0 {
@@ -1483,11 +1487,15 @@ func (e *Engine) applyPageBudget(lm *LoadedModel, newest *model.State) {
 	avail := lm.hostWeightShare(lm.budget)
 
 	// The newest session is not in the map yet, so it is counted separately;
-	// a rebudget has none.
+	// a rebudget has none. A history is what it has committed (KVBytes), not
+	// its context: pages are committed as it grows, and charging the whole
+	// context up front left a long-context model's pager one byte. The share
+	// is re-divided as histories grow (after every generate) and when one is
+	// given back (CloseSession).
 	var kv uint64
 	minDev := lm.m.Cfg.NLayer
 	if newest != nil {
-		kv = uint64(newest.MaxSeq()) * uint64(lm.m.Cfg.KVDim()) * 4 * 2 * uint64(lm.m.Cfg.NLayer)
+		kv = newest.KVBytes()
 		minDev = newest.GPULayers()
 	}
 	e.mu.RLock()

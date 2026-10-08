@@ -707,6 +707,8 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 	lm.tokensGenerated.Add(int64(res.n))
 	s.lastUsed.Store(time.Now().UnixMilli())
 	s.refresh()
+	// The history grew by what this generate committed.
+	e.applyPageBudget(s.lm, nil)
 	if emitErr != nil {
 		return emitErr
 	}
