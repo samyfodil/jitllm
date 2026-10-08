@@ -1136,12 +1136,19 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	decodeStart := time.Now()
 	n := 0
 
+	// pending is the token ForwardSample already drew, -1 when the next one
+	// is drawn from logits: no logit is wanted after the prompt, so a device
+	// holding the head selects the candidates and only they come home.
+	pending := int32(-1)
 	for ; n < maxTokens; n++ {
 		if ctx.Err() != nil {
 			reason = FinishCancelled
 			break
 		}
-		next := sampler.Sample(logits)
+		next := pending
+		if next < 0 {
+			next = sampler.Sample(logits)
+		}
 		sampler.Observe(next)
 		if !o.IgnoreEOS && lm.m.Vocab.IsEOG(next) {
 			reason = FinishEOS
@@ -1161,7 +1168,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 			n++
 			break
 		}
-		if logits, err = s.st.Forward(next); err != nil {
+		if pending, err = s.st.ForwardSample(next, &sampler); err != nil {
 			return err
 		}
 	}

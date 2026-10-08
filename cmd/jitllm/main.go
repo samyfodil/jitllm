@@ -861,6 +861,12 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 			if pending, err = st.ForwardGreedy(next); err != nil {
 				return withDeviceErr(err, dev)
 			}
+		} else if top == 0 {
+			// No logits are printed, so the token alone is wanted: a device
+			// holding the head selects the sampler's candidates.
+			if pending, err = st.ForwardSample(next, sm); err != nil {
+				return withDeviceErr(err, dev)
+			}
 		} else if logits, err = st.Forward(next); err != nil {
 			return withDeviceErr(err, dev)
 		}

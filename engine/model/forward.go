@@ -83,6 +83,21 @@ type State struct {
 	// either way; only their geometry differs.
 	c   *Config
 	pos int
+	// sampleArgs, sampleVals and sampleIDs are ForwardSample's device
+	// sampler block and the candidates it returns, reused across tokens.
+	// SampledOnDevice counts the tokens whose candidates came home in place
+	// of the logits.
+	sampleArgs      []uint32
+	sampleVals      []float32
+	sampleIDs       []uint32
+	SampledOnDevice int64
+	// parked and parkedSeam are Park's: the session is preempted, and the
+	// seam it held on the device. ParkedOut and ParkedIn count the KV pages
+	// Park sent to the store and Resume brought back (park.go).
+	parked              bool
+	parkedSeam          int
+	parkStore           *MemStore
+	ParkedOut, ParkedIn int64
 	// outNorm and outW are the head this State projects through: the model's
 	// output norm and projection for a trunk, a prediction block's own head
 	// norm (and the trunk's projection, or the block's own copy) for a draft.
@@ -3079,6 +3094,46 @@ func (s *State) ForwardGreedy(token int32) (int32, error) {
 		return h.Token, nil
 	}
 	return Greedy(logits), nil
+}
+
+// ForwardSample is Forward for a caller that only wants smp's next token.
+// Where the output projection runs on a device and the draw is a top-k one
+// (Sampler.Bounded), it asks that device for the k candidates alone
+// (nn.Head.SampleK) -- the penalty and the selection run there -- and draws
+// from them on the host (Sampler.SampleFrom), so k pairs cross the bus in
+// place of the vocabulary's logits; everywhere else it is smp.Sample over
+// Forward's logits. Either way the token is the one Sample would draw from
+// the logits Forward returns: the device selects exactly the host's
+// candidates, and the softmax, cuts and draw are the host sampler's own.
+//
+// Not under a head bias or a logit scale, which are added on the host after
+// the head (finishLogits) and would come after the device's penalty rather
+// than before it. A greedy smp is ForwardGreedy.
+func (s *State) ForwardSample(token int32, smp *Sampler) (int32, error) {
+	if smp == nil || smp.Temp <= 0 {
+		return s.ForwardGreedy(token)
+	}
+	h := s.head
+	onDev := h != nil && s.m.outB == nil && s.c.LogitScale == 1 && smp.Bounded(s.c.NVocab)
+	if onDev {
+		k := smp.TopK
+		s.sampleArgs = smp.DeviceArgs(s.sampleArgs)
+		s.sampleVals = grow32(s.sampleVals, k)
+		if cap(s.sampleIDs) < k {
+			s.sampleIDs = make([]uint32, k)
+		}
+		h.SampleK, h.SampleArgs, h.SampleVals, h.SampleIDs, h.Sampled = k, s.sampleArgs, s.sampleVals, s.sampleIDs[:k], false
+		defer func() { h.SampleK, h.Sampled = 0, false }()
+	}
+	logits, err := s.Forward(token)
+	if err != nil {
+		return 0, err
+	}
+	if onDev && h.Sampled {
+		s.SampledOnDevice++
+		return smp.SampleFrom(h.SampleVals, h.SampleIDs), nil
+	}
+	return smp.Sample(logits), nil
 }
 
 // forward runs one decode step over whatever fill() puts in s.x.
