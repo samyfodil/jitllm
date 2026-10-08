@@ -97,21 +97,21 @@ func (s *SessionService) ResetSession(ctx context.Context, req *connect.Request[
 	return connect.NewResponse(&v1.ResetSessionResponse{Session: s.E.pbSession(sess)}), nil
 }
 
-// GetDeviceQueue exposes a device's gate: sessions on one card take turns,
-// and a caller who can see the queue can schedule around it.
+// GetDeviceQueue reports the sessions running on a device. Nothing queues for
+// a device as a whole; requests wait only for a row of a full step loop.
 func (s *SessionService) GetDeviceQueue(ctx context.Context, req *connect.Request[v1.GetDeviceQueueRequest]) (*connect.Response[v1.GetDeviceQueueResponse], error) {
 	id := req.Msg.DeviceId
 	if id == "" {
 		id = HostGateID
 	}
-	g, queue, running, waiting := s.E.deviceQueue(s.E.gateKey(id))
+	queue, running, waiting := s.E.deviceQueue(s.E.gateKey(id))
 	return connect.NewResponse(&v1.GetDeviceQueueResponse{
 		DeviceId:   id,
-		Execution:  pbExecution(g.mode),
+		Execution:  pbExecution(ExecutionParallel),
 		SessionIds: queue,
 		Running:    running > 0,
 		Waiting:    int32(max(0, waiting)),
-		Note:       g.note,
+		Note:       executionNote,
 	}), nil
 }
 

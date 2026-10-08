@@ -97,18 +97,15 @@ var prompts = []string{
 	"Tom and his best friend Sam wanted to",
 }
 
-// holdGates takes the model's gates as another session would, so requests
-// pile up waiting for a row and the loop admits them together once they are
-// released: the rows then share every step from the first, whatever the
-// goroutines' scheduling.
+// holdGates holds the model's step loop before it serves, so requests pile
+// up waiting for a row and the loop admits them together once released: the
+// rows then share every step from the first, whatever the goroutines'
+// scheduling.
 func holdGates(t *testing.T, e *Engine, lm *LoadedModel) func() {
 	t.Helper()
-	gs := e.gatesFor(lm.gateIDs())
-	if _, _, err := gs.acquire(context.Background(), "holder", 0); err != nil {
-		t.Fatal(err)
-	}
+	lm.loop.hold.Lock()
 	var once sync.Once
-	release := func() { once.Do(gs.release) }
+	release := func() { once.Do(lm.loop.hold.Unlock) }
 	t.Cleanup(release)
 	return release
 }
@@ -238,8 +235,8 @@ func concurrentGreedy(t *testing.T, name string, n int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if q.Msg.GetWaiting() != int32(n) || len(q.Msg.GetSessionIds()) != n+1 {
-		t.Fatalf("the device queue reads %d waiting, %v, with %d requests waiting for a row behind a holder",
+	if q.Msg.GetWaiting() != int32(n) || len(q.Msg.GetSessionIds()) != n {
+		t.Fatalf("the device queue reads %d waiting, %v, with %d requests waiting for a row of a held loop",
 			q.Msg.GetWaiting(), q.Msg.GetSessionIds(), n)
 	}
 	release()
@@ -729,9 +726,10 @@ func notWhollyOnTheDevice(t *testing.T, name string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		dev, want := q.Msg.GetSession().GetDeviceBlocks(), v1.ExecutionMode_EXECUTION_MODE_SERIALISED
+		// Both run beside other sessions: the whole one as a row of the step,
+		// the split one interleaved with it a step at a time.
+		dev, want := q.Msg.GetSession().GetDeviceBlocks(), v1.ExecutionMode_EXECUTION_MODE_PARALLEL
 		if id == "whole" {
-			want = v1.ExecutionMode_EXECUTION_MODE_PARALLEL
 			if dev != int32(lm.m.Cfg.NLayer) {
 				t.Skipf("NO DEVICE ROOM: the card took %d of %d blocks", dev, lm.m.Cfg.NLayer)
 			}

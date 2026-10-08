@@ -151,13 +151,6 @@ func serve(args []string) {
 	gpuLayers := fs.Int("gpu-layers", -1, "blocks to place on a device for -load; -1 is as many as fit")
 	sessions := fs.Int("sessions", 1, "concurrent sessions each device block reserves a KV cache for, for -load")
 	maxSeq := fs.Int("max-seq", 0, "default KV capacity per session, in positions (default: the model's context length)")
-	hostConc := fs.Int("host-concurrency", 1,
-		"sessions that may run on the HOST at once. 1 is deliberate: every JIT pins its own "+
-			"pool of decode cores, so two host sessions oversubscribe the same physical cores")
-	devConc := fs.Int("device-concurrency", 1,
-		"sessions that may run ALONE on one device at once. Leave at 1: the tier holds one "+
-			"scratch set per device. Sessions wholly on a device do not use it: they share "+
-			"decode steps (-max-batch)")
 	maxBatch := fs.Int("max-batch", 0,
 		"generates of one device model that decode as rows of one step. 0 is the engine's "+
 			"bound (the widest step a device runs across sessions); 1 turns batching off")
@@ -191,14 +184,12 @@ func serve(args []string) {
 		fatal("-joint-steps %q: want auto, always or never", *jointSteps)
 	}
 	e := server.New(server.Config{
-		ModelDir:          *models,
-		HostConcurrency:   *hostConc,
-		DeviceConcurrency: *devConc,
-		MaxBatchRows:      *maxBatch,
-		PromptChunk:       *promptChunk,
-		JointSteps:        joint,
-		DefaultMaxSeq:     *maxSeq,
-		Version:           *version,
+		ModelDir:      *models,
+		MaxBatchRows:  *maxBatch,
+		PromptChunk:   *promptChunk,
+		JointSteps:    joint,
+		DefaultMaxSeq: *maxSeq,
+		Version:       *version,
 	})
 	defer e.Close()
 

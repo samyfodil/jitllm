@@ -48,6 +48,10 @@ type page struct {
 	// a page-in also has to find room for (scratch.go).
 	round uint64
 	in    bool // resident right now
+	// uses is how many submissions -- running, or paged in and about to run
+	// (submit) -- read the block: it is no victim while any does, whichever
+	// session's prologue is looking for room. Under mu.
+	uses int
 	// ensure re-points every slice in ws at where the host holds those bytes
 	// NOW, and is nil for a caller that does not page its own weights.
 	// See nn.LayerWeights.Ensure.
@@ -210,7 +214,8 @@ func (g *devTier) slotsIfPerm(n uint64) int {
 func (g *devTier) victim(cur, lo, hi int, streamed bool) int {
 	best, bestD := -1, -1
 	for li, l := range g.layers {
-		if l == nil || l.pg == nil || !l.pg.in || li == cur || g.pinned[li] || streamed && !g.stream[li] {
+		if l == nil || l.pg == nil || !l.pg.in || li == cur || g.pinned[li] || streamed && !g.stream[li] ||
+			l.pg.uses > 0 {
 			continue
 		}
 		// A block whose page-out frees nothing is not a candidate: wrapped
@@ -314,11 +319,59 @@ func (g *devTier) reclaim(n uint64, cur, lo, hi int) bool {
 	for !g.room(n) {
 		v := g.victim(cur, lo, hi, streamed)
 		if v < 0 {
-			return false
+			// Every candidate is read by another session's submission: it
+			// gives them back when it completes (submit), so wait for that
+			// rather than refuse. The caller holds none itself here.
+			if !g.victimHeld(cur, streamed) {
+				return false
+			}
+			g.idle.Wait()
+			continue
 		}
 		g.pageOut(v)
 	}
 	return true
+}
+
+// victimHeld reports a block victim would take but for a submission reading
+// it (page.uses). Callers hold g.mu.
+func (g *devTier) victimHeld(cur int, streamed bool) bool {
+	for li, l := range g.layers {
+		if l != nil && l.pg != nil && l.pg.in && li != cur && !g.pinned[li] && !(streamed && !g.stream[li]) &&
+			l.pg.bytes > 0 && l.pg.uses > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// holdPages marks blocks [lo, hi) as read by a submission about to run, so
+// no other session's prologue pages them out under it (victim), and reports
+// whether every one is on the card to be held. Callers hold g.mu.
+func (g *devTier) holdPages(lo, hi int) bool {
+	for li := lo; li < hi; li++ {
+		if l := g.layers[li]; l == nil || !l.ok || l.pg != nil && !l.pg.in {
+			g.dropPages(lo, li)
+			return false
+		}
+	}
+	for li := lo; li < hi; li++ {
+		if l := g.layers[li]; l.pg != nil {
+			l.pg.uses++
+		}
+	}
+	return true
+}
+
+// dropPages ends what holdPages began, and wakes a page-in waiting for room
+// (reclaim). Callers hold g.mu.
+func (g *devTier) dropPages(lo, hi int) {
+	for li := lo; li < hi; li++ {
+		if l := g.layers[li]; l != nil && l.pg != nil && l.pg.uses > 0 {
+			l.pg.uses--
+		}
+	}
+	g.idle.Broadcast()
 }
 
 // roomOrReclaim is room for n bytes of state that cannot be re-read -- KV
@@ -402,14 +455,6 @@ func (g *devTier) trim() {
 	g.Slots = g.slots()
 }
 
-// pageResident reports whether block li's weights are on the card right now.
-func (g *devTier) pageResident(li int) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	l := g.layers[li]
-	return l != nil && l.ok && (l.pg == nil || l.pg.in)
-}
-
 // pageIn brings block li's weights back onto the card, evicting by the policy in
 // victim. [lo, hi) is the scan in progress, which is what makes the eviction
 // choice optimal rather than a guess.
@@ -418,6 +463,20 @@ func (g *devTier) pageResident(li int) bool {
 // a retained block is a DMA of bytes already in the device layout, and one the
 // arena declined is repacked and counted in Stats.Packs.
 func (g *devTier) pageIn(li, lo, hi int) bool {
+	if !g.pageInHold(li, lo, hi) {
+		return false
+	}
+	g.mu.Lock()
+	g.dropPages(li, li+1)
+	g.mu.Unlock()
+	return true
+}
+
+// pageInHold is pageIn for a submission about to read the block: it comes
+// back held (holdPages), and the caller lets it go. Every wait on the way -- for the submissions in
+// flight, for one reading the victims -- lets g.mu go, so another session may
+// page the block in meanwhile, and the residency is asked again after them.
+func (g *devTier) pageInHold(li, lo, hi int) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	l := g.layers[li]
@@ -425,7 +484,11 @@ func (g *devTier) pageIn(li, lo, hi int) bool {
 		return false
 	}
 	if l.pg == nil || l.pg.in {
-		return true
+		return g.holdPages(li, li+1)
+	}
+	g.quiesce()
+	if l.pg.in {
+		return g.holdPages(li, li+1)
 	}
 	// The staging is asked for before the reclaim, best-effort: it is normally
 	// already held and is absent only after trim took it. Without room the
@@ -440,6 +503,11 @@ func (g *devTier) pageIn(li, lo, hi int) bool {
 	// Whatever the recording named is about to be joined by buffers that did not
 	// exist when it was captured.
 	g.dropGraph()
+	// The room asked for above may have been waited for, and the block paged in
+	// by another session meanwhile.
+	if l.pg.in {
+		return g.holdPages(li, li+1)
+	}
 	// The host bytes are asked for again before any is read: l.pg.ws holds
 	// slices into a host page captured at admission, and the host pager may
 	// since have reused that frame for another block, which would upload the
@@ -500,7 +568,7 @@ func (g *devTier) pageIn(li, lo, hi int) bool {
 	g.pageBytes += l.pg.bytes + l.pg.round
 	g.PageIns++
 	g.PageBytes += l.pg.bytes
-	return true
+	return g.holdPages(li, li+1)
 }
 
 // submit runs [lo, hi) as the fewest submissions the resident set allows,
@@ -511,31 +579,33 @@ func (g *devTier) pageIn(li, lo, hi int) bool {
 // next block is not resident, since a submission names its blocks' buffers:
 // under the MRU policy that is one submission for the pinned prefix and one
 // per streamed block, each one host/device crossing.
-func (g *devTier) submit(bs *blockScratch, lo, hi, pos int, x, cs, csSWA []float32, head *nn.Head) bool {
+func (g *devTier) submit(sid uint64, bs *blockScratch, lo, hi, pos int, x, cs, csSWA []float32, head *nn.Head) bool {
 	if lo >= hi {
 		// An empty range, with or without a head: layersOnce owns that rule.
-		return g.layersOnce(bs, lo, hi, pos, x, cs, csSWA, head)
+		return g.layersOnce(sid, bs, lo, hi, pos, x, cs, csSWA, head)
 	}
 	rows := 1
 	if w := bs.p.ResidW(); w > 0 && len(x) > w {
 		rows = len(x) / w
 	}
 	for li := lo; li < hi; {
-		if !g.pageIn(li, lo, hi) {
+		if !g.pageInHold(li, lo, hi) {
 			return false
 		}
 		end := li + 1
 		// PerLayerSubmit is the other arm of the submission comparison and it
 		// asks for one block per Session, so it must not be coalesced away.
 		// Otherwise a range is cut where the next block is not resident, and
-		// where the run-time budget ends (subbudget.go).
+		// where the run-time budget ends (subbudget.go). pageIn holds li; the
+		// blocks the range takes on are held as they are taken, so no other
+		// session's page-in sends one away before the submission reads it.
 		if !g.PerLayerSubmit {
 			g.mu.Lock()
 			most := g.submitSpan(rows)
-			g.mu.Unlock()
-			for end < hi && end-li < most && g.pageResident(end) {
+			for end < hi && end-li < most && g.holdPages(end, end+1) {
 				end++
 			}
+			g.mu.Unlock()
 		}
 		h := (*nn.Head)(nil)
 		if end >= hi {
@@ -545,12 +615,16 @@ func (g *devTier) submit(bs *blockScratch, lo, hi, pos int, x, cs, csSWA []float
 		// should be in flight during layersOnce, as an early EnsurePage into
 		// the frame pool (jlm reads, it does not map).
 		t0 := time.Now()
-		if !g.layersOnce(bs, li, end, pos, x, cs, csSWA, h) {
+		ok := g.layersOnce(sid, bs, li, end, pos, x, cs, csSWA, h)
+		g.mu.Lock()
+		g.dropPages(li, end)
+		if ok {
+			g.noteSubmit(rows, end-li, time.Since(t0))
+		}
+		g.mu.Unlock()
+		if !ok {
 			return false
 		}
-		g.mu.Lock()
-		g.noteSubmit(rows, end-li, time.Since(t0))
-		g.mu.Unlock()
 		li = end
 	}
 	return true

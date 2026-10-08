@@ -33,18 +33,6 @@ type Config struct {
 	// (default "models", relative to the working directory).
 	ModelDir string
 
-	// HostConcurrency is how many sessions may run on the host at once. The
-	// default is 1: every nn.JIT runs sched.DecodeCores() workers, so two host
-	// sessions are two pools spinning on the same cores. Raise it only on a
-	// host with cores to spare, and measure.
-	HostConcurrency int
-
-	// DeviceConcurrency is how many sessions may run on one device at once.
-	// It should stay 1 until per-session scratch exists: the tier holds one
-	// scratch set per device. It governs the one-at-a-time path; generates on
-	// sessions wholly on a device share decode steps instead (MaxBatchRows).
-	DeviceConcurrency int
-
 	// MaxBatchRows bounds how many generates of one device model decode as
 	// rows of one step (batch.go). Zero takes the engine's bound, the widest
 	// step a device runs across sessions; 1 turns batching off, and every
@@ -78,12 +66,6 @@ type Config struct {
 func (c *Config) withDefaults() {
 	if c.ModelDir == "" {
 		c.ModelDir = "models"
-	}
-	if c.HostConcurrency < 1 {
-		c.HostConcurrency = 1
-	}
-	if c.DeviceConcurrency < 1 {
-		c.DeviceConcurrency = 1
 	}
 	if c.PromptChunk <= 0 {
 		c.PromptChunk = nn.MaxDevicePrefillChunk
@@ -165,25 +147,14 @@ func (e *Engine) SetModelDir(dir string) { e.modelDir.Store(&dir) }
 // filled in.
 func (e *Engine) Config() Config { return e.cfg }
 
-// gate returns the gate for a device id, creating it on first use. The host's
-// width comes from HostConcurrency and a device's from DeviceConcurrency.
+// gate returns the gate for a device id, creating it on first use.
 func (e *Engine) gate(id string) *gate {
 	e.gateMu.Lock()
 	defer e.gateMu.Unlock()
 	if g, ok := e.gates[id]; ok {
 		return g
 	}
-	var g *gate
-	if id == HostGateID {
-		g = newGate(id, e.cfg.HostConcurrency,
-			"every nn.JIT pins its own pool of decode cores, so concurrent host sessions "+
-				"oversubscribe the same physical cores; width is Config.HostConcurrency")
-	} else {
-		g = newGate(id, e.cfg.DeviceConcurrency,
-			"generates on sessions wholly on this device decode as rows of their model's "+
-				"step loop, every row in one step; any other session holds the device's one "+
-				"scratch set (g.bs/g.vbs/g.bbs) alone, so it is queued, never refused")
-	}
+	g := newGate(id)
 	e.gates[id] = g
 	return g
 }
@@ -1088,14 +1059,10 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		return e.generateBatched(ctx, lp, s, o, ids, ephemeral, emit)
 	}
 
-	// ---- the queue, timed.
+	// ---- recorded as running on its devices; nothing waits here.
 	gs := e.gatesFor(lm.gateIDs())
-	s.queuePos.Store(1)
-	waited, depth, err := gs.acquire(ctx, s.id, o.QueueTimeout)
-	s.queuePos.Store(0)
-	if err != nil {
-		return err
-	}
+	var waited time.Duration
+	depth := gs.acquire(s.id)
 	defer gs.release()
 
 	s.running.Store(true)
@@ -1137,7 +1104,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		HostBlocks:   lm.m.Cfg.NLayer - devBlocks,
 		DeviceIDs:    lm.deviceIDs,
 		Prefill:      prefill,
-		Execution:    gs.mode(),
+		Execution:    ExecutionParallel,
 	}}); err != nil {
 		return err
 	}

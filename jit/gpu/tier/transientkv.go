@@ -11,7 +11,8 @@ import "github.com/samyfodil/jitllm/engine/nn"
 // every such block writes the same pair: the KV budget's transient sequence,
 // charged to KVBytes once, where a cache per block kept 27 of them for Gemma
 // 3's SigLIP (37.7 MB each at 4096 patches, a gigabyte of a 4 GB card) for
-// nothing. Sessions share it too: calls are serialised per device. It is freed
+// nothing. Sessions share it too: a call over a tower runs alone on the device
+// (exclusiveRange). It is freed
 // with its last holder.
 
 // transientKV hands out the shared pair, allocating it on first use, and counts

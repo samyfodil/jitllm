@@ -18,6 +18,9 @@ type Kernel struct{}
 // constructs one here: metal.Open already refuses.
 type Batch struct{}
 
+// Queue is a command queue of its own; there is none off darwin.
+type Queue struct{}
+
 var errNoMetal = errors.New("metal: not available on this platform")
 
 func Open() (*Ctx, error)                           { return nil, errNoMetal }
@@ -54,6 +57,12 @@ func (k *Kernel) Launch(int, int, ...*Buf) error         { return errNoMetal }
 func (k *Kernel) Close()                                 {}
 func (k *Kernel) Limits() (int, int)                     { return 0, 0 }
 func (c *Ctx) NewBatch() *Batch                          { return nil }
+func (c *Ctx) NewQueue() (*Queue, error)                 { return nil, errNoMetal }
+func (q *Queue) NewBatch() *Batch                        { return nil }
+func (q *Queue) Wait() error                             { return errNoMetal }
+func (q *Queue) Close()                                  {}
+func (c *Ctx) HasQueues() bool                           { return false }
+func (c *Ctx) WaitOwn() error                            { return errNoMetal }
 func (b *Batch) Encode(*Kernel, int, int, ...*Buf) error { return errNoMetal }
 func (b *Batch) Commit() error                           { return errNoMetal }
 

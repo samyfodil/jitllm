@@ -300,7 +300,7 @@ func TestImportedBlocksNeverPageOut(t *testing.T) {
 		g.SetArena(1 << 30)
 		one := g.devs[0]
 		for li := 0; li < blocks; li++ {
-			if one.prepLayer(li, p, ws[li], true) {
+			if one.prepLayer(0, li, p, ws[li], true) {
 				placed++
 			}
 		}
@@ -373,7 +373,7 @@ func TestImportingDeviceIsNotDeclinedForWeightsItNeverHolds(t *testing.T) {
 		streamBlocks(g, blocks)
 		g.SetArena(1 << 30)
 		for li := 0; li < blocks; li++ {
-			if g.devs[0].prepLayer(li, p, ws[li], true) {
+			if g.devs[0].prepLayer(0, li, p, ws[li], true) {
 				placed++
 			}
 		}
@@ -417,7 +417,7 @@ func TestShrinkingTheBudgetDoesNotDemoteImportedBlocks(t *testing.T) {
 		streamBlocks(g, blocks)
 		g.SetArena(1 << 30)
 		for li := 0; li < blocks; li++ {
-			if !g.devs[0].prepLayer(li, p, ws[li], true) {
+			if !g.devs[0].prepLayer(0, li, p, ws[li], true) {
 				t.Fatalf("block %d declined: %s", li, g.devs[0].Err())
 			}
 		}

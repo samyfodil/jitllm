@@ -30,13 +30,13 @@ func TestPagedStagingAllocatesNothing(t *testing.T) {
 	bs := d.bs
 	pos := 5
 	token := func() {
-		d.pgRows = d.pagedRows(d.pgRows, 1, 1, pos, nil)
-		if !d.pagedAppendRows(d.pgRows) {
+		d.pgRows = d.pagedRows(0, d.pgRows, 1, 1, pos, nil)
+		if !d.pagedAppendRows(0, d.pgRows) {
 			t.Fatal(d.LastErr)
 		}
 		d.mu.Lock()
-		bs.pkv.rows = d.pagedRows(bs.pkv.rows, 1, 1, pos, nil)
-		if err := d.pagedPrep(bs, bs.pkv.rows); err != nil {
+		bs.pkv.rows = d.pagedRows(0, bs.pkv.rows, 1, 1, pos, nil)
+		if err := d.pagedPrep(0, bs, bs.pkv.rows); err != nil {
 			d.mu.Unlock()
 			t.Fatal(err)
 		}

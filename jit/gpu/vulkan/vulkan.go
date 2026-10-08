@@ -68,8 +68,8 @@ var (
 	vkCmdPushConstants                       func(CmdBuffer, PipeLayout, uint32, uint32, uint32, up) ffi.None
 	vkCmdPipelineBarrier                     func(CmdBuffer, uint32, uint32, uint32, uint32, up, uint32, up, uint32, up) ffi.None
 	vkResetDescriptorPool                    func(Device, DescPool, uint32) Result
-	vkQueueSubmit                            func(Queue, uint32, up, uint64) Result
-	vkQueueWaitIdle                          func(Queue) Result
+	vkQueueSubmit                            func(VkQueue, uint32, up, uint64) Result
+	vkQueueWaitIdle                          func(VkQueue) Result
 	vkCmdCopyBuffer                          func(CmdBuffer, Buffer, Buffer, uint32, up) ffi.None
 	// vkGetDeviceProcAddr is how an EXTENSION's entry points are reached: the
 	// loader exports the core symbols and this one, and nothing else. See
@@ -160,8 +160,9 @@ func bind() error {
 	vkCmdPushConstants = ffi.Fn6[ffi.None, CmdBuffer, PipeLayout, uint32, uint32, uint32, up](lib, "vkCmdPushConstants")
 	vkCmdPipelineBarrier = ffi.Fn10[ffi.None, CmdBuffer, uint32, uint32, uint32, uint32, up, uint32, up, uint32, up](lib, "vkCmdPipelineBarrier")
 	vkResetDescriptorPool = ffi.Fn3[Result, Device, DescPool, uint32](lib, "vkResetDescriptorPool")
-	vkQueueSubmit = ffi.Fn4[Result, Queue, uint32, up, uint64](lib, "vkQueueSubmit")
-	vkQueueWaitIdle = ffi.Fn1[Result, Queue](lib, "vkQueueWaitIdle")
+	vkQueueSubmit = ffi.Fn4[Result, VkQueue, uint32, up, uint64](lib, "vkQueueSubmit")
+	vkQueueWaitIdle = ffi.Fn1[Result, VkQueue](lib, "vkQueueWaitIdle")
+	loadFences(lib)
 	vkCmdCopyBuffer = ffi.Fn5[ffi.None, CmdBuffer, Buffer, Buffer, uint32, up](lib, "vkCmdCopyBuffer")
 	vkGetDeviceProcAddr = ffi.Fn2[unsafe.Pointer, Device, unsafe.Pointer](lib, "vkGetDeviceProcAddr")
 	return nil
@@ -176,24 +177,20 @@ func check(r Result, what string) error {
 
 // Ctx is an open device: instance, logical device, queue and command pool.
 type Ctx struct {
-	inst    Instance
-	phys    PhysDevice
-	dev     Device
-	queue   Queue
-	family  uint32
-	cmdPool CmdPool
-	cmd     CmdBuffer
-	// one is a second command buffer, for the one-shot operations that submit
-	// and wait by themselves: copyBuf and Kernel.Launch. They reset and end
-	// their command buffer, so on c.cmd a copy issued while a batch is
-	// recording (a Session.Write of a device-local buffer) would silently drop
-	// every dispatch encoded after it
-	// (VUID-vkCmdDispatch-commandBuffer-recording).
-	one CmdBuffer
-	// batch is the one Batch NewBatch hands out, and scr the driver-facing
-	// structs recording reuses; see ctxScratch.
-	batch   Batch
-	scr     ctxScratch
+	inst   Instance
+	phys   PhysDevice
+	dev    Device
+	family uint32
+	// rec is the context's own line of submissions, for calls made on it
+	// directly; queues (NewQueue) are others. hw is the compute family's
+	// queues, queues is the count handed out and every queue not closed.
+	rec
+	hw     []*hwQueue
+	queues struct {
+		sync.Mutex
+		n    int
+		live map[*Queue]bool
+	}
 	mem     memProps
 	name    string
 	devType uint32 // VkPhysicalDeviceType of the device that was picked
@@ -230,11 +227,7 @@ type Ctx struct {
 	// getHostPtrProps is vkGetMemoryHostPointerPropertiesEXT, reached through
 	// the device's dispatch table rather than by name; see OpenDevice.
 	getHostPtrProps func(Device, uint32, unsafe.Pointer, up) Result
-	stage           *Buf // lazily grown host-visible scratch for device-local uploads
-	// bpool serves descriptor sets to a Batch, one per encoded dispatch, and is
-	// reset whole when the batch commits.
-	bpool DescPool
-	pins  []any // keeps Go-allocated C structs reachable for the device's life
+	pins            []any // keeps Go-allocated C structs reachable for the device's life
 	// kerns is every Kernel compiled on this context and not yet closed; see
 	// Close.
 	kerns struct {
@@ -366,8 +359,13 @@ func OpenDeviceWith(sel string, cfg Config) (*Ctx, error) {
 		}
 	}
 
-	prio := float32(1)
-	qci := queueCI{sType: stDeviceQueueCI, family: c.family, count: 1, prio: uintptr(up(&prio))}
+	nq := min(max(pick.queues, 1), maxHWQueues)
+	prios := make([]float32, nq)
+	for i := range prios {
+		prios[i] = 1
+	}
+	c.pins = append(c.pins, prios)
+	qci := queueCI{sType: stDeviceQueueCI, family: c.family, count: uint32(nq), prio: uintptr(up(&prios[0]))}
 	df := dotFeat{sType: stDotProdFeat, on: 1}
 	sc := sizeCtlFeat{sType: stSizeCtlFeat, control: 1, full: 1}
 	dci := deviceCI{sType: stDeviceCI, pNext: uintptr(up(&df)),
@@ -412,7 +410,11 @@ func OpenDeviceWith(sel string, cfg Config) (*Ctx, error) {
 	runtime.KeepAlive(df)
 	runtime.KeepAlive(sc)
 	runtime.KeepAlive(tf)
-	vkGetDeviceQueue(c.dev, c.family, 0, up(&c.queue))
+	for i := range nq {
+		h := &hwQueue{}
+		vkGetDeviceQueue(c.dev, c.family, uint32(i), up(&h.q))
+		c.hw = append(c.hw, h)
+	}
 	// The extension's entry point is not exported by the loader, so it is
 	// fetched from the device's dispatch table; binding it by name would panic
 	// at startup. A null answer leaves hostAlign at 0 ("cannot import").
@@ -424,17 +426,7 @@ func OpenDeviceWith(sel string, cfg Config) (*Ctx, error) {
 		}
 	}
 
-	cpc := cmdPoolCI{sType: stCmdPoolCI, flags: 0x2 /* RESET_COMMAND_BUFFER */, family: c.family}
-	if err := check(vkCreateCommandPool(c.dev, up(&cpc), nil, up(&c.cmdPool)), "vkCreateCommandPool"); err != nil {
-		c.Close()
-		return nil, err
-	}
-	cba := cmdBufAI{sType: stCmdBufAlloc, pool: uint64(c.cmdPool), level: 0, count: 1}
-	if err := check(vkAllocateCommandBuffers(c.dev, up(&cba), up(&c.cmd)), "vkAllocateCommandBuffers"); err != nil {
-		c.Close()
-		return nil, err
-	}
-	if err := check(vkAllocateCommandBuffers(c.dev, up(&cba), up(&c.one)), "vkAllocateCommandBuffers"); err != nil {
+	if err := c.initRec(&c.rec, c.hw[0]); err != nil {
 		c.Close()
 		return nil, err
 	}
@@ -605,11 +597,15 @@ func (c *Ctx) MaxBuffer() uint64 { return uint64(c.maxStorage) }
 func (c *Ctx) MaxGroups() uint32 { return c.maxGroups }
 
 func (c *Ctx) Close() {
-	if c.stage != nil {
-		c.stage.Free()
-		c.stage = nil
-	}
 	if c.dev != 0 {
+		// Every queue idle before anything it may still read goes.
+		c.waitAll()
+		c.queues.Lock()
+		for l := range c.queues.live {
+			l.r.freeRec()
+		}
+		c.queues.live = nil
+		c.queues.Unlock()
 		// A kernel its owner never closed is a shader module, a pipeline, two
 		// layouts and a descriptor pool the device still owns, and destroying
 		// it then is invalid usage (VUID-vkDestroyDevice-device-05137). They go
@@ -627,17 +623,11 @@ func (c *Ctx) Close() {
 			orphans.Unlock()
 			k.Close()
 		}
-		// The batch pool is a child of the device like the command pool, and
-		// destroying a device that still owns one is invalid usage
+		// The batch pool and fence are children of the device like the command
+		// pool, and destroying a device that still owns one is invalid usage
 		// (VUID-vkDestroyDevice-device-05137, which the validation layer
 		// reported on every Close).
-		if c.bpool != 0 {
-			vkDestroyDescriptorPool(c.dev, c.bpool, nil)
-			c.bpool = 0
-		}
-		if c.cmdPool != 0 {
-			vkDestroyCommandPool(c.dev, c.cmdPool, nil)
-		}
+		c.rec.freeRec()
 		vkDestroyDevice(c.dev, nil)
 		c.dev = 0
 	}

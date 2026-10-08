@@ -15,9 +15,12 @@ import (
 type ragStep struct {
 	pos, slot []int
 	// sid, when set, is each row's session: a step whose rows belong to
-	// different sessions (gpuSession.LayersSessions). Nil is the current
-	// session's.
+	// different sessions (gpuSession.LayersSessions). Nil is self's.
 	sid []uint64
+	// self is the session making the call: every row's when sid is nil, and
+	// the one a device-wide choice made for the call (eviction, the
+	// recording's key) is made for.
+	self uint64
 	// seqLen is the positions one sequence of a session's batch spans
 	// (nn.RowsDevice): row r is sequence (slot[r]-pos[r])/seqLen of its
 	// session.
@@ -48,11 +51,16 @@ type ragStep struct {
 // softmaxes over its own count and ends in its own argmax. N sequences cost
 // one pass over the weights instead of N.
 func (g *devTier) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
-	return g.layersRows(lo, hi, &ragStep{pos: pos, slot: slot, seqLen: seqLen}, x, cs, csSWA, head)
+	v := g.as(0)
+	if v == nil {
+		return false
+	}
+	defer v.done()
+	return v.layersRows(lo, hi, &ragStep{pos: pos, slot: slot, seqLen: seqLen}, x, cs, csSWA, head)
 }
 
 // layersRows is LayersRows for rs's rows, each of its own session where
-// rs.sid is set and of the current session's otherwise.
+// rs.sid is set and of rs.self's otherwise.
 func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, head *nn.Head) bool {
 	fail := func(f string, a ...any) bool {
 		g.mu.Lock()
@@ -60,7 +68,7 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 		g.mu.Unlock()
 		return false
 	}
-	pos, slot, sid := rs.pos, rs.slot, rs.sid
+	pos, slot, sid := rs.pos, rs.slot, rs.self
 	n := len(pos)
 	// Gemma 4: the range's geometry's scratch set (gemma4.go), as layersCall.
 	g.mu.Lock()
@@ -89,16 +97,16 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 	g.mu.Lock()
 	linear := g.linearIn(lo, hi)
 	var err error
-	if linear || sid != nil {
-		err = g.groupRuns(rs)
+	if linear || rs.sid != nil {
+		err = g.groupRuns(sid, rs)
 	}
 	g.mu.Unlock()
 	if err != nil {
 		return fail("%v", err)
 	}
 	// Each row's sequence takes its own pages.
-	g.pgRows = g.pagedRows(g.pgRows, n, n, 0, rs)
-	if !g.pagedAppendRows(g.pgRows) {
+	g.pgRows = g.pagedRows(sid, g.pgRows, n, n, 0, rs)
+	if !g.pagedAppendRows(sid, g.pgRows) {
 		return false
 	}
 	g.mu.Lock()
@@ -152,7 +160,7 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 	}
 	bs := g.bbs[w]
 	if ok && linear {
-		ok = g.prepRagLinear(bs, n) && g.prepRecRows(lo, hi, rs)
+		ok = g.prepRagLinear(bs, n) && g.prepRecRows(sid, lo, hi, rs)
 	}
 	g.rag = rs
 	g.mu.Unlock()
@@ -167,11 +175,11 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 	if head != nil && len(head.Tokens) < n {
 		head.Tokens = make([]int32, n)
 	}
-	if !g.submit(bs, lo, hi, 0, x, cs, csSWA, head) {
+	if !g.submit(sid, bs, lo, hi, 0, x, cs, csSWA, head) {
 		return false
 	}
 	g.mu.Lock()
-	if sid != nil && !rs.again {
+	if rs.sid != nil && !rs.again {
 		g.SessionRows += n
 	}
 	if linear {
@@ -331,13 +339,13 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 // taken on the device that runs the last block; a head-only step (the blocks
 // elsewhere, the projection here) is refused rather than run.
 func (g *GPU) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
-	return g.layersRows(lo, hi, pos, slot, nil, seqLen, x, cs, csSWA, head)
+	return g.layersRows(0, lo, hi, pos, slot, nil, seqLen, x, cs, csSWA, head)
 }
 
-// layersRows is LayersRows with each row's session, or nil for the current
-// one's.
-func (g *GPU) layersRows(lo, hi int, pos, slot []int, sid []uint64, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
-	g.resetRecSteps()
+// layersRows is LayersRows for session self, with each row's session, or nil
+// for self's.
+func (g *GPU) layersRows(self uint64, lo, hi int, pos, slot []int, sid []uint64, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
+	g.resetRecSteps(self)
 	g.mu.Lock()
 	rs, ok := g.runsInto(g.runBuf, lo, hi)
 	g.runBuf = nil
@@ -366,12 +374,22 @@ func (g *GPU) layersRows(lo, hi int, pos, slot []int, sid []uint64, seqLen int, 
 			h = head
 		}
 		// A step of its own on each device: its rows' grouping is the
-		// device's. The ragStep is the device's own, its slices reused.
-		st := &r.dev.stepRS
-		st.pos, st.slot, st.sid, st.seqLen = pos, slot, sid, seqLen
+		// device's. The ragStep is the session's on that device, its slices
+		// reused.
+		v := r.dev.as(self)
+		if v == nil {
+			why = fmt.Sprintf("%s: no scratch for this session: %s", label(r.dev.dev, r.dev.ord), r.dev.stats().LastErr)
+			g.mu.Lock()
+			g.rowsErr = why
+			g.mu.Unlock()
+			return false
+		}
+		st := &v.stepRS
+		st.pos, st.slot, st.sid, st.self, st.seqLen = pos, slot, sid, self, seqLen
 		st.again = slices.ContainsFunc(rs[:i], func(o run) bool { return o.dev == r.dev })
 		c0, c1 := r.tables(cs, csSWA)
-		ok := r.dev.layersRows(r.lo, r.hi, st, x, c0, c1, h)
+		ok := v.layersRows(r.lo, r.hi, st, x, c0, c1, h)
+		v.done()
 		// The runs go too: a step that groups none (no linear block in its
 		// range, one session) would otherwise hand recDesc the last step's,
 		// whose rows index past this one's.
@@ -389,8 +407,8 @@ func (g *GPU) layersRows(lo, hi int, pos, slot []int, sid []uint64, seqLen int, 
 }
 
 func (s *gpuSession) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
-	defer s.leave(s.inputsTo(s.enter()))
-	return s.g.LayersRows(lo, hi, pos, slot, seqLen, x, cs, csSWA, head)
+	defer s.leave(s.inputsTo(s.step()))
+	return s.g.layersRows(s.sid, lo, hi, pos, slot, nil, seqLen, x, cs, csSWA, head)
 }
 
 // LayersSessions runs one step for rows of different sessions on this GPU, row
@@ -402,7 +420,7 @@ func (s *gpuSession) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, 
 // repeat); every row's K and V are written before any row attends, so a
 // chunk's rows see each other causally.
 func (s *gpuSession) LayersSessions(lo, hi int, sess []nn.LayerDevice, pos []int, x, cs, csSWA []float32, head *nn.Head) bool {
-	s.g.resetRecSteps()
+	s.g.resetRecSteps(s.sid)
 	// The session's own lists, reused: a session steps from one goroutine.
 	s.sidBuf = slices.Grow(s.sidBuf[:0], len(sess))[:len(sess)]
 	s.slotBuf = slices.Grow(s.slotBuf[:0], len(sess))[:len(sess)]
@@ -417,10 +435,10 @@ func (s *gpuSession) LayersSessions(lo, hi int, sess []nn.LayerDevice, pos []int
 		}
 		sid[i], slot[i] = o.sid, pos[i]
 	}
-	defer s.leave(s.inputsTo(s.enter()))
+	defer s.leave(s.inputsTo(s.step()))
 	// A session is one sequence whose slots are its positions, so the span a
 	// sequence takes is no matter: every row's sequence is its session's 0.
-	return s.g.layersRows(lo, hi, pos, slot, sid, 0, x, cs, csSWA, head)
+	return s.g.layersRows(s.sid, lo, hi, pos, slot, sid, 0, x, cs, csSWA, head)
 }
 
 // ragKey names a ragged step's compiled matvec in devTier.ragK: the kind of
@@ -490,6 +508,8 @@ func (g *devTier) headMV() mv {
 // which prepRagged makes outside any session; false where the shape is
 // refused, and the batched twin serves.
 func (g *devTier) headOneMV(R int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	m := g.bs.mvHead
 	if g.NoRagHeadOne || m.kern == nil {
 		return mv{}, false
@@ -573,6 +593,8 @@ const (
 // fuses it only where its split writes the final row, and this kernel always
 // does, reducing its split in the group.
 func (g *devTier) groupKern(m mv, ntok, R int, epi groupEpi, act kernels.ActKind) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	if ntok < 2 || ntok > groupTokMax || m.slots > 0 || kernels.IsFloat(m.q) || g.NoRagGroup {
 		return mv{}, false
 	}
@@ -619,6 +641,8 @@ func (g *devTier) groupKern(m mv, ntok, R int, epi groupEpi, act kernels.ActKind
 // -- or nil where the three cannot share one (fuseQKV's conditions, less the
 // one on decode's own split: this kernel always reduces in the group).
 func (g *devTier) groupQKV(l *layer, ntok, R int) (segLaunch, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	if ntok < 2 || ntok > groupTokMax || g.NoRagGroup || g.NoRagFuse || g.NoSegFuse ||
 		l.mla || l.linear || l.nonCausal || l.wq == nil || l.wk == nil || l.wv == nil {
 		return segLaunch{}, false
@@ -691,6 +715,8 @@ type segShapeKey struct {
 // Tok x Rowt tile divides the grid, so without the split a narrow projection
 // (1024 rows) runs nearly as long as one fourteen times its work.
 func (g *devTier) dot4Split(m mv, ntok, tok, rowt, split int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	if split < 1 {
 		split = 1
 		for m.rows/rowt*(ntok/tok)*split < 1<<16 && split < 64 {
@@ -753,6 +779,8 @@ func (g *devTier) dot4Split(m mv, ntok, tok, rowt, split int) (mv, bool) {
 // is remembered. On a Volta-class card it is ~2.3x the dp4a twin (MT=2 NT=4,
 // swept).
 func (g *devTier) voltaMV(m mv, ntok int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	if g.NoVolta || !(g.mmaOff || g.NoMMA) || m.slots > 0 || !kernels.Volta70OK(m.q) {
 		return mv{}, false
 	}
@@ -853,6 +881,8 @@ var tileGemms = []kernels.TileGemm{
 // a refused compile per shape on every other device. A Metal refusal is
 // recorded once (tileOff): it is a property of the device, not the shape.
 func (g *devTier) tileMV(m mv, ntok int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	if g.tileOff || g.NoVolta || g.dev.API() != "msl" || m.slots > 0 || !kernels.Volta70OK(m.q) {
 		return mv{}, false
 	}
@@ -921,6 +951,8 @@ var voltaTiles = []kernels.VoltaTile{
 // keeping a double-buffered 128x128 block at 32 KiB. k is split only where the
 // grid is thin (kb0Split); a well-filled grid is fastest unsplit.
 func (g *devTier) voltaGemm(m mv, ntok int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	sub, _, _, _ := kernels.Layout(m.q)
 	kbN := max(32/sub, 1)
 	for _, tl := range voltaTiles {
@@ -1079,19 +1111,30 @@ func (g *devTier) prepRagLinear(bs *blockScratch, n int) bool {
 	return true
 }
 
-// ResetRecRows zeroes the recurrent state (the conv window and the delta
+// ResetRecRows is resetRecRows for the zero session: a caller that never attached.
+func (g *devTier) ResetRecRows(rows []int) bool {
+	return g.resetRecRows(0, rows)
+}
+
+// resetRecRows zeroes the recurrent state (the conv window and the delta
 // state, in every half) of the given rows in every linear block of this
 // session: a row a new sequence takes must not start from the last one's
 // summary. It is a write per buffer, outside any submission.
-func (g *devTier) ResetRecRows(rows []int) bool {
+func (g *devTier) resetRecRows(sid uint64, rows []int) bool {
+	v := g.as(sid)
+	if v == nil {
+		return false
+	}
+	defer v.done()
+	g = v
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	st, seated := g.recSeats[g.cur]
+	st, seated := g.recSeats[sid]
 	if !seated || len(rows) == 0 {
 		return true
 	}
 	for _, l := range g.layers {
-		if l == nil || !l.linear || l.recOf(g.cur) == nil {
+		if l == nil || !l.linear || l.recOf(sid) == nil {
 			continue
 		}
 		for _, row := range rows {
@@ -1107,23 +1150,33 @@ func (g *devTier) ResetRecRows(rows []int) bool {
 	return true
 }
 
-// RecMark marks the session's state on every device (nn.RecRewinder).
+// RecMark is recMark for the zero session: a caller that never attached.
 func (g *GPU) RecMark() {
+	g.recMark(0)
+}
+
+// recMark marks the session's state on every device (nn.RecRewinder).
+func (g *GPU) recMark(sid uint64) {
 	for _, d := range g.devs {
-		d.RecMark()
+		d.recMark(sid)
 	}
 }
 
-// RecRewind rewinds every device or none: every device is checked before any
-// flips, so a refusal on the second cannot leave the first rewound.
+// RecRewind is recRewind for the zero session: a caller that never attached.
 func (g *GPU) RecRewind() bool {
+	return g.recRewind(0)
+}
+
+// recRewind rewinds every device or none: every device is checked before any
+// flips, so a refusal on the second cannot leave the first rewound.
+func (g *GPU) recRewind(sid uint64) bool {
 	for _, d := range g.devs {
-		if _, ok := d.rewindable(); !ok {
+		if _, ok := d.rewindable(sid); !ok {
 			return false
 		}
 	}
 	for _, d := range g.devs {
-		if !d.RecRewind() {
+		if !d.recRewind(sid) {
 			return false // checked above; a session's own state does not move between
 		}
 	}
@@ -1132,24 +1185,29 @@ func (g *GPU) RecRewind() bool {
 
 func (s *gpuSession) RecMark() {
 	defer s.leave(s.enter())
-	s.g.RecMark()
+	s.g.recMark(s.sid)
 }
 
 func (s *gpuSession) RecRewind() bool {
 	defer s.leave(s.enter())
-	return s.g.RecRewind()
+	return s.g.recRewind(s.sid)
 }
 
-// ResetRecRows resets the rows on every device; see devTier.ResetRecRows.
+// ResetRecRows is resetRecRows for the zero session: a caller that never attached.
 func (g *GPU) ResetRecRows(rows []int) bool {
+	return g.resetRecRows(0, rows)
+}
+
+// resetRecRows resets the rows on every device; see devTier.ResetRecRows.
+func (g *GPU) resetRecRows(sid uint64, rows []int) bool {
 	ok := true
 	for _, d := range g.devs {
-		ok = d.ResetRecRows(rows) && ok
+		ok = d.resetRecRows(sid, rows) && ok
 	}
 	return ok
 }
 
 func (s *gpuSession) ResetRecRows(rows []int) bool {
 	defer s.leave(s.enter())
-	return s.g.ResetRecRows(rows)
+	return s.g.resetRecRows(s.sid, rows)
 }

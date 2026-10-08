@@ -215,26 +215,20 @@ func nserr(e ID, what string) error {
 
 // Ctx is an open device and its command queue.
 type Ctx struct {
-	dev   ID
-	queue ID
-	name  string
-	// pending holds committed command buffers the host has not waited for.
-	// The queue runs in order, so waiting on the last implies all completed,
-	// but each is checked for its own error. They are retained while held:
-	// -commandBuffer returns an autoreleased object and no pool is drained.
-	//
+	dev  ID
+	name string
 	// unretained selects -commandBufferWithUnretainedReferences; see
 	// Unretained.
 	unretained bool
-	// resSet is an MTLResidencySet attached to the QUEUE, or 0. See Residency.
+	// resSet is an MTLResidencySet attached to every queue, or 0. See Residency.
 	resSet   ID
 	resDirty bool
-	mu       sync.Mutex
-	pending  []ID
-	// spare is the list pending swaps with at each Wait, and freeBatch the
-	// committed batches NewBatch hands out again (both under mu).
-	spare     []ID
-	freeBatch []*Batch
+	// sub is the context's own command queue, for calls made on it directly;
+	// queues (NewQueue) are others, each with its own pending list, so a
+	// session waits for its own work alone. qs is every queue not closed.
+	sub
+	qmu sync.RWMutex
+	qs  map[*Queue]bool
 
 	// unified is -hasUnifiedMemory, read once: it is a property of the
 	// hardware and cannot change under an open device.
@@ -261,14 +255,15 @@ func OpenWith(o Opts) (*Ctx, error) {
 	if q == 0 {
 		return nil, fmt.Errorf("metal: newCommandQueue returned nil")
 	}
-	return &Ctx{
+	c := &Ctx{
 		dev:     d,
-		queue:   q,
 		name:    gostr(send0(d, sel("name"))),
 		unified: sendBool(d, sel("hasUnifiedMemory")).ok(),
 		opts:    strictMath(o.FastMath),
 		spin:    o.spin(),
-	}, nil
+	}
+	c.sub = sub{c: c, queue: q}
+	return c, nil
 }
 
 // strictMath is the compile options every library is built with: fast math
@@ -329,6 +324,12 @@ func (c *Ctx) MaxBuffer() uint64 {
 
 func (c *Ctx) Close() {
 	c.Wait()
+	c.qmu.Lock()
+	for q := range c.qs {
+		q.release()
+	}
+	c.qs = nil
+	c.qmu.Unlock()
 	if c.queue != 0 {
 		send0(c.queue, sel("release"))
 		c.queue = 0
@@ -452,7 +453,7 @@ func (c *Ctx) Compile(src, entry string) (*Kernel, error) {
 // committing a command buffer is what costs on Metal, so a token's launches
 // are encoded into one and committed once.
 type Batch struct {
-	c   *Ctx
+	q   *sub
 	cb  ID
 	enc ID
 	// Scratch for setBuffers:offsets:withRange:, sized past the widest kernel
@@ -506,6 +507,11 @@ func (c *Ctx) Residency() error {
 			"addResidencySet: -- the set would attach to nothing")
 	}
 	send1id(c.queue, sel("addResidencySet:"), set)
+	c.qmu.RLock()
+	for q := range c.qs {
+		send1id(q.s.queue, sel("addResidencySet:"), set)
+	}
+	c.qmu.RUnlock()
 	c.resSet = set
 	c.resDirty = true
 	return nil
@@ -521,8 +527,13 @@ func (c *Ctx) addResident(id ID) {
 	c.resDirty = true
 }
 
-// NewBatch opens a command buffer and its compute encoder.
-func (c *Ctx) NewBatch() *Batch {
+// NewBatch opens a command buffer and its compute encoder on the context's
+// own queue.
+func (c *Ctx) NewBatch() *Batch { return c.sub.newBatch() }
+
+// newBatch opens a command buffer and its compute encoder on q's queue.
+func (q *sub) newBatch() *Batch {
+	c := q.c
 	t0 := time.Now()
 	defer func() { statNewNs.Add(uint64(time.Since(t0))) }()
 	if c.resSet != 0 && c.resDirty {
@@ -536,15 +547,15 @@ func (c *Ctx) NewBatch() *Batch {
 	if c.unretained {
 		sel = selCmdBufUnret
 	}
-	cb := send0(c.queue, sel)
-	c.mu.Lock()
+	cb := send0(q.queue, sel)
+	q.mu.Lock()
 	var b *Batch
-	if n := len(c.freeBatch); n > 0 {
-		b, c.freeBatch = c.freeBatch[n-1], c.freeBatch[:n-1]
+	if n := len(q.freeBatch); n > 0 {
+		b, q.freeBatch = q.freeBatch[n-1], q.freeBatch[:n-1]
 	}
-	c.mu.Unlock()
+	q.mu.Unlock()
 	if b == nil {
-		b = &Batch{c: c}
+		b = &Batch{q: q}
 	}
 	b.cb, b.enc = cb, 0
 	if cb != 0 {
@@ -604,45 +615,78 @@ func (b *Batch) Commit() error {
 	lastCommit.Store(t0.UnixNano())
 	send0(b.enc, selEndEncoding)
 	send0(b.cb, selCommit)
-	b.c.hold(b.cb)
+	b.q.hold(b.cb)
 	statCommitNs.Add(uint64(time.Since(t0)))
 	b.cb, b.enc = 0, 0
 	// A committed batch goes back to NewBatch's free list: the caller is done
 	// with it (Commit is a batch's last call), and a Batch per session was a
 	// heap object per decode token.
-	b.c.mu.Lock()
-	b.c.freeBatch = append(b.c.freeBatch, b)
-	b.c.mu.Unlock()
+	b.q.mu.Lock()
+	b.q.freeBatch = append(b.q.freeBatch, b)
+	b.q.mu.Unlock()
 	return nil
 }
 
-// hold takes ownership of a committed command buffer until the next Wait.
-func (c *Ctx) hold(cb ID) {
+// hold takes ownership of a committed command buffer until the next wait.
+func (q *sub) hold(cb ID) {
 	send0(cb, selRetain)
-	c.mu.Lock()
-	c.pending = append(c.pending, cb)
+	q.mu.Lock()
+	q.pending = append(q.pending, cb)
 	statCommit.Add(1)
-	c.mu.Unlock()
+	q.mu.Unlock()
 }
 
-// Wait blocks until every committed command buffer has completed, and reports
-// the first error any of them recorded.
+// Wait blocks until every committed command buffer has completed, every
+// queue's included, and reports the first error any of them recorded.
 //
 // It is cheap when nothing is outstanding: it is on every host read's path.
 func (c *Ctx) Wait() error {
-	c.mu.Lock()
-	cbs := c.pending
+	err := c.sub.wait()
+	// Read-held across the waits, not copied out: Wait is on every write's
+	// and read's path outside a session, and a snapshot was an allocation per
+	// call. Close and NewQueue wait for it.
+	c.qmu.RLock()
+	for q := range c.qs {
+		q.s.settled()
+	}
+	c.qmu.RUnlock()
+	return err
+}
+
+// settled returns once everything committed to q's queue so far has
+// completed, without taking the pending list: the session using the queue
+// waits on it for its own errors and timings, and a wait that took the list
+// from under it would return before its work was done.
+func (q *sub) settled() {
+	q.mu.Lock()
+	var last ID
+	if n := len(q.pending); n > 0 {
+		last = q.pending[n-1]
+		send0(last, selRetain)
+	}
+	q.mu.Unlock()
+	if last != 0 {
+		q.c.await(last)
+		send0(last, selRelease)
+	}
+}
+
+// wait blocks until every buffer committed to q's queue has completed.
+func (q *sub) wait() error {
+	c := q.c
+	q.mu.Lock()
+	cbs := q.pending
 	// The other list takes the commits that arrive meanwhile, and this one
 	// becomes the spare once it is read: two lists that swap, where a fresh
 	// one per Wait was a heap object per decode token.
-	c.pending, c.spare = c.spare[:0], nil
+	q.pending, q.spare = q.spare[:0], nil
 	statWait.Add(1)
 	if len(cbs) > 0 {
 		statBlock.Add(1)
 	} else {
-		c.spare = cbs[:0]
+		q.spare = cbs[:0]
 	}
-	c.mu.Unlock()
+	q.mu.Unlock()
 	if len(cbs) == 0 {
 		return nil
 	}
@@ -667,11 +711,11 @@ func (c *Ctx) Wait() error {
 			statGPUN.Add(1)
 			// Device idle between the previous command buffer's end and
 			// this one's start, on the device clock.
-			if prev := gpuPrevEnd; prev > 0 && t0 > prev && t0-prev < 1 {
+			if prev := q.prevEnd; prev > 0 && t0 > prev && t0-prev < 1 {
 				statGPUGapNs.Add(uint64((t0 - prev) * 1e9))
 				statGPUGapN.Add(1)
 			}
-			gpuPrevEnd = t1
+			q.prevEnd = t1
 			// Commit-to-Wait-return host time less device busy time: the
 			// launch and wake-up latency of a round trip.
 			if commitAt != 0 && len(cbs) == 1 {
@@ -686,11 +730,11 @@ func (c *Ctx) Wait() error {
 		}
 		send0(cb, selRelease)
 	}
-	c.mu.Lock()
-	if c.spare == nil {
-		c.spare = cbs[:0]
+	q.mu.Lock()
+	if q.spare == nil {
+		q.spare = cbs[:0]
 	}
-	c.mu.Unlock()
+	q.mu.Unlock()
 	return err
 }
 
@@ -756,6 +800,11 @@ func (c *Ctx) Copy(dst *Buf, dstOff int, src *Buf, srcOff, n int) error {
 	if dst.c != c || src.c != c {
 		return fmt.Errorf("metal: a copy between buffers of another device")
 	}
+	// The context's queue orders the blit after its own work; a session
+	// queue's runs apart, so it is waited for first.
+	if err := c.Wait(); err != nil {
+		return err
+	}
 	cb := send0(c.queue, selCmdBuf)
 	if cb == 0 {
 		return fmt.Errorf("metal: commandBuffer returned nil")
@@ -820,10 +869,8 @@ var statGPUNs, statGPUN, statGPULast atomic.Uint64
 
 // statGPUGapNs sums the device's idle time between consecutive command
 // buffers (GPUStartTime of one less GPUEndTime of the one before), on the
-// device's own clock. gpuPrevEnd is only touched under Wait, which runs on
-// one goroutine at a time per queue.
+// device's own clock; each queue keeps its previous end (sub.prevEnd).
 var statGPUGapNs, statGPUGapN atomic.Uint64
-var gpuPrevEnd float64
 
 // statHostGapNs is host time from a blocking Wait's return to the next
 // Commit: the CPU's share of the device's idle gap.
@@ -937,3 +984,81 @@ func nsString(s ID) string {
 	}
 	return ""
 }
+
+// sub is one command queue and what its submissions need: the committed
+// buffers not yet waited for (in order on the queue, so waiting on the last
+// implies all completed, but each is checked for its own error, and each is
+// retained while held: -commandBuffer returns an autoreleased object and no
+// pool is drained), the list pending swaps with at each wait, the committed
+// batches newBatch hands out again, and the device-clock end of the last
+// buffer waited for.
+type sub struct {
+	c         *Ctx
+	queue     ID
+	mu        sync.Mutex
+	pending   []ID
+	spare     []ID
+	freeBatch []*Batch
+	prevEnd   float64
+}
+
+// Queue is a command queue of its own on the device: a session committing to
+// it runs beside sessions on other queues, and waits for its own buffers
+// alone. One goroutine uses a Queue at a time.
+type Queue struct{ s sub }
+
+// NewQueue opens a command queue on this device.
+func (c *Ctx) NewQueue() (*Queue, error) {
+	id := send0(c.dev, sel("newCommandQueue"))
+	if id == 0 {
+		return nil, fmt.Errorf("metal: newCommandQueue returned nil")
+	}
+	q := &Queue{s: sub{c: c, queue: id}}
+	c.qmu.Lock()
+	if c.resSet != 0 {
+		send1id(id, sel("addResidencySet:"), c.resSet)
+	}
+	if c.qs == nil {
+		c.qs = map[*Queue]bool{}
+	}
+	c.qs[q] = true
+	c.qmu.Unlock()
+	return q, nil
+}
+
+// NewBatch opens a command buffer and its compute encoder on the queue.
+func (q *Queue) NewBatch() *Batch { return q.s.newBatch() }
+
+// Wait blocks until everything committed to the queue has completed.
+func (q *Queue) Wait() error { return q.s.wait() }
+
+// Close waits for the queue's work and releases it.
+func (q *Queue) Close() {
+	c := q.s.c
+	c.qmu.Lock()
+	open := c.qs[q]
+	delete(c.qs, q)
+	c.qmu.Unlock()
+	if open {
+		q.s.wait()
+		q.release()
+	}
+}
+
+func (q *Queue) release() {
+	if q.s.queue != 0 {
+		send0(q.s.queue, sel("release"))
+		q.s.queue = 0
+	}
+}
+
+// HasQueues reports whether a session queue is open on this context.
+func (c *Ctx) HasQueues() bool {
+	c.qmu.RLock()
+	defer c.qmu.RUnlock()
+	return len(c.qs) > 0
+}
+
+// WaitOwn blocks until the context's own queue has run everything committed
+// to it, without waiting for the session queues.
+func (c *Ctx) WaitOwn() error { return c.sub.wait() }

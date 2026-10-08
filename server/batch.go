@@ -48,6 +48,9 @@ type stepLoop struct {
 	ctx  context.Context
 	quit context.CancelFunc
 	done chan struct{}
+	// hold is read-held while the loop serves; a test write-holds it so the
+	// requests it sends pile up and are admitted together.
+	hold sync.RWMutex
 
 	mu      sync.Mutex
 	waiting []*row
@@ -266,11 +269,11 @@ func (lp *stepLoop) run() {
 	defer close(lp.done)
 	for lp.awaitWork() {
 		gs := lp.e.gatesFor(lp.lm.gateIDs())
-		if _, _, err := gs.acquire(lp.ctx, lp.id, 0); err != nil {
-			return // only the loop's own context ends an untimed wait
-		}
-		lp.serve(gs)
+		lp.hold.RLock()
+		gs.acquire(lp.id)
+		lp.serve()
 		gs.release()
+		lp.hold.RUnlock()
 	}
 }
 
@@ -292,9 +295,8 @@ func (lp *stepLoop) awaitWork() bool {
 	}
 }
 
-// serve runs steps until no row is left. It admits only while nobody else is
-// waiting for the gates it holds.
-func (lp *stepLoop) serve(gs *gateSet) {
+// serve runs steps until no row is left, admitting rows as they come.
+func (lp *stepLoop) serve() {
 	for {
 		if lp.ctx.Err() != nil {
 			for len(lp.rows) > 0 {
@@ -302,9 +304,7 @@ func (lp *stepLoop) serve(gs *gateSet) {
 			}
 			return
 		}
-		if !gs.contended() {
-			lp.admit()
-		}
+		lp.admit()
 		if len(lp.rows) == 0 {
 			return
 		}
@@ -749,8 +749,8 @@ func (lp *stepLoop) snapshot() (live, waiting []string) {
 // gate's own queue -- expanded into the sessions in its rows and the requests
 // waiting for one. key is a gate key (Engine.gateKey), not a device id as
 // written.
-func (e *Engine) deviceQueue(key string) (g *gate, queue []string, running, waiting int) {
-	g = e.gate(key)
+func (e *Engine) deviceQueue(key string) (queue []string, running, waiting int) {
+	g := e.gate(key)
 	gq, running, waiting := g.snapshot()
 	loops := map[string]*stepLoop{}
 	for _, lm := range e.Models() {
@@ -768,30 +768,21 @@ func (e *Engine) deviceQueue(key string) (g *gate, queue []string, running, wait
 		live, wait := lp.snapshot()
 		queue = append(append(queue, live...), wait...)
 		waiting += len(wait)
-		if g.holds(x) {
-			running += len(live) - 1
-		} else {
-			waiting-- // the loop itself, waiting for the gate on its requests' behalf
-		}
+		running += len(live) - 1
 	}
-	// A loop between taking a request and asking for the gate is in no queue
-	// yet; its requests are still waiting.
+	// A loop between taking a request and recording itself is in no queue yet;
+	// its requests are still waiting.
 	for _, lp := range loops {
 		_, wait := lp.snapshot()
 		queue = append(queue, wait...)
 		waiting += len(wait)
 	}
-	return g, queue, max(0, running), max(0, waiting)
+	return queue, max(0, running), max(0, waiting)
 }
 
-// sessionMode is how a generate on s would run: as a row of a step it shares,
-// or alone on gates that serialise it.
-func sessionMode(s *Session, gs *gateSet) ExecutionMode {
-	if s.snapBatched.Load() {
-		return ExecutionParallel
-	}
-	return gs.mode()
-}
+// sessionMode is how a generate on s runs: beside every other session, as a
+// row of a step it shares or interleaved a step at a time.
+func sessionMode(*Session) ExecutionMode { return ExecutionParallel }
 
 // pb is the loop's BatchStats, or nil for a model with no loop.
 func (lp *stepLoop) pb() *v1.BatchStats {

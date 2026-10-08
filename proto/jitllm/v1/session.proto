@@ -11,12 +11,13 @@ import "jitllm/v1/common.proto";
 // than something implied by a request: a session holds a KV cache, a position,
 // and a placement, and all three outlive any one generate call.
 //
-// THE SERIALISATION IS PART OF THE CONTRACT. The engine allocates one scratch
-// set per DEVICE, so two sessions placed on the same device are correct but
-// cannot run at the same time. This service reports that rather than hiding
-// it: `Session.execution`, `Session.queue_position` and `GetDeviceQueue` exist
-// so a caller sees the queue instead of inferring it from latency. A second
-// session is never REFUSED for it -- it is admitted and it waits.
+// Sessions run beside each other. Sessions wholly on one device decode as rows
+// of shared steps; any other session interleaves with them a step at a time,
+// the device's scratch and the host's shared pool taken per step and never for
+// a whole request. The one queue is for a row of a model's step loop when it
+// is full: `Session.queue_position` and `GetDeviceQueue` report it, so a
+// caller sees it rather than inferring it from latency. A session is never
+// REFUSED for it -- it is admitted and it waits.
 
 service SessionService {
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse) {}
@@ -54,7 +55,7 @@ message Session {
 
   ExecutionMode execution = 9;
   // Zero while running or when nothing is ahead. Positive while this session
-  // is waiting for the device's scratch.
+  // is waiting for a row of its model's step loop.
   int32 queue_position = 10;
   bool generating = 11;
 
@@ -146,8 +147,8 @@ message GetDeviceQueueRequest {
 message GetDeviceQueueResponse {
   string device_id = 1;
   ExecutionMode execution = 2;
-  // Sessions attached, in queue order. The head is the one holding the
-  // scratch when `running` is true.
+  // Sessions running on the device, then requests waiting for a row of a
+  // step loop, in arrival order.
   repeated string session_ids = 3;
   bool running = 4;
   int32 waiting = 5;

@@ -182,6 +182,24 @@ type Device interface {
 	Session(f func(s Session))
 }
 
+// Queued is a Device whose sessions can each run on a queue of their own, so
+// several sessions are on the device at once instead of one after another:
+// a CUDA non-blocking stream, a Vulkan command buffer and fence of its own, a
+// Metal command queue. A Session on a queue is ordered against its own
+// queue's earlier work only; Copy and the Buf methods, outside any Session,
+// still wait for everything before them, every queue included.
+//
+// One queue runs one Session at a time: SessionOn for a queue already in a
+// Session waits. A Device without it serialises Session as before.
+type Queued interface {
+	NewQueue() (Queue, error)
+	SessionOn(q Queue, f func(s Session))
+}
+
+// Queue is one of a Queued device's queues. Close releases it; a Session on
+// it must not be running.
+type Queue interface{ Close() }
+
 // HostPinner is an optional Device that can hand out page-locked host memory,
 // which its transfers read at the link's rate. Pin and Unpin may be called
 // inside a Session. CUDA implements it; on Vulkan and Metal the mapped

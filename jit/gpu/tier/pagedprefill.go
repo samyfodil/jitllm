@@ -278,7 +278,8 @@ func (g *devTier) prefillBuf(dst *backend.Buf, have *int, n int) error {
 		b.Write(nanFill(n * 4))
 	}
 	if *dst != nil {
-		g.dropGraph()
+		// The buffer is this lane's: only its recordings name it.
+		g.dropLaneGraph()
 		(*dst).Free()
 	}
 	*dst, *have = b, n

@@ -160,20 +160,35 @@ func (g *devTier) dropBatch(w int) {
 // no block and no head keeps of its own. Callers hold g.mu and drop the graph.
 func (g *devTier) dropAllScratch() {
 	defer g.scratchWin().close()
+	g.dropLanes()
+	g.dropLaneScratch()
+	for _, b := range []*backend.Buf{&g.aBuf, &g.axBuf, &g.outBuf, &g.xfBuf, &g.mvPart} {
+		if *b != nil {
+			(*b).Free()
+			*b = nil
+		}
+	}
+	g.aCap, g.axCap, g.outCap, g.xfCap, g.mvPartCap = 0, 0, 0, 0, 0
+	g.shapeChanged()
+}
+
+// dropLaneScratch frees this view's lane: every set's scratches and the
+// lane's staging. Callers hold g.mu inside a scratch window, outside any
+// Session.
+func (g *devTier) dropLaneScratch() {
 	g.dropOtherGeom()
 	for w := range g.bbs {
 		g.dropBatch(w)
 	}
 	freeScratch(g.bs)
 	g.bs = nil
-	for _, b := range []*backend.Buf{&g.aBuf, &g.axBuf, &g.outBuf, &g.partBuf, &g.xfBuf, &g.f16Buf} {
+	for _, b := range []*backend.Buf{&g.partBuf, &g.f16Buf} {
 		if *b != nil {
 			(*b).Free()
 			*b = nil
 		}
 	}
-	g.aCap, g.axCap, g.outCap, g.partCap, g.f16Cap = 0, 0, 0, 0, 0
-	g.xfCap = 0
+	g.partCap, g.f16Cap = 0, 0
 }
 
 // overBudget reports whether what is charged has passed the budget, the

@@ -1,0 +1,81 @@
+package sched
+
+import (
+	"fmt"
+	"sync"
+)
+
+// Shared returns a view of the process's pool for cpus: one set of workers per
+// core set, however many users run on it. Every model.State builds a JIT with
+// its own pool, and two pools on the same cores are two sets of spinning
+// workers behind two barriers -- the slowest worker of either is both regions'
+// end. Views take turns a region at a time instead, so several sessions run on
+// the cores without a lock held across a whole generate.
+//
+// A view has its own participant count (SetParticipants) and region counters;
+// SetSpinning is the crew's, so the last caller's choice holds for every view.
+// The crew stops when its last view is closed.
+func Shared(cpus []int, opts ...Option) *Pool {
+	cfg := newConfig(opts)
+	if len(cpus) == 0 {
+		cpus = DecodeCores(opts...)
+	}
+	key := fmt.Sprint(cpus, cfg.spin, cfg.spinSet, cfg.numa)
+	crews.mu.Lock()
+	defer crews.mu.Unlock()
+	c := crews.m[key]
+	if c == nil {
+		c = New(cpus, opts...)
+		c.key = key
+		// Crews over overlapping cores take turns with each other too: a
+		// prefill on the wide set and a decode on the P-cores would otherwise
+		// both drive the same cores at once.
+		c.mu = &sync.Mutex{}
+		// A set that overlaps two crews which do not overlap each other takes
+		// the first one's lock; the machine's core sets are nested (P inside
+		// P+E), so that case is not met, and a lock per core is the upgrade if
+		// it ever is.
+		for _, o := range crews.m {
+			if overlaps(o.cpus, cpus) {
+				c.mu = o.mu
+				break
+			}
+		}
+		crews.m[key] = c
+	}
+	c.views++
+	v := &Pool{crew: c}
+	v.part.Store(int64(len(c.cpus)))
+	return v
+}
+
+var crews = struct {
+	mu sync.Mutex
+	m  map[string]*Pool
+}{m: map[string]*Pool{}}
+
+// release closes a view; the last one stops the crew.
+func (c *Pool) release(v *Pool) {
+	crews.mu.Lock()
+	defer crews.mu.Unlock()
+	if v.stopped.Swap(true) {
+		return // this view was already closed
+	}
+	c.views--
+	if c.views > 0 {
+		return
+	}
+	delete(crews.m, c.key)
+	c.Close()
+}
+
+func overlaps(a, b []int) bool {
+	for _, x := range a {
+		for _, y := range b {
+			if x == y {
+				return true
+			}
+		}
+	}
+	return false
+}

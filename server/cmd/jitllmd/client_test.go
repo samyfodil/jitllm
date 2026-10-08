@@ -68,14 +68,14 @@ func TestTheVerbsDriveARealServerOverRealHTTP(t *testing.T) {
 		}
 	})
 
-	t.Run("device queue reports WHY it is a queue", func(t *testing.T) {
+	t.Run("device queue reports how sessions share the device", func(t *testing.T) {
 		got := out(t, cmdSessions, "-addr", addr, "-queue", "cuda:0")
-		if !strings.Contains(got, "serialised") {
+		if !strings.Contains(got, "parallel") {
 			t.Fatalf("the queue did not report its execution mode:\n%s", got)
 		}
-		// The note explains why the device serialises sessions.
-		if !strings.Contains(got, "scratch") {
-			t.Fatalf("the queue did not carry the reason it serialises:\n%s", got)
+		// The note says how: beside each other, the scratch taken per step.
+		if !strings.Contains(got, "a step at a time") {
+			t.Fatalf("the queue did not carry how sessions share the device:\n%s", got)
 		}
 	})
 }

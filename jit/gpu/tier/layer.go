@@ -461,7 +461,7 @@ func (st *streamBank) prefetchRun() {
 // runHostRows is runHost for a chunk of rows: the selections (row stride
 // k+1, ExpertRank's layout), the weights (stride k) and the rows of in come
 // home, the host runs each row's experts, and the rows of the sum go back.
-func (st *streamBank) runHostRows(g *devTier, s backend.Session, sel, w, in, out backend.Buf, n, k, rows int) error {
+func (st *streamBank) runHostRows(sid uint64, g *devTier, s backend.Session, sel, w, in, out backend.Buf, n, k, rows int) error {
 	if cap(st.hin) < rows*n {
 		st.hin = make([]float32, rows*n)
 		st.hout = make([]float32, rows*n)
@@ -487,7 +487,7 @@ func (st *streamBank) runHostRows(g *devTier, s backend.Session, sel, w, in, out
 			return err
 		}
 	}
-	if hr := g.hostFns[g.cur][st.li].rows; hr != nil {
+	if hr := g.hostFns[sid][st.li].rows; hr != nil {
 		// Expert-major: each chosen expert read once for the chunk.
 		if err := hr(st.hsel, st.hw, st.hin, st.hout, rows, k); err != nil {
 			return err
@@ -497,7 +497,7 @@ func (st *streamBank) runHostRows(g *devTier, s backend.Session, sel, w, in, out
 		g.HybridRows += rows
 		return err
 	}
-	host := g.hostFor(st)
+	host := g.hostFor(sid, st)
 	if host == nil {
 		return fmt.Errorf("tier: this session offered no host side for a hybrid block")
 	}
@@ -513,11 +513,11 @@ func (st *streamBank) runHostRows(g *devTier, s backend.Session, sel, w, in, out
 	return err
 }
 
-// hostFor is the current session's host side for st's block, nil when this
+// hostFor is session sid's host side for st's block, nil when this
 // session never offered one. Never the placing session's: that State may be
 // closed, and its generated code with it. Callers hold g.mu.
-func (g *devTier) hostFor(st *streamBank) func(sel []uint32, w, in, out []float32) error {
-	return g.hostFns[g.cur][st.li].one
+func (g *devTier) hostFor(sid uint64, st *streamBank) func(sel []uint32, w, in, out []float32) error {
+	return g.hostFns[sid][st.li].one
 }
 
 // hostSide is a session's host side for one hybrid block: a row at a time,
@@ -532,7 +532,7 @@ type hostSide struct {
 // come home, the host's experts sum into hout, and the sum is
 // written to out, where the combine kernel would have put it. The Sync makes
 // the launches that write in land first.
-func (st *streamBank) runHost(g *devTier, s backend.Session, in, w, out backend.Buf, n, k int) error {
+func (st *streamBank) runHost(sid uint64, g *devTier, s backend.Session, in, w, out backend.Buf, n, k int) error {
 	if cap(st.hin) < n {
 		st.hin = make([]float32, n)
 		st.hout = make([]float32, n)
@@ -552,7 +552,7 @@ func (st *streamBank) runHost(g *devTier, s backend.Session, in, w, out backend.
 	if err := s.Read(w, f32b(st.hw)); err != nil {
 		return err
 	}
-	host := g.hostFor(st)
+	host := g.hostFor(sid, st)
 	if host == nil {
 		return fmt.Errorf("tier: this session offered no host side for a hybrid block")
 	}
@@ -1194,12 +1194,12 @@ func (g *devTier) reserved() uint64 {
 	return n
 }
 
-// addSessionRec gives the current session the two-half recurrent state for a
+// addSessionRec gives session sid the two-half recurrent state for a
 // linear block: a seat in the device's pools (one slot, unless its batch has
 // grown) and a pool for the block if it has none. Callers hold g.mu. The state
 // is zeroed because a summary of garbage is a history the model never saw,
 // and every token after it is fluent and wrong (RULE 13).
-func (g *devTier) addSessionRec(l *layer, p *nn.LayerPlan) bool {
+func (g *devTier) addSessionRec(sid uint64, l *layer, p *nn.LayerPlan) bool {
 	r := p.Recurrent
 	if r.Conv == 0 {
 		return true // not a linear block; nothing to carry
@@ -1210,9 +1210,9 @@ func (g *devTier) addSessionRec(l *layer, p *nn.LayerPlan) bool {
 	if g.recSeats == nil {
 		g.recSeats = map[uint64]recSeat{}
 	}
-	st, seated := g.recSeats[g.cur]
+	st, seated := g.recSeats[sid]
 	if !seated {
-		st = recSeat{base: g.seatPlace(g.cur, 1), rows: 1}
+		st = recSeat{base: g.seatPlace(sid, 1), rows: 1}
 	}
 	slots := max(g.recSlots, st.base+st.rows)
 	// The device's first pool takes the form Config.SharedRec asks for; a
@@ -1238,7 +1238,7 @@ func (g *devTier) addSessionRec(l *layer, p *nn.LayerPlan) bool {
 		}
 	}
 	if !seated {
-		g.recSeats[g.cur] = st
+		g.recSeats[sid] = st
 		if err := g.recZero(nil, st.base, st.rows); err != nil {
 			return fail(err)
 		}
@@ -1267,7 +1267,7 @@ func (g *devTier) addSessionRec(l *layer, p *nn.LayerPlan) bool {
 	if l.rec == nil {
 		l.rec = map[uint64]*recPair{}
 	}
-	l.rec[g.cur] = &recPair{}
+	l.rec[sid] = &recPair{}
 	return true
 }
 
@@ -1285,13 +1285,14 @@ func (g *devTier) ensureRecNext(rows int) bool {
 		if err != nil {
 			return fail(err)
 		}
+		// Every recording, and every submission in flight, names the old one.
+		g.dropGraph()
 		if g.recNext != nil {
 			g.recNext.Free()
 			g.refund(g.recNextBytes)
 		}
 		g.recNext, g.recNextBytes = b, bytes
 		g.charge(bytes)
-		g.dropGraph() // a recording names the old scratch by address
 	}
 	if _, err := g.slotCopy(g.recS, rows); err != nil {
 		return fail(err)
@@ -1311,15 +1312,15 @@ func freeRec(l *layer) {
 	clear(l.rec)
 }
 
-// addSessionKV gives the current session its own attention history for a block
+// addSessionKV gives session sid its own attention history for a block
 // whose model-resident parts are already on the device. Callers hold g.mu.
-func (g *devTier) addSessionKV(l *layer, p *nn.LayerPlan) bool {
+func (g *devTier) addSessionKV(sid uint64, l *layer, p *nn.LayerPlan) bool {
 	if p.NonCausal {
 		if kvp := g.transientKV(p); kvp != nil {
 			if l.kv == nil {
 				l.kv = map[uint64]*kvPair{}
 			}
-			l.kv[g.cur] = kvp
+			l.kv[sid] = kvp
 			return true
 		}
 	}
@@ -1330,7 +1331,7 @@ func (g *devTier) addSessionKV(l *layer, p *nn.LayerPlan) bool {
 		if l.kv == nil {
 			l.kv = map[uint64]*kvPair{}
 		}
-		l.kv[g.cur] = &kvPair{paged: true}
+		l.kv[sid] = &kvPair{paged: true}
 		return true
 	}
 	cp := g.capped(p)
@@ -1360,7 +1361,7 @@ func (g *devTier) addSessionKV(l *layer, p *nn.LayerPlan) bool {
 		l.kv = map[uint64]*kvPair{}
 	}
 	kvp.bytes = need
-	l.kv[g.cur] = kvp
+	l.kv[sid] = kvp
 	// l.kvBytes is what ReleaseLayers refunds, so it moves with every charge;
 	// without it a block released after a second session refunds only the first
 	// session's share and the budget leaks.
@@ -1396,9 +1397,13 @@ func (l *layer) kvOf(sid uint64) *kvPair {
 	return l.kv[sid]
 }
 
-// blockScratch is the per-call staging every layer shares, since only one runs
-// at a time.
+// blockScratch is the per-call staging every layer of a lane shares: a call
+// holds its lane (devsess.go), so one block runs in it at a time.
 type blockScratch struct {
+	// headShared says head, mvHead, hNorm, hNormB and headCap are another
+	// scratch's -- lane0's, borrowed by a clone (shareHead) -- and are not
+	// freed or refunded with this one.
+	headShared bool
 	// walked is g.layerGen+1 at prepBatch's last successful layer walk for
 	// this scratch: until a block is placed or released, the walk would find
 	// what it found then (0: never walked).
@@ -1818,10 +1823,15 @@ type blockScratch struct {
 	smAltGroups, smAltWidth int
 }
 
-// PrepLayer uploads one block and compiles the kernels it needs, taking it only
-// if it fits.
+// PrepLayer is prepLayerFor for the zero session: a caller that never attached.
 func (g *devTier) PrepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool {
-	return g.prepLayer(li, p, w, false)
+	return g.prepLayerFor(0, li, p, w)
+}
+
+// prepLayerFor uploads one block and compiles the kernels it needs, taking it only
+// if it fits.
+func (g *devTier) prepLayerFor(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights) bool {
+	return g.prepLayer(sid, li, p, w, false)
 }
 
 // declineReason names the graph feature this tier cannot run, or "" when it can
@@ -2121,10 +2131,10 @@ func declineWeights(w *nn.LayerWeights) string {
 // mode: GPU.PrepLayer offers every device with mayPage false first, so a second
 // card with room still gets the block and only when no device has room does
 // anybody swap.
-func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage bool) (placed bool) {
+func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage bool) (placed bool) {
 	// The host side of a hybrid block is the offering session's: a placed
 	// block is shared by every session that attaches, and each runs its experts
-	// on its own State (runHost looks it up by the current session). Recorded
+	// on its own State (runHost looks it up by the call's session). Recorded
 	// before anything can decline, so a block another session placed still
 	// learns this one's.
 	if w != nil && w.HostExperts != nil {
@@ -2132,10 +2142,10 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 		if g.hostFns == nil {
 			g.hostFns = map[uint64]map[int]hostSide{}
 		}
-		if g.hostFns[g.cur] == nil {
-			g.hostFns[g.cur] = map[int]hostSide{}
+		if g.hostFns[sid] == nil {
+			g.hostFns[sid] = map[int]hostSide{}
 		}
-		g.hostFns[g.cur][li] = hostSide{one: w.HostExperts, rows: w.HostExpertsRows}
+		g.hostFns[sid][li] = hostSide{one: w.HostExperts, rows: w.HostExpertsRows}
 		g.mu.Unlock()
 	}
 	// Shapes this tier cannot express are declined first and by name (RULE 8a):
@@ -2225,17 +2235,17 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 		// A linear block's history is a recurrent pair, not a KV cache; a
 		// block that attends as well keeps both.
 		if l.linear {
-			if l.recOf(g.cur) == nil && !g.addSessionRec(l, p) {
+			if l.recOf(sid) == nil && !g.addSessionRec(sid, l, p) {
 				return false
 			}
 			if !l.withAttn {
 				return true
 			}
 		}
-		if l.kvOf(g.cur) != nil || l.kvSrc != li {
+		if l.kvOf(sid) != nil || l.kvSrc != li {
 			return true // this session already has a history here, or reads its source's
 		}
-		if !g.addSessionKV(l, p) {
+		if !g.addSessionKV(sid, l, p) {
 			return false
 		}
 		return true
@@ -2274,6 +2284,7 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 			return false
 		}
 	} else if g.bs == nil {
+		g.shapeChanged()
 		if g.bs = g.initScratch(sp, 1); g.bs == nil {
 			return false
 		}
@@ -3302,7 +3313,7 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 	l.withAttn = p.Recurrent.WithAttn
 	l.noFFN = p.NoFFN
 	if linear {
-		if !g.addSessionRec(l, p) {
+		if !g.addSessionRec(sid, l, p) {
 			return false
 		}
 	}
@@ -3326,7 +3337,7 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 	if p.KVShared {
 		// Nothing to allocate.
 	} else if attends && g.pagedPlan(p) {
-		err = g.pagedLayer(l, li, p)
+		err = g.pagedLayer(sid, l, li, p)
 	} else if attends {
 		g.initKVCap(p)
 		cp := g.capped(p)
@@ -3334,7 +3345,7 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 		// whether a model fits on the card at all. Under MLA it is zero: the value
 		// is the key row's own prefix (kvPair.value).
 		cache, vcache = g.kvCacheBytes(p, cp.MaxSeq)
-		// One cache per session. PrepLayer runs inside a session (g.cur), so
+		// One cache per session. PrepLayer runs for a session (sid), so
 		// this allocates for whichever sequence is placing blocks; a second
 		// State placing the same block reuses the shared weights above and gets
 		// its own history. A non-causal block takes the device's one shared
@@ -3360,7 +3371,7 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 		if l.kv == nil {
 			l.kv = map[uint64]*kvPair{}
 		}
-		if old := l.kv[g.cur]; old != nil && old.shared {
+		if old := l.kv[sid]; old != nil && old.shared {
 			g.transientKVPut()
 		} else if old != nil {
 			// Re-preparing a block this session already holds: its previous
@@ -3372,7 +3383,7 @@ func (g *devTier) prepLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage
 				old.vc.Free()
 			}
 		}
-		l.kv[g.cur] = kvp
+		l.kv[sid] = kvp
 	}
 	if err != nil {
 		g.LastErr = err.Error()
@@ -5343,6 +5354,7 @@ func (g *devTier) headScratch(p *nn.LayerPlan) bool {
 	}
 	g.initKVCap(p)
 	g.bs = g.initScratch(p, 1)
+	g.shapeChanged()
 	return g.bs != nil
 }
 
@@ -5350,6 +5362,7 @@ func (g *devTier) headScratch(p *nn.LayerPlan) bool {
 // norm, its bias, the logits and the softcap -- and refunds it, leaving the
 // projection's resident to whoever holds it. Callers hold g.mu.
 func (g *devTier) dropHeadScratch(bs *blockScratch) {
+	g.shapeChanged()
 	// A head that was dropped (its resident failed) replaces the cap it
 	// compiled, and must not leak the one before.
 	if bs.headCap != nil {
@@ -5478,6 +5491,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	bs.hRaw = make([]byte, h.W.Rows*4)
 	bs.hOut = unsafe.Slice((*float32)(unsafe.Pointer(&bs.hRaw[0])), h.W.Rows)
 	bs.head, bs.mvHead = r, mv{kern: kern, red: red, rows: h.W.Rows, split: split}
+	g.shapeChanged()
 	g.headSrc, g.headNormHost = &h.W.Data[0], slices.Clone(h.Norm)
 	g.charge(uint64(len(f)*4 + h.W.Rows*4))
 	bs.headEmbeds, bs.embScale = h.Embeds, h.EmbdScale
@@ -5522,16 +5536,29 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	return true
 }
 
-// Layers runs blocks [lo, hi) at position pos as one submission.
+// Layers is layersFor for the zero session: a caller that never attached.
+func (g *devTier) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
+	return g.layersFor(0, lo, hi, pos, n, x, cs, csSWA, head)
+}
+
+// layersFor runs blocks [lo, hi) at position pos as one submission.
 //
 // The read at the end is the only synchronise: consecutive launches on one
 // stream are already ordered, so the whole prefix issues without the device
 // draining. Those launches are captured once and replayed (a CUDA graph pays the
 // per-launch cost once); see graphKey for why a decode token's sequence is
 // stable enough to capture, and cuda/graph.go for the mechanism.
-func (g *devTier) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
-	ok := g.layersCall(lo, hi, pos, n, x, cs, csSWA, head)
-	g.dropEmbed()
+//
+// It runs in session sid's view of the device, holding a lane for the call
+// (devsess.go); a call reached from inside another keeps the lane it holds.
+func (g *devTier) layersFor(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
+	v := g.as(sid)
+	if v == nil {
+		return false
+	}
+	defer v.done()
+	ok := v.layersCall(sid, lo, hi, pos, n, x, cs, csSWA, head)
+	v.dropEmbed()
 	return ok
 }
 
@@ -5539,15 +5566,26 @@ func (g *devTier) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.He
 // for exactly one Layers call: a call that refuses before submitting leaves the
 // caller to fill x, and a surviving promise would be gathered into a later
 // token's x.
-func (g *devTier) layersCall(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
+func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
 	// Fault injection, present only in a `jitllmfault` build; see tier/fault.go.
 	// In a release build injectedFail is `return false` and inlines away.
 	if g.injectedFail() {
 		return false
 	}
+	// A tower's range runs in lane0, whose tower set is the device's own
+	// (visrows.go): a call holding a clone borrows lane0 for it.
+	g.mu.Lock()
+	if l := g.layers[lo]; lo < hi && l != nil && l.nonCausal && g.lane != g.lane0 {
+		v0 := g.borrowLane0()
+		g.mu.Unlock()
+		ok := v0.layersCall(sid, lo, hi, pos, n, x, cs, csSWA, head)
+		g.mu.Lock()
+		g.returnLane0(v0)
+		g.mu.Unlock()
+		return ok
+	}
 	// Reset per call, because the caller reads it immediately after a false to
 	// decide whether a host restart is sound.
-	g.mu.Lock()
 	g.recSteps = 0
 	// Gemma 4: the range's geometry's scratch set, and the caller's set again
 	// on the way out (gemma4.go). GPU.runsInto hands one geometry per call.
@@ -5569,12 +5607,18 @@ func (g *devTier) layersCall(lo, hi, pos, n int, x, cs, csSWA []float32, head *n
 	if l := g.layers[lo]; lo < hi && l != nil && l.nonCausal {
 		g.mu.Lock()
 		bs := g.bs
+		// The windows staged in the set are whichever session's picture
+		// came last: this session's go in again.
+		wok := g.setWindowsLocked(g.winRuns)
 		g.mu.Unlock()
+		if !wok {
+			return false
+		}
 		if bs == nil || n > bs.rows || head != nil {
 			g.LastErr = fmt.Sprintf("non-causal n=%d scratch=%v head=%v", n, bs != nil, head != nil)
 			return false
 		}
-		return g.submit(bs, lo, hi, pos, x, cs, csSWA, nil)
+		return g.submit(sid, bs, lo, hi, pos, x, cs, csSWA, nil)
 	}
 	if n == 1 {
 		g.retuneDecode()
@@ -5584,8 +5628,8 @@ func (g *devTier) layersCall(lo, hi, pos, n int, x, cs, csSWA []float32, head *n
 	}
 	// Paged history takes the chunk's pages now, before any block is paged in
 	// for the submission.
-	g.pgRows = g.pagedRows(g.pgRows, n, n, pos, nil)
-	if !g.pagedAppendRows(g.pgRows) {
+	g.pgRows = g.pagedRows(sid, g.pgRows, n, n, pos, nil)
+	if !g.pagedAppendRows(sid, g.pgRows) {
 		return false
 	}
 	// A prefill chunk, padded to a fixed width: every kernel bakes its row
@@ -5672,7 +5716,7 @@ func (g *devTier) layersCall(lo, hi, pos, n int, x, cs, csSWA []float32, head *n
 			// sent a chunk whose blocks had all run round again a row at a
 			// time (MiniMax-M3's selecting blocks are a geometry of their own,
 			// so its float head always came here).
-			if dbs == nil || lo < hi && !g.Layers(lo, hi, pos, n, x, cs, csSWA, nil) {
+			if dbs == nil || lo < hi && !g.layersFor(sid, lo, hi, pos, n, x, cs, csSWA, nil) {
 				return false
 			}
 			e, nr := dbs.p.NEmbd, dbs.p.RopeW()
@@ -5690,7 +5734,7 @@ func (g *devTier) layersCall(lo, hi, pos, n int, x, cs, csSWA []float32, head *n
 			g.mu.Lock()
 			adv := g.recSteps
 			g.mu.Unlock()
-			if !g.Layers(hi, hi, pos+n-1, 1, x[(n-1)*e:n*e], rcs, rswa, head) {
+			if !g.layersFor(sid, hi, hi, pos+n-1, 1, x[(n-1)*e:n*e], rcs, rswa, head) {
 				g.mu.Lock()
 				g.recSteps += adv
 				g.mu.Unlock()
@@ -5718,7 +5762,7 @@ func (g *devTier) layersCall(lo, hi, pos, n int, x, cs, csSWA []float32, head *n
 					}
 				}
 				e := dbs.p.NEmbd
-				if !g.Layers(lo, hi, pos+off, m, x[off*e:(off+m)*e], rcs, rswa, nil) {
+				if !g.layersFor(sid, lo, hi, pos+off, m, x[off*e:(off+m)*e], rcs, rswa, nil) {
 					return false
 				}
 			}
@@ -5747,27 +5791,27 @@ func (g *devTier) layersCall(lo, hi, pos, n int, x, cs, csSWA []float32, head *n
 				// Each row is a token of the recurrence, and each linear block's
 				// halves flip with it, so row 1's recording is keyed apart from
 				// row 0's (rangeParity).
-				if !g.submit(dbs, lo, hi, pos+i, row, rcs, rswa, nil) {
+				if !g.submit(sid, dbs, lo, hi, pos+i, row, rcs, rswa, nil) {
 					return false
 				}
 			}
 			return true
 		}
-		return g.submit(bbs, lo, hi, pos, x, cs, csSWA, head)
+		return g.submit(sid, bbs, lo, hi, pos, x, cs, csSWA, head)
 	}
 	if g.PerLayerSubmit && (hi-lo > 1 || head != nil) {
 		// The other arm of the submission comparison: one Session and one Read
 		// per block. The head becomes one more (empty-range) submission. submit
 		// honours PerLayerSubmit itself, since it is also what pages a block in.
-		if !g.submit(g.bs, lo, hi, pos, x, cs, csSWA, nil) {
+		if !g.submit(sid, g.bs, lo, hi, pos, x, cs, csSWA, nil) {
 			return false
 		}
 		if head != nil {
-			return g.layersOnce(g.bs, hi, hi, pos, x, cs, csSWA, head)
+			return g.layersOnce(sid, g.bs, hi, hi, pos, x, cs, csSWA, head)
 		}
 		return true
 	}
-	return g.submit(g.bs, lo, hi, pos, x, cs, csSWA, head)
+	return g.submit(sid, g.bs, lo, hi, pos, x, cs, csSWA, head)
 }
 
 // parityMask is the halves a submission's linear blocks read, one bit per
@@ -5787,7 +5831,7 @@ type parityMask [4]uint64
 // block placed later, or a session that stepped apart from the others, can
 // read a half its neighbours do not. ok is false for a range too long to key.
 // Callers hold g.mu.
-func (g *devTier) rangeParity(lo, hi int) (m parityMask, ok bool) {
+func (g *devTier) rangeParity(sid uint64, lo, hi int) (m parityMask, ok bool) {
 	bit := 0
 	for li := lo; li < hi; li++ {
 		l := g.layers[li]
@@ -5797,7 +5841,7 @@ func (g *devTier) rangeParity(lo, hi int) (m parityMask, ok bool) {
 		if bit == 64*len(m) {
 			return m, false
 		}
-		if par, has := g.stepPar(l); has && par == 1 {
+		if par, has := g.stepPar(sid, l); has && par == 1 {
 			m[bit/64] |= 1 << (bit % 64)
 		}
 		bit++
@@ -5810,14 +5854,14 @@ func (g *devTier) rangeParity(lo, hi int) (m parityMask, ok bool) {
 // replay must swap each linear block's halves by hand; otherwise the same
 // recording is chosen every token and the recurrence freezes. A token that
 // records ran emit during the capture and has already flipped.
-func (g *devTier) replayRecurrent(lo, hi int) {
+func (g *devTier) replayRecurrent(sid uint64, lo, hi int) {
 	for li := lo; li < hi; li++ {
 		l := g.layers[li]
 		if l == nil || !l.linear {
 			continue
 		}
-		if _, has := g.stepPar(l); has {
-			g.stepFlip(l)
+		if _, has := g.stepPar(sid, l); has {
+			g.stepFlip(sid, l)
 			g.recSteps++
 			if g.rag != nil && g.rag.sid != nil {
 				g.SessionLinear++
@@ -5923,9 +5967,32 @@ func (g *devTier) canRecord() bool {
 // on both arms of the graph A/B so they do the same device work.
 const scoreGrain = 128
 
-func (g *devTier) layersOnce(bs *blockScratch, lo, hi, pos int, x, cs, csSWA []float32, head *nn.Head) bool {
+func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, cs, csSWA []float32, head *nn.Head) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	// Every wait comes first. The prologue below reads what other sessions
+	// change -- this session's pages, whether any are at home, the blocks --
+	// into the submission's descriptors, and a wait after it would let one of
+	// them change under the submission (another session's page-in or
+	// eviction). Alone on the device: wait for every submission in flight.
+	// Beside the others: wait for a quiesce in progress to have its turn. From
+	// here to the submission nothing lets g.mu go (prologueHeld).
+	// The question is asked again after every wait: another session's
+	// prologue may have sent this session's history home meanwhile.
+	var excl bool
+	for {
+		if excl = g.exclusiveRange(lo, hi, g.rag, bs) || g.evictedFor(sid, g.rag); excl {
+			// Running alone is right whatever changes while it waits.
+			g.quiesce()
+			break
+		}
+		if g.quiet == 0 {
+			break
+		}
+		g.idle.Wait()
+	}
+	g.prologueHeld = true
+	defer func() { g.prologueHeld = false }()
 	// An empty range is legal only with a head: the projection under a partial
 	// seam. Every refusal records why, since the State's answer to false is a
 	// silent restart on the host.
@@ -6201,8 +6268,8 @@ func (g *devTier) layersOnce(bs *blockScratch, lo, hi, pos int, x, cs, csSWA []f
 	// page weights out from under the range about to run.
 	var pagedVar *pagedVariant
 	if pk := bs.pkv; pk != nil {
-		pk.rows = g.pagedRows(pk.rows, R, nrow, pos, rag)
-		if e := g.pagedPrep(bs, pk.rows); e != nil {
+		pk.rows = g.pagedRows(sid, pk.rows, R, nrow, pos, rag)
+		if e := g.pagedPrep(sid, bs, pk.rows); e != nil {
 			return refuse("paged attention: %v", e)
 		}
 		pk.st = nil
@@ -6210,7 +6277,7 @@ func (g *devTier) layersOnce(bs *blockScratch, lo, hi, pos int, x, cs, csSWA []f
 			g.pagedStage(pk, p, pk.rows)
 			// A call over evicted history streams (pagedstream.go), through
 			// the staged decode kernels rather than the prefill ones.
-			if e := g.pagedStreamPrep(bs, pk.rows); e != nil {
+			if e := g.pagedStreamPrep(sid, bs, pk.rows); e != nil {
 				return refuse("paged attention: %v", e)
 			}
 			// The lightning indexer scores every position through the
@@ -6345,12 +6412,12 @@ func (g *devTier) layersOnce(bs *blockScratch, lo, hi, pos int, x, cs, csSWA []f
 			g.RagHeadOne++
 		}
 	}
-	par, parOK := g.rangeParity(lo, hi)
+	par, parOK := g.rangeParity(sid, lo, hi)
 	if allRows {
 		ragHead = head.WantedRows(nrow)
 	}
 	key := graphKey{lo, hi, nCap, R, head != nil, g.TableSplit, g.ScalarSoftmax, g.flashOn(), g.KVF16,
-		ropeDev, argmax, ragN, ragRuns, par, pagedVar, ragHead, hNormID, g.cur}
+		ropeDev, argmax, ragN, ragRuns, par, pagedVar, ragHead, hNormID, sid}
 	if _, live := g.recs[key]; !live {
 		for k, r := range g.recs {
 			older := k
@@ -6368,7 +6435,7 @@ func (g *devTier) layersOnce(bs *blockScratch, lo, hi, pos int, x, cs, csSWA []f
 	if bound := g.graphBound(); len(g.recs) > bound {
 		var mine []graphKey
 		for k := range g.recs {
-			if k.sid == g.cur {
+			if k.sid == sid {
 				mine = append(mine, k)
 			}
 		}
@@ -6403,7 +6470,36 @@ func (g *devTier) layersOnce(bs *blockScratch, lo, hi, pos int, x, cs, csSWA []f
 	if g.subFn == nil {
 		g.subFn = g.layersSession
 	}
-	g.dev.Session(g.subFn)
+	// Read here, under g.mu: a page-in another session makes changes it.
+	g.sub.paging = g.pagesIn < len(g.layers)
+	g.sessQueue()
+	// The prologue streams this call's history only when some of it was at
+	// home before the prologue began (evictedFor), which made the call one
+	// to run alone; nothing can have gone home since, so this is a check of
+	// that reasoning and not a path.
+	if !excl && g.exclusiveRange(lo, hi, rag, bs) {
+		return refuse("a submission that must run alone was prepared to run beside others")
+	}
+	g.prologueHeld = false
+	if excl {
+		// Alone on the device, as every submission was before sessions ran
+		// at once: nothing else is in flight (the wait was before the
+		// prologue), and nothing starts while g.mu is held across it.
+		g.runSub(g.subFn)
+	} else {
+		// Beside any other session's: g.mu is let go for the submission, so
+		// the bookkeeping of the others goes on meanwhile. What the
+		// submission builds on the way takes g.mu for the build (subLock),
+		// and its counters are its own until it completes.
+		t := g.beginSub()
+		g.inSub, g.Stats = true, &g.acc
+		g.runUnlocked(g.subFn)
+		g.inSub, g.Stats = false, &g.tot
+		g.tot.add(g.acc)
+		g.acc = Stats{}
+		g.endSub(t)
+		g.freeStale()
+	}
 	err, direct := g.sub.err, g.sub.direct
 	g.sub = submitArgs{}
 	if err != nil {
@@ -6434,11 +6530,16 @@ func (g *devTier) layersOnce(bs *blockScratch, lo, hi, pos int, x, cs, csSWA []f
 }
 
 // submitArgs is one layersOnce submission's state, handed to layersSession
-// through the devTier rather than captured by a closure: the function a
-// Session runs escapes, so a closure over the submission's locals was a heap
-// object -- with every variable it shared with its own closures -- on every
-// token. g.mu is held across the whole submission, so one set serves.
+// through the session's devSess rather than captured by a closure: the
+// function a Session runs escapes, so a closure over the submission's locals
+// was a heap object -- with every variable it shared with its own closures --
+// on every token. A session runs one submission at a time on a device, so one
+// set a session serves.
 type submitArgs struct {
+	// paging says a block of the device is paged out, read before the
+	// submission: a recording names device addresses a page-in allocates
+	// afresh.
+	paging                  bool
 	bs, hb                  *blockScratch
 	head                    *nn.Head
 	lo, hi, pos             int
@@ -6467,6 +6568,8 @@ type submitArgs struct {
 // are g.sub's; see submitArgs.
 func (g *devTier) layersSession(s backend.Session) {
 	a := &g.sub
+	// The session the submission runs for, carried in its recording's key.
+	sid := a.key.sid
 	bs, hb, head, lo, hi, pos, x := a.bs, a.hb, a.head, a.lo, a.hi, a.pos, a.x
 	hx, hcs, hcsSWA, pn, koffs, kposs, rposs := a.hx, a.hcs, a.hcsSWA, a.pn, a.koffs, a.kposs, a.rposs
 	p, rag, pe, key := a.p, a.rag, a.pe, a.key
@@ -6816,7 +6919,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			// A linear block replaces the attention half and ends where it ends, in
 			// bs.mvOut, so everything below is shared (RULE 8a's block as a unit).
 			if l.linear {
-				g.emitLinear(s, bs, l, li, R, rag != nil, p, &err, lc, mvrun, mvrunAct)
+				g.emitLinear(sid, s, bs, l, li, R, rag != nil, p, &err, lc, mvrun, mvrunAct)
 			}
 			if l.ds4 != nil {
 				// DeepSeek V4: the hyper-connection's mix, then its own
@@ -6841,14 +6944,14 @@ func (g *devTier) layersSession(s backend.Session) {
 				// for a KV-sharing block -- while the weights are the model's and
 				// shared. See layer.kv.
 				shared := l.kvSrc != li
-				kvp := g.layers[l.kvSrc].kvOf(g.cur)
+				kvp := g.layers[l.kvSrc].kvOf(sid)
 				if kvp == nil {
 					// A missing cache fails the submission rather than launching against
 					// nil buffers: PrepLayer returns false when a second session's KV does
 					// not fit, so this is reachable on a nearly full card.
 					if err == nil {
 						err = fmt.Errorf("tier: block %d has no KV cache for session %d",
-							li, g.cur)
+							li, sid)
 					}
 					return
 				}
@@ -7525,7 +7628,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					if latent {
 						g.k3LatentIn(lc, bs, l, R, mvrun)
 					}
-					g.emitGroupedMoE(s, lc, bs, l, R, nrow, rin, ein, eout, &err)
+					g.emitGroupedMoE(sid, s, lc, bs, l, R, nrow, rin, ein, eout, &err)
 					if latent {
 						g.k3LatentOut(lc, bs, l, R, mvrun)
 					}
@@ -7641,7 +7744,7 @@ func (g *devTier) layersSession(s backend.Session) {
 							if latent {
 								g.k3LatentIn(lc, bs, l, 1, mvrun)
 							}
-							err = l.stream.runHost(g, s, ein, bs.rw, eout, p.ExpWidth(), bs.nUsed)
+							err = l.stream.runHost(sid, g, s, ein, bs.rw, eout, p.ExpWidth(), bs.nUsed)
 						}
 						if err == nil && !hybrid && (g.StreamProbe || g.StreamPrefetch) && li+1 < hi {
 							// The cross-layer probe: the next block's router over this
@@ -8063,7 +8166,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		//   in a replay.
 		// - History streamed from home: its uploads and waits are per call.
 		if (R > 1 && rag == nil) || !parOK || g.NoGraph || g.graphOff || g.PerLayerSubmit ||
-			g.pagesIn < len(g.layers) || streamed || bs.pkv != nil && bs.pkv.st != nil {
+			a.paging || streamed || bs.pkv != nil && bs.pkv.st != nil {
 			te := time.Now()
 			emit()
 			g.TEmit += time.Since(te)
@@ -8108,7 +8211,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			g.recTick++
 			g.recUsed[key] = g.recTick
 			if have {
-				g.replayRecurrent(lo, hi)
+				g.replayRecurrent(sid, lo, hi)
 			}
 		}
 	}
@@ -8153,7 +8256,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		// the convolution's shift and the delta rule as tokens. Its slots
 		// are where each sequence's state is in the pools, which a
 		// recording therefore does not bake.
-		w(bs.dRows, g.recDesc(nrow))
+		w(bs.dRows, g.recDesc(sid, nrow))
 	}
 	w(bs.koff, koffs)
 	if kst > 0 {
@@ -8400,11 +8503,11 @@ func (g *devTier) ReleaseLayers(lo, hi int) {
 	g.afterRelease()
 }
 
-// leaveLayers is ReleaseLayers for one session: the current one's history
+// leaveLayers is ReleaseLayers for one session: session sid's history
 // on blocks [lo, hi) goes, and a block goes with it only when no other
 // session has history there -- the weights are the model's, and another
 // session is still running against them. It returns the blocks it released.
-func (g *devTier) leaveLayers(lo, hi int) []int {
+func (g *devTier) leaveLayers(sid uint64, lo, hi int) []int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.dropGraph()
@@ -8414,8 +8517,8 @@ func (g *devTier) leaveLayers(lo, hi int) []int {
 		if l == nil {
 			continue
 		}
-		if g.sharedBeyond(li, g.cur) {
-			g.dropHistory(li, l, g.cur)
+		if g.sharedBeyond(li, sid) {
+			g.dropHistory(li, l, sid)
 			continue
 		}
 		g.releaseBlock(li)
@@ -8508,11 +8611,19 @@ func (g *devTier) afterRelease() {
 	g.freeStale()
 }
 
-// ReserveKV gives the current session's sequence the pages pos positions of
+// ReserveKV is reserveKV for the zero session: a caller that never attached.
+func (g *devTier) ReserveKV(pos int) bool {
+	return g.reserveKV(0, pos)
+}
+
+// reserveKV gives session sid's sequence the pages pos positions of
 // its history need, from outside a submission: growing a layer drops the
 // captured graph, which deadlocks CUDA inside a Session. A restored prefix
 // arrives with no submission at all.
-func (g *devTier) ReserveKV(pos int) bool {
+func (g *devTier) reserveKV(sid uint64, pos int) bool {
+	// No scratch is read: the session's pages are all it touches, so it takes
+	// no lane.
+	g = g.bareView(sid)
 	if pos <= 0 {
 		return true
 	}
@@ -8523,21 +8634,27 @@ func (g *devTier) ReserveKV(pos int) bool {
 	if !g.paged {
 		return true
 	}
-	if err := g.pagedHold(pos); err != nil {
+	if err := g.pagedHold(sid, pos); err != nil {
 		g.LastErr = err.Error()
 		return false
 	}
 	return true
 }
 
-// TrimKV gives back the current session's pages past pos, and reports whether
+// TrimKV is trimKV for the zero session: a caller that never attached.
+func (g *devTier) TrimKV(pos int) bool {
+	return g.trimKV(0, pos)
+}
+
+// trimKV gives back session sid's pages past pos, and reports whether
 // any went. The trimmed pages stay in the pool, for this session's next
 // positions or anyone's; kvCompact gives them to the budget when something
 // needs the room. They are room all the same, so it is announced.
-func (g *devTier) TrimKV(pos int) bool {
+func (g *devTier) trimKV(sid uint64, pos int) bool {
+	g = g.bareView(sid)
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.kvp == nil || !g.kvp.trimSeq(seqID{g.cur, 0}, pos) {
+	if g.kvp == nil || !g.kvp.trimSeq(seqID{sid, 0}, pos) {
 		return false
 	}
 	g.roomGen.Add(1)
@@ -8547,9 +8664,9 @@ func (g *devTier) TrimKV(pos int) bool {
 // dropSession frees everything session sid holds on this device: its history
 // and its recurrent state on every block.
 func (g *devTier) dropSession(sid uint64) {
-	delete(g.hostFns, sid)
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	delete(g.hostFns, sid)
 	// The crossing sample is this session's too, and session ids never repeat,
 	// so a map left to grow is a leak of one small struct per closed State.
 	delete(g.mv, sid)
@@ -8561,14 +8678,9 @@ func (g *devTier) dropSession(sid uint64) {
 		// A captured launch sequence names the buffers just freed.
 		g.dropGraph()
 	}
-	// Its own recordings name nothing that will be read again either.
-	for k, r := range g.recs {
-		if k.sid == sid {
-			g.stale = append(g.stale, r)
-			delete(g.recs, k)
-		}
-	}
-	g.freeStale()
+	// Its own recordings name nothing that will be read again either, in
+	// whichever lane they were made, and its state on this device goes.
+	g.forgetSess(sid)
 	// Its seat in the recurrent pools, and a pool it was the last to hold.
 	g.recTidy()
 	// Its pages are free now and stay in the pool for the next session;
@@ -8619,20 +8731,31 @@ func (g *devTier) dropHistory(li int, l *layer, sid uint64) bool {
 	return freed
 }
 
-// MigrateRec moves block li's recurrent summary between host and device.
+// MigrateRec is migrateRec for the zero session: a caller that never attached.
+func (g *devTier) MigrateRec(li int, conv, state []float32, toDevice bool) bool {
+	return g.migrateRec(0, li, conv, state, toDevice)
+}
+
+// migrateRec moves block li's recurrent summary between host and device.
 // model.State.rconv/rstate are what every host consumer reads (including the
 // -kv-cache seal), and a placed linear block never touches them, so without this
 // a cached restore would resume from a summary that never saw the prompt. It
 // reads half cur, the state as of the last completed token, at the session's
 // seat in the block's pool.
-func (g *devTier) MigrateRec(li int, conv, state []float32, toDevice bool) bool {
+func (g *devTier) migrateRec(sid uint64, li int, conv, state []float32, toDevice bool) bool {
+	v := g.as(sid)
+	if v == nil {
+		return false
+	}
+	defer v.done()
+	g = v
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	l := g.layers[li]
 	if l == nil {
 		return false
 	}
-	rp := l.recOf(g.cur)
+	rp := l.recOf(sid)
 	if rp == nil {
 		// Not a linear block, or no session state: nothing to move is success,
 		// exactly as MigrateKV treats a block with no cache.
@@ -8649,7 +8772,7 @@ func (g *devTier) MigrateRec(li int, conv, state []float32, toDevice bool) bool 
 			"the caller offered %d and %d", li, g.recC, g.recS, len(conv), len(state))
 		return false
 	}
-	st := g.recSeats[g.cur]
+	st := g.recSeats[sid]
 	switch {
 	case st.rows == rows:
 	case st.rows < rows && !toDevice:
@@ -8663,10 +8786,10 @@ func (g *devTier) MigrateRec(li int, conv, state []float32, toDevice bool) bool 
 		// growSeat discards the session's states, which is right, since a
 		// batch's rows have no history on this device before its first step
 		// and every row is written next.
-		if !g.growSeat(rows) {
+		if !g.growSeat(sid, rows) {
 			return false
 		}
-		st = g.recSeats[g.cur]
+		st = g.recSeats[sid]
 	default:
 		g.LastErr = fmt.Sprintf("MigrateRec: block %d holds %d row(s), the caller offered %d",
 			li, st.rows, rows)
@@ -8725,7 +8848,12 @@ func (g *devTier) MigrateRec(li int, conv, state []float32, toDevice bool) bool 
 	return true
 }
 
-// MigrateKV moves block li's attention history between host and device.
+// MigrateKV is migrateKV for the zero session: a caller that never attached.
+func (g *devTier) MigrateKV(li int, k, v []float32, pos int, toDevice bool) bool {
+	return g.migrateKV(0, li, k, v, pos, toDevice)
+}
+
+// migrateKV moves block li's attention history between host and device.
 // Without it a block that changes sides mid-generation attends over whatever
 // was in the pages it arrived at: fluent, wrong text.
 //
@@ -8733,15 +8861,21 @@ func (g *devTier) MigrateRec(li int, conv, state []float32, toDevice bool) bool 
 // float32; only positions [0, pos) are moved (pagedMigrate). A block with no
 // paged history here -- a tower, whose keys live for one encode -- has
 // nothing to move.
-func (g *devTier) MigrateKV(li int, k, v []float32, pos int, toDevice bool) bool {
+func (g *devTier) migrateKV(sid uint64, li int, k, v []float32, pos int, toDevice bool) bool {
+	sv := g.as(sid)
+	if sv == nil {
+		return false
+	}
+	defer sv.done()
+	g = sv
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	l := g.layers[li]
-	kvp := l.kvOf(g.cur)
+	kvp := l.kvOf(sid)
 	if kvp == nil || !kvp.paged || pos <= 0 {
 		return l != nil
 	}
-	if err := g.pagedMigrate(li, 0, k, v, pos, toDevice); err != nil {
+	if err := g.pagedMigrate(sid, li, 0, k, v, pos, toDevice); err != nil {
 		g.LastErr = fmt.Sprintf("MigrateKV: block %d: %v", li, err)
 		return false
 	}
@@ -9079,6 +9213,8 @@ func (g *devTier) actWinFor(ntok int) int {
 // it), then the other tiled forms, then the dp4a tile. The widest admissible
 // warp tile is a divisor calculation (mmaTile), not a search.
 func (g *devTier) batchMV(m mv, ntok, tok int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	// A float weight has no tensor-core kernel. Asking would fail, and a
 	// failure here switches MMA off for every other matvec (mmaOff).
 	if mt, nt, ok := g.mmaTile(m.rows, ntok); ok && !kernels.IsFloat(m.q) {
@@ -9122,6 +9258,8 @@ func (g *devTier) batchMV(m mv, ntok, tok int) (mv, bool) {
 // accumulators a lane) and narrower ones read the weights more times per chunk.
 // mvbench -mma has the per-shape isolated numbers.
 func (g *devTier) mmaTile(rows, ntok int) (int, int, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
 	if g.mmaOff || g.NoMMA {
 		return 0, 0, false
 	}
@@ -9221,11 +9359,15 @@ func (g *devTier) capped(p *nn.LayerPlan) nn.LayerPlan {
 func (g *devTier) ensureKVCap(pos int) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if !g.paged || g.kvCap >= g.maxSeqAsked || g.bs == nil {
+	// Per lane: a lane built before the growth still has the old bound,
+	// whichever lane grew first.
+	if !g.paged || g.bs == nil || g.kvCap >= g.maxSeqAsked && g.bs.p.MaxSeq >= g.maxSeqAsked {
 		return true
 	}
 	g.kvCap = g.maxSeqAsked
-	g.dropGraph()
+	// The recordings made in this lane name the scratch about to go; no
+	// other lane's changes.
+	g.dropLaneGraph()
 	// Every scratch set (gemma4.go) is built at the capacity, not only the
 	// one in use: a set left at the old bound refuses the next position.
 	home := g.geoCur
@@ -9268,6 +9410,7 @@ func (g *devTier) rebuildScratch(plan *nn.LayerPlan) bool {
 		g.dropBatch(w)
 	}
 	g.bs = fresh
+	g.shapeChanged()
 	// The reserved widths went with the old scratches: built again at the new
 	// shape, here, because a capacity growth rebuilds outside any placement.
 	g.reserveScratch(plan, 0)
@@ -9572,7 +9715,7 @@ func deltaScanOf(r nn.RecurrentPlan, rows, lanes int) kernels.DeltaScan {
 // the recurrent descriptor (recDesc). It takes the caller's la and
 // mvrun so a linear block shares the launch accounting and batched-twin
 // selection.
-func (g *devTier) emitLinear(s backend.Session, bs *blockScratch, l *layer,
+func (g *devTier) emitLinear(sid uint64, s backend.Session, bs *blockScratch, l *layer,
 	li, R int, rag bool, p *nn.LayerPlan, errp *error,
 	lc *launcher,
 	mvrun func(mv, *resident, backend.Buf),
@@ -9583,11 +9726,11 @@ func (g *devTier) emitLinear(s backend.Session, bs *blockScratch, l *layer,
 	// stages it with the other per-call writes, outside emit, through the
 	// session's Write (a Buf.Write would deadlock on the CUDA goroutine, and a
 	// copy inside a recording invalidates the capture).
-	par, has := g.stepPar(l)
+	par, has := g.stepPar(sid, l)
 	pool := l.pool
 	if !has || pool == nil {
 		if *errp == nil {
-			*errp = fmt.Errorf("tier: block %d has no recurrent state for session %d", li, g.cur)
+			*errp = fmt.Errorf("tier: block %d has no recurrent state for session %d", li, sid)
 		}
 		return
 	}
@@ -9612,15 +9755,15 @@ func (g *devTier) emitLinear(s backend.Session, bs *blockScratch, l *layer,
 	lc.la(bs.quantE, kernels.QuantizeThreads(R*p.NEmbd/32), bs.h, bs.a, bs.ax)
 
 	if r.SSD {
-		g.emitSSD(bs, l, li, R, rag, p, errp, lc, mvrun, pool, par, seqs)
+		g.emitSSD(sid, bs, l, li, R, rag, p, errp, lc, mvrun, pool, par, seqs)
 		return
 	}
 	if r.ShortConv {
-		g.emitShortConv(bs, l, li, R, rag, p, errp, lc, mvrun, pool, par)
+		g.emitShortConv(sid, bs, l, li, R, rag, p, errp, lc, mvrun, pool, par)
 		return
 	}
 	if r.Mamba1 {
-		g.emitMamba1(bs, l, li, R, rag, p, errp, lc, mvrun, mvrunAct, pool, par, seqs)
+		g.emitMamba1(sid, bs, l, li, R, rag, p, errp, lc, mvrun, mvrunAct, pool, par, seqs)
 		return
 	}
 	// The three projections. Wq carries the fused q|k|v of a linear block (the
@@ -9805,7 +9948,7 @@ func (g *devTier) emitLinear(s backend.Session, bs *blockScratch, l *layer,
 	// does not make a failed submission resumable (blocks before the failure did
 	// advance, which is why model.State.forward refuses a host restart).
 	if errp == nil || *errp == nil {
-		g.stepFlip(l)
+		g.stepFlip(sid, l)
 		// graphKey reads this block's half (rangeParity), so the next token
 		// replays the other recording; with a constant parity one recording
 		// would serve every token and the recurrence would freeze.
@@ -9821,7 +9964,7 @@ func (g *devTier) emitLinear(s backend.Session, bs *blockScratch, l *layer,
 // D skip (kernels.GatedDeltaFused with SSD) -- then y*silu(z), its grouped
 // norm, and ssm_out into bs.mvOut. The pre-norm and its quantization ran in
 // emitLinear; the state is out of place exactly as there.
-func (g *devTier) emitSSD(bs *blockScratch, l *layer, li, R int, rag bool, p *nn.LayerPlan,
+func (g *devTier) emitSSD(sid uint64, bs *blockScratch, l *layer, li, R int, rag bool, p *nn.LayerPlan,
 	errp *error, lc *launcher, mvrun func(mv, *resident, backend.Buf), pool *recPool, par int, seqs int) {
 	r := bs.rec
 	inS, inC := pool.s[par], pool.c[par]
@@ -9898,7 +10041,7 @@ func (g *devTier) emitSSD(bs *blockScratch, l *layer, li, R int, rag bool, p *nn
 	lc.la(bs.quantD, kernels.QuantizeThreads(R*inner/32), act, bs.a, bs.ax)
 	mvrun(l.mvSO, l.ssmOut, out)
 	if errp == nil || *errp == nil {
-		g.stepFlip(l)
+		g.stepFlip(sid, l)
 		g.recSteps++
 	}
 }
@@ -9907,7 +10050,7 @@ func (g *devTier) emitSSD(bs *blockScratch, l *layer, li, R int, rag bool, p *nn
 // pre-norm to bs.mvOut: x, B and C, B*x through the convolution (its window is
 // the block's whole recurrent state, in pool.c), C times that, out_proj. The
 // two products are kernels.ActMul with the identity.
-func (g *devTier) emitShortConv(bs *blockScratch, l *layer, li, R int, rag bool, p *nn.LayerPlan,
+func (g *devTier) emitShortConv(sid uint64, bs *blockScratch, l *layer, li, R int, rag bool, p *nn.LayerPlan,
 	errp *error, lc *launcher, mvrun func(mv, *resident, backend.Buf), pool *recPool, par int) {
 	r := bs.rec
 	inC, outC := pool.c[par], pool.c[1-par]
@@ -9940,7 +10083,7 @@ func (g *devTier) emitShortConv(bs *blockScratch, l *layer, li, R int, rag bool,
 	lc.la(bs.quantE, kernels.QuantizeThreads(R*p.NEmbd/32), bs.scY, bs.a, bs.ax)
 	mvrun(l.mvSO, l.ssmOut, bs.mvOut)
 	if errp == nil || *errp == nil {
-		g.stepFlip(l)
+		g.stepFlip(sid, l)
 		g.recSteps++
 	}
 }
@@ -9954,7 +10097,7 @@ func (g *devTier) emitShortConv(bs *blockScratch, l *layer, li, R int, rag bool,
 // in emitLinear; the state is out of place exactly as there. Its four
 // matrices ride KDA's slots (nn.SSMWeights): x_proj's dt rows in FA, dt_proj
 // in FB, its B and C rows in GA and GB.
-func (g *devTier) emitMamba1(bs *blockScratch, l *layer, li, R int, rag bool, p *nn.LayerPlan,
+func (g *devTier) emitMamba1(sid uint64, bs *blockScratch, l *layer, li, R int, rag bool, p *nn.LayerPlan,
 	errp *error, lc *launcher, mvrun func(mv, *resident, backend.Buf),
 	mvrunAct func(mv, *resident, backend.Buf, backend.Buf, backend.Buf, backend.Buf),
 	pool *recPool, par int, seqs int) {
@@ -10039,7 +10182,7 @@ func (g *devTier) emitMamba1(bs *blockScratch, l *layer, li, R int, rag bool, p 
 	lc.la(bs.quantD, kernels.QuantizeThreads(R*inner/32), bs.dAct, bs.a, bs.ax)
 	mvrun(l.mvSO, l.ssmOut, bs.mvOut)
 	if errp == nil || *errp == nil {
-		g.stepFlip(l)
+		g.stepFlip(sid, l)
 		g.recSteps++
 	}
 }

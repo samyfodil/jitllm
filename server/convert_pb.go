@@ -85,7 +85,7 @@ func pbFinish(r FinishReason) v1.FinishReason {
 
 func (e *Engine) pbDevice(d DeviceInfo) *v1.Device {
 	key := e.infoGateKey(d)
-	g, _, running, waiting := e.deviceQueue(key)
+	_, running, waiting := e.deviceQueue(key)
 	attached := 0
 	e.mu.RLock()
 	for _, s := range e.sessions {
@@ -106,8 +106,8 @@ func (e *Engine) pbDevice(d DeviceInfo) *v1.Device {
 		TotalMemory:            pbBytes(d.TotalMemory),
 		FreeMemory:             pbBytes(d.FreeMemory),
 		CountsTowardHostBudget: d.CountsTowardHostBudget,
-		Execution:              pbExecution(g.mode),
-		ExecutionNote:          g.note,
+		Execution:              pbExecution(ExecutionParallel),
+		ExecutionNote:          executionNote,
 		AttachedSessions:       int32(attached),
 		RunningSessions:        int32(running),
 		QueuedRequests:         int32(max(0, waiting)),
@@ -196,7 +196,6 @@ func (e *Engine) pbModelInfo(lm *LoadedModel) *v1.ModelInfo {
 // touch it while a generate is in flight. See the snap* fields on session.
 func (e *Engine) pbSession(s *Session) *v1.Session {
 	devBlocks := s.snapDevBlocks.Load()
-	gs := e.gatesFor(s.lm.gateIDs())
 	return &v1.Session{
 		SessionId:          s.id,
 		ModelId:            s.modelID,
@@ -206,7 +205,7 @@ func (e *Engine) pbSession(s *Session) *v1.Session {
 		DeviceBlocks:       devBlocks,
 		HostBlocks:         int32(s.lm.m.Cfg.NLayer) - devBlocks,
 		KvBytes:            pbBytes(s.snapKV.Load()),
-		Execution:          pbExecution(sessionMode(s, gs)),
+		Execution:          pbExecution(sessionMode(s)),
 		QueuePosition:      s.queuePos.Load(),
 		Generating:         s.running.Load(),
 		CreatedUnixMillis:  s.created.UnixMilli(),

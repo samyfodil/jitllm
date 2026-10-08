@@ -83,8 +83,8 @@ message GenerateRequest {
   // text, and a chat turn is not one.
   bool echo_prompt = 8;
 
-  // Maximum milliseconds to wait for the device's scratch before starting.
-  // Zero waits indefinitely. A second session is never refused, but a caller
+  // Maximum milliseconds to wait for a row of the model's step loop when it is
+  // full. Zero waits indefinitely. A request is never refused, but a caller
   // may decline to wait.
   int32 queue_timeout_millis = 9;
 
@@ -114,9 +114,9 @@ message GenerateStarted {
   bool ephemeral_session = 3;
 
   int32 prompt_tokens = 4;
-  // Milliseconds this request waited before it ran: for its device's gate
-  // while another session held it, or, when `batched`, for admission into the
-  // model's step loop. Zero on an idle host or device.
+  // Milliseconds this request waited before it ran: when `batched`, for
+  // admission into the model's step loop. Zero otherwise: nothing waits for a
+  // device or the host as a whole.
   int64 queued_millis = 5;
   // Requests ahead of this one in that queue when it arrived.
   int32 queue_depth_on_entry = 6;
@@ -208,8 +208,8 @@ message EmbedRequest {
   // for a model trained for Matryoshka truncation, and the container records
   // no such property.
   int32 dimensions = 3;
-  // Maximum milliseconds to wait for the host before starting. Zero waits
-  // indefinitely.
+  // Ignored: an embed waits for nothing as a whole, it takes the host's
+  // shared pool a region at a time beside every other session.
   int32 queue_timeout_millis = 4;
 }
 
@@ -228,7 +228,7 @@ message EmbedResponse {
   // The container's readout: "mean", "cls" or "last".
   string pooling = 4;
   int32 total_tokens = 5;
-  // Milliseconds this request waited for the host while other work held it.
+  // Zero: kept for a reader of older servers, which held the host per request.
   int64 queued_millis = 6;
   int32 queue_depth_on_entry = 7;
   // Wall time of the embedding itself, every input.

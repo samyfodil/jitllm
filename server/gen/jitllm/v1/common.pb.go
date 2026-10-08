@@ -249,12 +249,11 @@ func (BlockKind) EnumDescriptor() ([]byte, []int) {
 	return file_jitllm_v1_common_proto_rawDescGZIP(), []int{3}
 }
 
-// ExecutionMode reports whether work on a device can run concurrently. The
-// engine holds ONE scratch set per device, so sessions that take a device
-// alone are correct but serialised; a session wholly on one device is PARALLEL
-// instead, its generates decoding as rows of steps shared with its model's
-// other sessions. That is a property of the engine and this field exists so a
-// caller learns it from the API rather than from mysterious latency.
+// ExecutionMode reports whether work on a device can run concurrently. It is
+// PARALLEL: a session wholly on one device decodes as a row of steps shared
+// with its model's other sessions, and any other session interleaves with
+// them a step at a time. SERIALISED is kept for a reader of older servers,
+// which held a device for a whole request.
 type ExecutionMode int32
 
 const (

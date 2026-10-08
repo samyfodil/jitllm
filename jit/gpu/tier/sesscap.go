@@ -10,16 +10,6 @@ import (
 // paged (pagedattn.go), so no kernel bakes a session's capacity and switching
 // sessions is a change of whose pages a call reads, and of the recording.
 
-// switchTo makes sid the device's current session. Callers hold g.mu.
-//
-// The recordings stay: each bakes its own session's descriptors and pages,
-// and is keyed by that session (graphKey.sid), so the next call replays the
-// new session's own recording or makes one. A session's recordings go when it
-// detaches (dropSession).
-func (g *devTier) switchTo(sid uint64) {
-	g.cur = sid
-}
-
 // moveHead hands the output projection from src to dst. The head is the
 // model's, not a capacity's: it rides whichever text scratch is current, and
 // src forgets it so that freeing src cannot free the head's buffers.

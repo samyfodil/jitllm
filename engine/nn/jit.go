@@ -457,13 +457,18 @@ func NewJIT(maxK, maxRows int, types []quant.Type, opts ...Option) *JIT {
 	// The caller's sched options reach the pool here, which is the whole
 	// chain: cmd reads JITLLM_CORES -> model.Option -> nn.WithSched ->
 	// sched.WithCores. Nothing between them reads the environment.
-	f.pool = sched.New(sched.DecodeCores(cfg.Sched...), cfg.Sched...)
+	//
+	// The pool is a view of the process's workers for these cores (sched.Shared):
+	// every State builds a JIT, and two States each with workers of their own
+	// would be two pools spinning on the same cores. Views take turns a region
+	// at a time, so sessions on one host run beside each other.
+	f.pool = sched.Shared(sched.DecodeCores(cfg.Sched...), cfg.Sched...)
 	// Not when the caller narrowed the decode pool below the default P set
 	// (JITLLM_CORES): a prefill pool wider than what was asked for would
 	// quietly ignore the request.
 	if cs := sched.CoreSet(prefillCoreSet(cfg.PrefillCores)); len(cs) > f.pool.Max() &&
 		f.pool.Max() >= len(sched.DecodeCores()) && len(cs) <= runtime.NumCPU() {
-		f.wide = sched.New(cs, cfg.Sched...)
+		f.wide = sched.Shared(cs, cfg.Sched...)
 	}
 	f.narrow = f.pool
 	// The narrow quantizer's spill space, one run per worker, sized from the

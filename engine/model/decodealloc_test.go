@@ -253,10 +253,22 @@ func stepAllocs(t *testing.T, m *Model, g *tier.GPU, mode stepMode) {
 	for k := range warm {
 		step(k)
 	}
+	// The placement is checked again after the warm-up: a State whose
+	// history outgrew what the card had left hands its blocks home
+	// (SetRelocate), which is the answer a too-small card gives, not a
+	// failure of the step -- but it is said, with what moved.
+	if mode != stepSolo {
+		for k, r := range runs {
+			if err := r.State.StepRefusal(); err != nil && r.State.Relocations() > 0 {
+				t.Skipf("CARD TOO SMALL after the warm-up: run %d moved %d block(s) home (%v), so the "+
+					"step cannot be joint -- this arm proved nothing", k, r.State.Relocations(), err)
+			}
+		}
+	}
 	if err := prefaultExperts(m); err != nil {
 		t.Fatal(err)
 	}
-	c0 := g.Stats()
+	c0, d0 := g.Stats(), g.DevStats()
 	r0 := m.container.Reads()
 	w := countAllocs(func() {
 		for k := range n {
@@ -272,9 +284,25 @@ func stepAllocs(t *testing.T, m *Model, g *tier.GPU, mode stepMode) {
 	if mode == stepSolo {
 		want = 0 // one run is no step across sessions
 	}
-	if got := c1.SessionRows - c0.SessionRows; got != want {
-		t.Fatalf("%d row(s) stepped across sessions, want %d: the arm did not run the step it names (%v)",
-			got, want, runs[0].State.StepRefusal())
+	// Each device counts the rows it ran, so on a tier over several devices
+	// every device holding blocks counts the whole step and the rest none.
+	d1, placed := g.DevStats(), g.Placed()
+	for i := range d1 {
+		w := want
+		if i >= len(placed) || placed[i] == 0 {
+			w = 0
+		}
+		if got := d1[i].SessionRows - d0[i].SessionRows; got != w {
+			why := make([]string, len(runs))
+			for k, r := range runs {
+				why[k] = fmt.Sprint(r.State.StepRefusal())
+				if k > 0 && r.State.ldCand != runs[0].State.ldCand {
+					why[k] += " (another device candidate than run 0's)"
+				}
+			}
+			t.Fatalf("device %d (%d blocks) stepped %d row(s) across sessions, want %d: the arm did not run "+
+				"the step it names; each run's refusal: %v", i, placed[i], got, w, why)
+		}
 	}
 	// An AltUp model's head reads the streams' mean on the host (altup.go),
 	// and DeepSeek V4's their collapse (ds4.go): none of their steps takes

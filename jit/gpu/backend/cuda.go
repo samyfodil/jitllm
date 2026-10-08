@@ -52,6 +52,16 @@ type cudaDev struct {
 	// itself.
 	run sync.Mutex
 	in  atomic.Int64
+	// life is read-held by every Session on a queue and write-held by Close,
+	// so the context is never destroyed under one. queued is the threads
+	// running such a Session (nQueued of them), so a call made from inside
+	// one runs straight through as from inside an inline one; queues is every
+	// queue not yet closed, which Close destroys before the context.
+	life    sync.RWMutex
+	qmu     sync.Mutex
+	queued  map[int64]qRef
+	nQueued atomic.Int32
+	queues  map[*cudaQueue]bool
 	// posted routes every call through the owner goroutine instead of running
 	// it inline; Opts.CUDAPosted, fixed at open.
 	posted bool
@@ -113,6 +123,13 @@ func OpenCUDAWith(ord int, opts Opts) (Device, error) {
 // owner, f is the caller's), so building them per call was two heap objects
 // on every decode token. Nested sessions take a request each.
 func (c *cudaDev) Session(f func(Session)) {
+	// Inside a Session on a queue, a nested one is that queue's: on the legacy
+	// stream it would not be ordered against the queue's work.
+	if q := c.curQueue(); q != nil {
+		ownerCalls.Add(1)
+		f(&q.s)
+		return
+	}
 	c.reqMu.Lock()
 	var r *sessReq
 	if n := len(c.reqFree); n > 0 {
@@ -141,8 +158,16 @@ type sessReq struct {
 }
 
 func (r *sessReq) call() {
+	// The legacy stream and a queue's non-blocking stream are not ordered
+	// against each other: with queues open, the session's work has landed
+	// when it returns, so a queue's later work reads what it wrote. Only the
+	// legacy stream is waited for, not the queues, which run on. A failed
+	// synchronise is a sticky context error the next call reports.
 	r.s = cudaSession{c: r.c}
 	r.f(&r.s)
+	if r.c.hasQueues() {
+		cuda.SyncLegacy()
+	}
 }
 
 // cudaSession's methods run on the owner goroutine already, so they call
@@ -157,6 +182,9 @@ func (r *sessReq) call() {
 // Session that is already running on the owner.
 type cudaSession struct {
 	c *cudaDev
+	// q is the queue this session runs on, nil on the legacy stream. Every
+	// copy, launch, capture and wait of a queued session is on q's stream.
+	q *cudaQueue
 	// stream is where launches go: zero is the legacy stream, non-zero only
 	// while a capture is open.
 	stream cuda.CUstream
@@ -167,25 +195,26 @@ type cudaSession struct {
 	recMarks []kernMark
 }
 
-func (*cudaSession) Write(b Buf, p []byte) error {
+func (s *cudaSession) Write(b Buf, p []byte) error { return s.WriteAt(b, 0, p) }
+
+func (s *cudaSession) WriteAt(b Buf, off int, p []byte) error {
 	if len(p) == 0 {
 		return nil
 	}
-	return b.(*cudaBuf).b.Write(unsafe.Pointer(&p[0]), len(p))
-}
-
-func (*cudaSession) WriteAt(b Buf, off int, p []byte) error {
-	if len(p) == 0 {
-		return nil
+	if s.q != nil {
+		return s.q.write(b.(*cudaBuf).b, off, p)
 	}
 	return b.(*cudaBuf).b.WriteAt(off, unsafe.Pointer(&p[0]), len(p))
 }
 
-func (*cudaSession) Read(b Buf, p []byte) error {
+func (s *cudaSession) Read(b Buf, p []byte) error {
 	if len(p) == 0 {
 		return nil
 	}
 	countRead(len(p))
+	if s.q != nil {
+		return s.q.read(b.(*cudaBuf).b, p)
+	}
 	return b.(*cudaBuf).b.Read(unsafe.Pointer(&p[0]), len(p))
 }
 
@@ -199,6 +228,14 @@ func (s *cudaSession) Launch(k Kernel, groups, width int, bufs ...Buf) error {
 	}
 	m := ck.m
 	args := m.Args(len(bufs))
+	if s.q != nil {
+		// The module's argument array is shared by every caller of the kernel,
+		// and two queues launch it at once: a queued session fills its own.
+		args = s.q.args[:min(len(bufs), len(s.q.args))]
+		if len(bufs) > len(s.q.args) {
+			args = nil
+		}
+	}
 	if args == nil {
 		return fmt.Errorf("backend: cuda: %d kernel arguments is too many", len(bufs))
 	}
@@ -214,7 +251,11 @@ func (s *cudaSession) Launch(k Kernel, groups, width int, bufs ...Buf) error {
 	// No Sync: see the Session interface. cuMemcpyDtoH on the legacy stream
 	// waits for prior work on it and on every blocking stream, so the readback
 	// orders this whether it ran here or inside a replayed graph.
-	if err := m.LaunchArgs(s.stream, groups, width, args); err != nil {
+	st := s.stream
+	if st == 0 && s.q != nil {
+		st = s.q.st.Handle()
+	}
+	if err := m.LaunchArgs(st, groups, width, args); err != nil {
 		return err
 	}
 	if s.marks != nil {
@@ -284,7 +325,12 @@ func CUDAKernelTimes() (us map[string]float64, n map[string]int) {
 	return us, n
 }
 
-func (*cudaSession) Sync() error { return cuda.Sync() }
+func (s *cudaSession) Sync() error {
+	if s.q != nil {
+		return s.q.sync()
+	}
+	return cuda.Sync()
+}
 
 // BeginRecord starts capturing this session's launches into a graph instead
 // of running them. It redirects the launches rather than intercepting them, so
@@ -293,6 +339,15 @@ func (*cudaSession) Sync() error { return cuda.Sync() }
 func (s *cudaSession) BeginRecord() error {
 	if !cuda.GraphsAvailable() {
 		return fmt.Errorf("backend: cuda: this driver has no stream capture")
+	}
+	if s.q != nil {
+		// A queue captures on its own stream: it is already not the legacy
+		// stream, and its copies are on it too.
+		if err := s.q.st.BeginCapture(); err != nil {
+			return err
+		}
+		s.stream = s.q.st.Handle()
+		return nil
 	}
 	if s.c.cap == nil {
 		if s.c.noCap {
@@ -323,9 +378,13 @@ func (s *cudaSession) BeginRecord() error {
 func (s *cudaSession) EndRecord() (Recording, error) {
 	marks := s.recMarks
 	s.stream, s.marks, s.recMarks = 0, nil, nil
+	capSt := s.c.cap
+	if s.q != nil {
+		capSt = s.q.st
+	}
 	// EndCapture runs even when the launches failed: a stream left capturing
 	// refuses every later launch on it, and its error is the informative one.
-	g, err := s.c.cap.EndCapture()
+	g, err := capSt.EndCapture()
 	if err != nil {
 		return nil, err
 	}
@@ -334,6 +393,9 @@ func (s *cudaSession) EndRecord() (Recording, error) {
 
 func (s *cudaSession) Replay(r Recording) error {
 	cg := r.(*cudaGraph)
+	if s.q != nil {
+		return cg.g.Launch(s.q.st)
+	}
 	if len(cg.marks) > 0 {
 		// The previous timed replay is done: decode read its token back.
 		settleMarks(s.c.lastMarks)
@@ -458,7 +520,7 @@ var errCUDAClosed = errors.New("backend: cuda: the device is closed")
 // caller's stack and does not kill the owner.
 func (c *cudaDev) do(f func()) {
 	tid := threadID()
-	if tid >= 0 && (tid == c.owner || tid == c.in.Load()) {
+	if tid >= 0 && (tid == c.owner || tid == c.in.Load() || c.inQueue(tid)) {
 		ownerCalls.Add(1)
 		f()
 		return
@@ -631,9 +693,12 @@ func (c *cudaDev) Mem() (free, total uint64, err error) {
 // so the OS thread that held the context outlives the context; see
 // cuda.Device.Close.
 func (c *cudaDev) Close() {
-	// No inline call may be running on the context while it is destroyed.
+	// No inline call and no Session on a queue may be running on the context
+	// while it is destroyed.
 	c.run.Lock()
 	defer c.run.Unlock()
+	c.life.Lock()
+	defer c.life.Unlock()
 	c.mu.Lock()
 	if c.reqs == nil {
 		c.mu.Unlock()
@@ -642,8 +707,18 @@ func (c *cudaDev) Close() {
 	c.mu.Unlock()
 	done := make(chan struct{})
 	c.reqs <- func() {
-		// The stream goes before the context that owns it.
+		// The streams go before the context that owns them.
 		c.cap.Destroy()
+		c.qmu.Lock()
+		for q := range c.queues {
+			q.st.Destroy()
+			if q.stage != nil {
+				cuda.FreeHost(q.stage)
+				q.stage = nil
+			}
+		}
+		c.queues = nil
+		c.qmu.Unlock()
 		c.d.Close()
 		close(done)
 	}
@@ -721,17 +796,35 @@ func (b *cudaBuf) Write(p []byte) error {
 	if len(p) == 0 {
 		return nil
 	}
-	err := errCUDAClosed
-	b.dev.do(func() { err = b.b.Write(unsafe.Pointer(&p[0]), len(p)) })
-	return err
+	return b.WriteAt(0, p)
 }
 
 func (b *cudaBuf) WriteAt(off int, p []byte) error {
 	if len(p) == 0 {
 		return nil
 	}
+	if q := b.dev.curQueue(); q != nil {
+		return q.write(b.b, off, p)
+	}
 	err := errCUDAClosed
-	b.dev.do(func() { err = b.b.WriteAt(off, unsafe.Pointer(&p[0]), len(p)) })
+	b.dev.do(func() {
+		// Outside a queue the legacy stream does not wait for one, and a write
+		// must land after everything before it.
+		queues := b.dev.hasQueues()
+		if queues {
+			if err = cuda.Sync(); err != nil {
+				return
+			}
+		}
+		err = b.b.WriteAt(off, unsafe.Pointer(&p[0]), len(p))
+		// From pageable memory the copy returns once the driver has staged
+		// the bytes, not once they have landed: a queue's next launch, on a
+		// stream that does not wait for the legacy one, could read the old
+		// ones.
+		if err == nil && queues {
+			err = cuda.SyncLegacy()
+		}
+	})
 	return err
 }
 
@@ -740,8 +833,18 @@ func (b *cudaBuf) Read(p []byte) error {
 		return nil
 	}
 	countRead(len(p))
+	if q := b.dev.curQueue(); q != nil {
+		return q.read(b.b, p)
+	}
 	err := errCUDAClosed
-	b.dev.do(func() { err = b.b.Read(unsafe.Pointer(&p[0]), len(p)) })
+	b.dev.do(func() {
+		if b.dev.hasQueues() {
+			if err = cuda.Sync(); err != nil {
+				return
+			}
+		}
+		err = b.b.Read(unsafe.Pointer(&p[0]), len(p))
+	})
 	return err
 }
 
@@ -764,6 +867,13 @@ func (c *cudaDev) Copy(dst Buf, dstOff int, src Buf, srcOff, n int) error {
 	}
 	err := errCUDAClosed
 	c.do(func() {
+		// The legacy stream does not wait for a queue's non-blocking stream,
+		// so with queues open the copy waits for the whole context first.
+		if c.hasQueues() {
+			if err = cuda.Sync(); err != nil {
+				return
+			}
+		}
 		if err = cuda.CopyDtoD(db.b, dstOff, sb.b, srcOff, n); err == nil {
 			err = cuda.Sync()
 		}
@@ -801,3 +911,206 @@ func (k *cudaKern) Launch(groups, width int, bufs ...Buf) error {
 }
 
 func (k *cudaKern) Close() { k.dev.do(func() { k.m.Unload() }) }
+
+// cudaQueue is one non-blocking stream, with the argument array its sessions
+// launch from (cuda.Module's own is shared by every caller of the kernel)
+// and the session SessionOn hands out, reused so a call allocates nothing.
+type cudaQueue struct {
+	c    *cudaDev
+	st   *cuda.Stream
+	mu   sync.Mutex
+	args [24]unsafe.Pointer
+	s    cudaSession
+	// stage is page-locked host memory every copy of this queue goes through,
+	// used from the front and reset once the stream has drained. A copy from
+	// pageable memory is staged by the driver synchronously, which stalls the
+	// other queues' work as well as this one's: two sessions' kernels then run
+	// one after another whatever streams they are on.
+	stage []byte
+	used  int
+}
+
+// stageMin is a queue's first staging arena: a decode token's writes (the
+// position, the descriptors, the embedding row) and its readback fit many
+// times over.
+const stageMin = 1 << 20
+
+// room returns n bytes of the staging arena, draining the stream first when
+// they are not free and growing the arena when n is more than all of it.
+func (q *cudaQueue) room(n int) ([]byte, error) {
+	if q.used+n > len(q.stage) {
+		if err := q.st.Sync(); err != nil {
+			return nil, err
+		}
+		q.used = 0
+	}
+	if n > len(q.stage) {
+		if q.stage != nil {
+			cuda.FreeHost(q.stage)
+			q.stage = nil
+		}
+		b, err := cuda.HostAlloc(max(n, stageMin))
+		if err != nil {
+			return nil, err
+		}
+		q.stage = b
+	}
+	p := q.stage[q.used : q.used+n : q.used+n]
+	q.used += n
+	return p, nil
+}
+
+func (q *cudaQueue) write(b *cuda.Buffer, off int, p []byte) error {
+	st, err := q.room(len(p))
+	if err != nil {
+		return err
+	}
+	copy(st, p)
+	return b.WriteAtOn(q.st, off, unsafe.Pointer(&st[0]), len(p))
+}
+
+func (q *cudaQueue) read(b *cuda.Buffer, p []byte) error {
+	st, err := q.room(len(p))
+	if err != nil {
+		return err
+	}
+	if err := b.ReadOn(q.st, unsafe.Pointer(&st[0]), len(p)); err != nil {
+		return err
+	}
+	copy(p, st)
+	q.used = 0 // ReadOn drained the stream
+	return nil
+}
+
+func (q *cudaQueue) sync() error {
+	if err := q.st.Sync(); err != nil {
+		return err
+	}
+	q.used = 0
+	return nil
+}
+
+// NewQueue is a non-blocking stream on this device (backend.Queued).
+func (c *cudaDev) NewQueue() (Queue, error) {
+	if !cuda.QueuesAvailable() {
+		return nil, fmt.Errorf("backend: cuda: this driver has no non-blocking streams")
+	}
+	var st *cuda.Stream
+	err := errCUDAClosed
+	c.do(func() { st, err = c.d.NewQueue() })
+	if err != nil {
+		return nil, err
+	}
+	q := &cudaQueue{c: c, st: st}
+	c.qmu.Lock()
+	if c.queues == nil {
+		c.queues = map[*cudaQueue]bool{}
+	}
+	c.queues[q] = true
+	c.qmu.Unlock()
+	return q, nil
+}
+
+// Close destroys the stream, after everything queued on it.
+func (q *cudaQueue) Close() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	c := q.c
+	c.qmu.Lock()
+	open := c.queues[q]
+	delete(c.queues, q)
+	c.qmu.Unlock()
+	if !open {
+		return // the device closed it
+	}
+	c.do(func() {
+		q.st.Sync()
+		q.st.Destroy()
+		if q.stage != nil {
+			cuda.FreeHost(q.stage)
+			q.stage = nil
+		}
+	})
+}
+
+// SessionOn runs f on the calling thread, the context bound there, its work on
+// q's stream. Unlike Session it takes no device-wide lock: sessions on two
+// queues run at once, each waiting on its own stream alone.
+func (c *cudaDev) SessionOn(q Queue, f func(Session)) {
+	cq := q.(*cudaQueue)
+	cq.mu.Lock()
+	defer cq.mu.Unlock()
+	c.life.RLock()
+	defer c.life.RUnlock()
+	c.qmu.Lock()
+	open := c.queues[cq]
+	c.qmu.Unlock()
+	if !open {
+		return
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	tid := threadID()
+	c.enterQueue(tid, cq)
+	defer c.leaveQueue(tid)
+	if err := c.d.Bind(); err != nil {
+		return
+	}
+	cq.s = cudaSession{c: c, q: cq}
+	f(&cq.s)
+}
+
+// qRef is the queue a thread's Session runs on, and how deep.
+type qRef struct {
+	q *cudaQueue
+	n int
+}
+
+func (c *cudaDev) enterQueue(tid int64, q *cudaQueue) {
+	c.qmu.Lock()
+	if c.queued == nil {
+		c.queued = map[int64]qRef{}
+	}
+	r := c.queued[tid]
+	c.queued[tid] = qRef{q, r.n + 1}
+	c.qmu.Unlock()
+	c.nQueued.Add(1)
+}
+
+func (c *cudaDev) leaveQueue(tid int64) {
+	c.nQueued.Add(-1)
+	c.qmu.Lock()
+	if r := c.queued[tid]; r.n <= 1 {
+		delete(c.queued, tid)
+	} else {
+		c.queued[tid] = qRef{r.q, r.n - 1}
+	}
+	c.qmu.Unlock()
+}
+
+// queueOf is the queue the calling thread is running a Session on, or nil.
+func (c *cudaDev) queueOf(tid int64) *cudaQueue {
+	if tid < 0 || c.nQueued.Load() == 0 {
+		return nil
+	}
+	c.qmu.Lock()
+	defer c.qmu.Unlock()
+	return c.queued[tid].q
+}
+
+// inQueue reports whether tid is running a Session on a queue.
+func (c *cudaDev) inQueue(tid int64) bool { return c.queueOf(tid) != nil }
+
+// curQueue is queueOf for the calling thread.
+func (c *cudaDev) curQueue() *cudaQueue {
+	if c.nQueued.Load() == 0 {
+		return nil
+	}
+	return c.queueOf(threadID())
+}
+
+func (c *cudaDev) hasQueues() bool {
+	c.qmu.Lock()
+	defer c.qmu.Unlock()
+	return len(c.queues) > 0
+}

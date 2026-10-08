@@ -150,9 +150,8 @@ func pbFinished(f *Finished) *v1.GenerateFinished {
 func (s *InferenceService) Embed(ctx context.Context, req *connect.Request[v1.EmbedRequest]) (*connect.Response[v1.EmbedResponse], error) {
 	m := req.Msg
 	o := EmbedOptions{
-		Model:        m.ModelId,
-		Dimensions:   int(m.Dimensions),
-		QueueTimeout: time.Duration(m.QueueTimeoutMillis) * time.Millisecond,
+		Model:      m.ModelId,
+		Dimensions: int(m.Dimensions),
 	}
 	for i, in := range m.Inputs {
 		switch p := in.GetInput().(type) {

@@ -565,6 +565,28 @@ func (k *Kernel) Validate() error {
 	// the last work item rather than branched off, so they recompute and store
 	// it again; that is harmless only when the result is a pure function of
 	// read-only inputs. An in-place kernel silently corrupts the last item.
+	// A load or store reads its buffer as the type the parameter declares.
+	// The backends disagree on anything else: PTX and SPIR-V reinterpret the
+	// bits, MSL converts the value, so a u32 read from an f32 buffer is a
+	// number on two of them and zero on the third.
+	for i, o := range k.Ops {
+		var t Type
+		switch o.Kind {
+		case OpLoad, OpLoadV:
+			t = o.Type
+		case OpStore, OpStoreV:
+			if o.Args[2] == 0 {
+				continue
+			}
+			t = k.Ops[o.Args[2]-1].Type
+		default:
+			continue
+		}
+		if p := k.paramOf(o.Args[0]); p >= 0 && k.Params[p].Elem != t {
+			return fmt.Errorf("ir: %s: op %d accesses %s parameter %q as %s; bitcast the value instead",
+				k.Name, i+1, k.Params[p].Elem, k.Params[p].Name, t)
+		}
+	}
 	var loaded, stored [maxParams]bool
 	for _, o := range k.Ops {
 		switch o.Kind {

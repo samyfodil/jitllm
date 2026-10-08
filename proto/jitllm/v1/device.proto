@@ -30,15 +30,15 @@ message Device {
   // governs rather than for the hardware, so the contract is unmissable.
   bool counts_toward_host_budget = 6;
 
-  // How work on this device executes. SERIALISED today for every accelerator,
-  // because one scratch set is allocated per device and sessions share it.
+  // How work on this device executes: PARALLEL, sessions beside each other
+  // (see ExecutionMode).
   ExecutionMode execution = 7;
 
-  // Free-text statement of why `execution` is what it is. Empty when PARALLEL.
+  // Free-text statement of how sessions share the device.
   string execution_note = 8;
 
   // Sessions currently attached to this device, and how many of those are
-  // mid-generation. `running` never exceeds 1 while `execution` is SERIALISED.
+  // mid-generation, and the requests waiting for a row of a full step loop.
   int32 attached_sessions = 9;
   int32 running_sessions = 10;
   int32 queued_requests = 11;

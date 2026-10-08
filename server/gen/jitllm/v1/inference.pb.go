@@ -260,8 +260,8 @@ type GenerateRequest struct {
 	// echoing the prompt is what makes a completion read as one continuous
 	// text, and a chat turn is not one.
 	EchoPrompt bool `protobuf:"varint,8,opt,name=echo_prompt,json=echoPrompt,proto3" json:"echo_prompt,omitempty"`
-	// Maximum milliseconds to wait for the device's scratch before starting.
-	// Zero waits indefinitely. A second session is never refused, but a caller
+	// Maximum milliseconds to wait for a row of the model's step loop when it is
+	// full. Zero waits indefinitely. A request is never refused, but a caller
 	// may decline to wait.
 	QueueTimeoutMillis int32 `protobuf:"varint,9,opt,name=queue_timeout_millis,json=queueTimeoutMillis,proto3" json:"queue_timeout_millis,omitempty"`
 	// Keep generating past an end-of-generation token, up to max_tokens: the
@@ -482,9 +482,9 @@ type GenerateStarted struct {
 	// True when the session was created for this call and will be closed after.
 	EphemeralSession bool  `protobuf:"varint,3,opt,name=ephemeral_session,json=ephemeralSession,proto3" json:"ephemeral_session,omitempty"`
 	PromptTokens     int32 `protobuf:"varint,4,opt,name=prompt_tokens,json=promptTokens,proto3" json:"prompt_tokens,omitempty"`
-	// Milliseconds this request waited before it ran: for its device's gate
-	// while another session held it, or, when `batched`, for admission into the
-	// model's step loop. Zero on an idle host or device.
+	// Milliseconds this request waited before it ran: when `batched`, for
+	// admission into the model's step loop. Zero otherwise: nothing waits for a
+	// device or the host as a whole.
 	QueuedMillis int64 `protobuf:"varint,5,opt,name=queued_millis,json=queuedMillis,proto3" json:"queued_millis,omitempty"`
 	// Requests ahead of this one in that queue when it arrived.
 	QueueDepthOnEntry int32 `protobuf:"varint,6,opt,name=queue_depth_on_entry,json=queueDepthOnEntry,proto3" json:"queue_depth_on_entry,omitempty"`
@@ -1045,8 +1045,8 @@ type EmbedRequest struct {
 	// for a model trained for Matryoshka truncation, and the container records
 	// no such property.
 	Dimensions int32 `protobuf:"varint,3,opt,name=dimensions,proto3" json:"dimensions,omitempty"`
-	// Maximum milliseconds to wait for the host before starting. Zero waits
-	// indefinitely.
+	// Ignored: an embed waits for nothing as a whole, it takes the host's
+	// shared pool a region at a time beside every other session.
 	QueueTimeoutMillis int32 `protobuf:"varint,4,opt,name=queue_timeout_millis,json=queueTimeoutMillis,proto3" json:"queue_timeout_millis,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
@@ -1173,7 +1173,7 @@ type EmbedResponse struct {
 	// The container's readout: "mean", "cls" or "last".
 	Pooling     string `protobuf:"bytes,4,opt,name=pooling,proto3" json:"pooling,omitempty"`
 	TotalTokens int32  `protobuf:"varint,5,opt,name=total_tokens,json=totalTokens,proto3" json:"total_tokens,omitempty"`
-	// Milliseconds this request waited for the host while other work held it.
+	// Zero: kept for a reader of older servers, which held the host per request.
 	QueuedMillis      int64 `protobuf:"varint,6,opt,name=queued_millis,json=queuedMillis,proto3" json:"queued_millis,omitempty"`
 	QueueDepthOnEntry int32 `protobuf:"varint,7,opt,name=queue_depth_on_entry,json=queueDepthOnEntry,proto3" json:"queue_depth_on_entry,omitempty"`
 	// Wall time of the embedding itself, every input.

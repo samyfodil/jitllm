@@ -16,7 +16,7 @@ type (
 	Instance   uintptr
 	PhysDevice uintptr
 	Device     uintptr
-	Queue      uintptr
+	VkQueue    uintptr
 	CmdBuffer  uintptr
 	Buffer     uint64
 	Memory     uint64
@@ -27,6 +27,7 @@ type (
 	DescPool   uint64
 	DescSet    uint64
 	CmdPool    uint64
+	Fence      uint64
 	Result     int32
 )
 
@@ -59,6 +60,7 @@ const (
 	memDeviceLocal     = 0x1
 	memHostVisible     = 0x2
 	memHostCoherent    = 0x8
+	queueGraphics      = 0x1
 	queueCompute       = 0x2
 	cmdBufOneTime      = 0x1
 	pipeBindCompute    = 1

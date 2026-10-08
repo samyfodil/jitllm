@@ -87,7 +87,7 @@ func (st *pagedStream) writes(w func(backend.Buf, []byte)) {
 // row's keys are covered whichever sequence it belongs to; only one sequence
 // has pages at home (evictVictim). Callers hold g.mu, outside any submission;
 // it compiles and allocates.
-func (g *devTier) pagedStreamPrep(bs *blockScratch, rows []pagedRow) error {
+func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow) error {
 	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
 	pg := bs.pkv
 	pg.st = nil
@@ -114,7 +114,7 @@ func (g *devTier) pagedStreamPrep(bs *blockScratch, rows []pagedRow) error {
 	}
 	e := kp.evicted[s]
 	w := e
-	if err := g.heldLayers(func(_ int, l *kvLayerPool) error {
+	if err := g.heldLayers(sid, func(_ int, l *kvLayerPool) error {
 		w = min(w, g.streamWidth(l, e))
 		return nil
 	}); err != nil {

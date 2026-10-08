@@ -258,7 +258,7 @@ type ModelStats struct {
 	TokensPrefilled int64                  `protobuf:"varint,5,opt,name=tokens_prefilled,json=tokensPrefilled,proto3" json:"tokens_prefilled,omitempty"`
 	// The model's step loop, which runs its device sessions' generates as rows
 	// of shared decode steps. Absent for a model with no device, whose
-	// generates run one at a time on the host's gate.
+	// generates interleave on the host's shared pool a region at a time.
 	Batch         *BatchStats `protobuf:"bytes,6,opt,name=batch,proto3" json:"batch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

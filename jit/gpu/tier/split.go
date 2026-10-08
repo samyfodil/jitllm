@@ -181,6 +181,9 @@ func (g *devTier) retuneDecode() {
 		return
 	}
 	g.retunedAt = len(g.layers)
+	// The retune rewrites the blocks' matvecs, which a submission in flight
+	// launches.
+	g.quiesce()
 	type use struct {
 		m *mv
 		r *resident

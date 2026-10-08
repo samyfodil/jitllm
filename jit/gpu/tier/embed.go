@@ -98,6 +98,16 @@ func (g *devTier) dropEmbed() {
 	g.mu.Unlock()
 }
 
+// dropEmbedOf is dropEmbed for session sid, from the router, which holds the
+// device's view rather than the session's.
+func (g *devTier) dropEmbedOf(sid uint64) {
+	g.mu.Lock()
+	if ds := g.sess[sid]; ds != nil {
+		ds.embPend = nil
+	}
+	g.mu.Unlock()
+}
+
 // takeEmbed settles the promise against a submission of x: it returns it when
 // x IS the promised destination (the caller then gathers into the scratch),
 // and otherwise makes the rows real on the host first, so a path that uploads

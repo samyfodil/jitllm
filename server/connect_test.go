@@ -228,9 +228,8 @@ func TestGenerateRefusesBothSessionAndModel(t *testing.T) {
 	}
 }
 
-// TestTheDeviceQueueReportsItsReason.
-//
-// A limit a caller can see but not understand reads as a slow server.
+// TestTheDeviceQueueReportsItsReason: the queue says how sessions share the
+// device, so a caller reading it knows nothing waits for the device as a whole.
 func TestTheDeviceQueueReportsItsReason(t *testing.T) {
 	e := New(Config{ModelDir: t.TempDir(), Probe: noProbe})
 	defer e.Close()
@@ -244,11 +243,11 @@ func TestTheDeviceQueueReportsItsReason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Msg.GetExecution() != v1.ExecutionMode_EXECUTION_MODE_SERIALISED {
-		t.Fatalf("execution %v, want SERIALISED", resp.Msg.GetExecution())
+	if resp.Msg.GetExecution() != v1.ExecutionMode_EXECUTION_MODE_PARALLEL {
+		t.Fatalf("execution %v, want PARALLEL", resp.Msg.GetExecution())
 	}
-	if !strings.Contains(resp.Msg.GetNote(), "scratch") {
-		t.Fatalf("the note does not name the scratch set as the reason: %q", resp.Msg.GetNote())
+	if !strings.Contains(resp.Msg.GetNote(), "a step at a time") {
+		t.Fatalf("the note does not say how sessions share the device: %q", resp.Msg.GetNote())
 	}
 }
 

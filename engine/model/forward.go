@@ -478,6 +478,9 @@ type State struct {
 	// sizes and seamtune moves), while a hybrid whose kinds alternate can have
 	// placed blocks with a prefix of zero.
 	onDev []bool
+	// hostHeld says this State is counted in m.hostUse for the blocks of
+	// [lo, hi) it does not place, from its making until Close.
+	hostHeld bool
 	// head is non-nil when the device also runs the output norm and the
 	// vocabulary projection, which it is only offered when it took every block.
 	// headReady is what head is set back to by SetHeadOnDevice.
@@ -566,6 +569,7 @@ func (m *Model) newStateRange(nseq, maxSeq, lo, hi int) *State {
 	}
 	s := &State{m: m, c: m.Cfg, lo: lo, hi: hi, gpuLayers: lo, maxSeq: maxSeq, reqSeq: req, nseq: nseq,
 		devFallback: true, relocate: true, prof: m.opt.profile, outNorm: m.outNorm, outW: &m.output}
+	s.holdHostRuns()
 	// A State over a prediction block projects through that block's head.
 	if lo < len(m.layers) {
 		if w := m.layers[lo].mtp; w != nil {
@@ -840,6 +844,16 @@ func (s *State) Close() error {
 		s.lend(s.lo)
 	}
 	s.m.kvPool.put(s.kv)
+	// The blocks this State ran on the host no longer need their pages for
+	// it. Close may be called twice; hostHeld makes the second a no-op.
+	if s.hostHeld {
+		s.hostHeld = false
+		for li := s.lo; li < s.hi; li++ {
+			if !s.devAt(li) {
+				s.m.hostRuns(li, li+1, -1)
+			}
+		}
+	}
 	// A vision State's prompt buffers are the tower's shape, which no text
 	// State could take; and a JIT it borrowed is the text State's to close.
 	if s.vis != nil {
@@ -1015,6 +1029,15 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 	// docs/design/device-sessions.md); two States must not share one cache.
 	if a, ok := ld.(nn.Attacher); ok {
 		ld = a.Attach()
+		// The single matvecs are the session's too: the tier's crossing
+		// verdict is sampled per session, and offered through the tier itself
+		// they land on its zero session, which outlives every State, so a
+		// second State would inherit the first's sample and run the same
+		// token with different kernels
+		// (TestHybridSecondSessionMatchesTheFirst).
+		if s.vis == nil || !s.vis.borrowed {
+			s.jit.SetDevice(ld)
+		}
 	}
 	// Size the scratch before offering anything: the largest matvec is known
 	// from the header, and reserving first never competes with weights for the
@@ -1684,13 +1707,18 @@ func (s *State) offerRange(lo, hi int) {
 		// would cost a block of I/O a step.
 		if r, ok := ld.(nn.HostPageReleaser); ok && r.ReleasesHostPage(li) && l.mtp == nil {
 			// Under bind, as pageIn binds: another State may be binding or
-			// reading this block's spans while this one places it.
+			// reading this block's spans while this one places it. A State
+			// that runs the block on the host keeps it bound (hostUse): it
+			// faults the block in once and then reads its spans unlocked
+			// through every matvec of the block.
 			s.m.bind.Lock()
-			keep := false
-			if eh, ok := ld.(nn.ExpertHolder); ok {
-				keep = !eh.HoldsExperts(li)
+			if s.m.hostUse[li] == 0 {
+				keep := false
+				if eh, ok := ld.(nn.ExpertHolder); ok {
+					keep = !eh.HoldsExperts(li)
+				}
+				releaseLayer(s.m.container, li, l, keep)
 			}
-			releaseLayer(s.m.container, li, l, keep)
 			s.m.bind.Unlock()
 		} else if buf := s.m.container.Page(li); len(buf) > 0 {
 			// The page stays (a streamed block's host side reads it), so no
@@ -1809,6 +1837,9 @@ func (s *State) markOnDev(li int) {
 	if s.onDev == nil {
 		s.onDev = make([]bool, len(s.m.layers))
 	}
+	if !s.onDev[li] {
+		s.hostRun(li, -1)
+	}
 	s.onDev[li] = true
 	n := s.lo
 	for n < len(s.onDev) && s.onDev[n] {
@@ -1820,6 +1851,9 @@ func (s *State) markOnDev(li int) {
 // unmarkOnDev records that block li went back to the host, and is markOnDev's
 // twin: the prefix ends at the first block not placed.
 func (s *State) unmarkOnDev(li int) {
+	if s.onDev[li] {
+		s.hostRun(li, 1)
+	}
 	s.onDev[li] = false
 	s.gpuLayers = min(s.gpuLayers, li)
 }
@@ -1838,6 +1872,9 @@ func (s *State) placedFrom(lo int) []int {
 // clearOnDev forgets the whole placement.
 func (s *State) clearOnDev() {
 	for i := range s.onDev {
+		if s.onDev[i] {
+			s.hostRun(i, 1)
+		}
 		s.onDev[i] = false
 	}
 	s.gpuLayers = s.lo
@@ -1852,10 +1889,28 @@ func (s *State) clearOnDev() {
 // the blocks above it are no longer placed anywhere.
 func (s *State) shrinkOnDev(n int) {
 	for i := n; i < len(s.onDev); i++ {
+		if s.onDev[i] {
+			s.hostRun(i, 1)
+		}
 		s.onDev[i] = false
 	}
 	if s.gpuLayers > n {
 		s.gpuLayers = n
+	}
+}
+
+// holdHostRuns counts this State in m.hostUse for every block of [lo, hi): a
+// new State runs them all on the host.
+func (s *State) holdHostRuns() {
+	s.m.hostRuns(s.lo, s.hi, 1)
+	s.hostHeld = true
+}
+
+// hostRun moves this State's count on block li in m.hostUse by d, as the
+// block leaves (-1) or returns to (+1) the host for it.
+func (s *State) hostRun(li, d int) {
+	if s.hostHeld && li >= s.lo && li < s.hi {
+		s.m.hostRuns(li, li+1, int32(d))
 	}
 }
 

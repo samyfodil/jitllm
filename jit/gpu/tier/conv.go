@@ -565,14 +565,22 @@ func (g *devTier) ConvLayers(lo, hi int, x, out []float32, tap int, tapOut []flo
 		return false
 	}
 	for li := lo; li < hi; {
-		if !g.pageIn(li, lo, hi) {
+		if !g.pageInHold(li, lo, hi) {
 			return false
 		}
+		// Held as submit holds its range: no page-in of another session's
+		// sends a block away before convOnce reads it.
 		end := li + 1
-		for end < hi && g.pageResident(end) {
+		g.mu.Lock()
+		for end < hi && g.holdPages(end, end+1) {
 			end++
 		}
-		if !g.convOnce(li, end, li == lo, end == hi, x, out, tap, tapOut) {
+		g.mu.Unlock()
+		ok := g.convOnce(li, end, li == lo, end == hi, x, out, tap, tapOut)
+		g.mu.Lock()
+		g.dropPages(li, end)
+		g.mu.Unlock()
+		if !ok {
 			return false
 		}
 		li = end
@@ -608,9 +616,9 @@ func (g *devTier) convOnce(lo, hi int, first, last bool, x, out []float32, tap i
 	var fsrc, memoSrc backend.Buf
 	var memoK backend.Kernel
 	g.dev.Session(func(s backend.Session) {
-		g.launchTo.s = s
-		defer func() { g.launchTo.s = nil }()
-		lc := &launcher{to: &g.launchTo, err: &err, fsrc: &fsrc, memoK: &memoK, memoSrc: &memoSrc}
+		g.convTo.s = s
+		defer func() { g.convTo.s = nil }()
+		lc := &launcher{to: &g.convTo, err: &err, fsrc: &fsrc, memoK: &memoK, memoSrc: &memoSrc}
 		if first {
 			err = s.Write(cs.act[cs.cur], f32b(x))
 		}
@@ -702,6 +710,8 @@ func (g *devTier) convRun(lc *launcher, l *layer, cs *convScratch) {
 // ConvLayers runs convolutional blocks [lo, hi) device by device, the
 // activation crossing the host between devices.
 func (g *GPU) ConvLayers(lo, hi int, x, out []float32, tap int, tapOut []float32) bool {
+	g.convMu.Lock()
+	defer g.convMu.Unlock()
 	g.mu.Lock()
 	rs, ok := g.runsInto(nil, lo, hi)
 	g.mu.Unlock()
@@ -732,6 +742,6 @@ func (g *GPU) ConvLayers(lo, hi int, x, out []float32, tap int, tapOut []float32
 
 // ConvLayers forwards to the tier (nn.ConvDevice).
 func (s *gpuSession) ConvLayers(lo, hi int, x, out []float32, tap int, tapOut []float32) bool {
-	defer s.leave(s.enter())
+	defer s.leave(s.step())
 	return s.g.ConvLayers(lo, hi, x, out, tap, tapOut)
 }
