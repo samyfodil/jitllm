@@ -34,7 +34,9 @@ func mmaProbe(sh ir.MMAShape) *ir.Kernel {
 	b := ir.New("mmaprobe", [3]int{32, 1, 1})
 	pA := b.Param("pA", ir.U32)
 	pB := b.Param("pB", ir.U32)
-	pOut := b.Param("pOut", ir.I32)
+	// The output is the tile's own element type: an integer tile stores i32,
+	// a float one f32, and a load or store must match its parameter.
+	pOut := b.Param("pOut", sh.Elem())
 	na, nb, nc := sh.Frags()
 	a := make([]ir.Value, na)
 	for i := range a {
