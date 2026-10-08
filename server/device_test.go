@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 
@@ -158,6 +159,73 @@ func TestTheSeamMovesThroughThePlacementService(t *testing.T) {
 	}
 	cancel()
 	for ts.Receive() {
+	}
+	ts.Close()
+}
+
+// TestTuneSeamReadsTheSessionsSnapshot: TuneSeam's ticker reports what the
+// tuner settled on while the session generates. model.State's tuner is
+// written by Forward with no lock, so the report must come from the snapshot
+// the session publishes under its own lock, never from the State.
+//
+// VIOLATION SIGNATURE. Read sess.st.SeamTuned() in TuneSeam's loop again and
+// this fails under -race with "WARNING: DATA RACE" between seamTuner.observe
+// (or finish) and State.SeamTuned.
+//
+// Batching is off: the tuner advances once per Forward, and a session that
+// decodes as a row of the step loop never reaches it. The model's whole
+// placement, head included, is on the card, which is the Forward path that
+// once returned before stepping the tuner: with those steps removed this
+// fails with "the tuner did not settle".
+func TestTuneSeamReadsTheSessionsSnapshot(t *testing.T) {
+	e := New(Config{Probe: oneCardProbe, Version: "test", MaxBatchRows: 1})
+	t.Cleanup(e.Close)
+	if _, err := e.LoadModel(LoadOptions{Path: modelPath(t, deviceModel), ModelID: "dev", DeviceIDs: []string{"gpu:0"}}); err != nil {
+		t.Skipf("NO DEVICE: loading onto -devices gpu:0 failed (%v) -- this gate proved nothing", err)
+	}
+	c := serveEngine(t, e)
+	ctx := context.Background()
+	if _, err := e.CreateSession(SessionOptions{ModelID: "dev", SessionID: "d", MaxSeq: 256}); err != nil {
+		t.Fatal(err)
+	}
+	tctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ts, err := c.placement.TuneSeam(tctx, req(&v1.TuneSeamRequest{SessionId: "d"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ts.Receive() {
+		t.Fatalf("TuneSeam sent nothing: %v", ts.Err())
+	}
+	done := make(chan bool, 1)
+	go func() {
+		settled := false
+		for ts.Receive() {
+			settled = ts.Msg().GetDone()
+		}
+		done <- settled
+	}()
+	// The default schedule decides in about 450 tokens with its warm-ups, so
+	// eight generates to the model's 128-position context, each from a reset
+	// session, take the tuner through its runs and its decision.
+	for i := 0; i < 8; i++ {
+		if _, err := c.session.ResetSession(ctx, req(&v1.ResetSessionRequest{SessionId: "d"})); err != nil {
+			t.Fatal(err)
+		}
+		r, err := c.inference.Complete(ctx, req(&v1.GenerateRequest{SessionId: "d", Prompt: text(story), MaxTokens: 128, IgnoreEos: true}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := r.Msg.GetFinished().GetCompletionTokens(); got < 100 {
+			t.Fatalf("generate %d decoded %d tokens", i, got)
+		}
+	}
+	// One more tick sees the snapshot the last generate published.
+	time.Sleep(time.Second)
+	cancel()
+	if !<-done {
+		t.Fatalf("the tuner did not settle in 1000 tokens -- the ticker read nothing that moved, " +
+			"so this gate proved nothing")
 	}
 	ts.Close()
 }

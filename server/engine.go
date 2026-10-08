@@ -622,6 +622,10 @@ type Session struct {
 	// snapBatched is whether a generate here would decode as a row of the
 	// model's step loop (Engine.joins), as of the snapshot.
 	snapBatched atomic.Bool
+	// snapSeam and snapSeamSettled are State.SeamTuned as of the snapshot:
+	// the tuner is written by Forward, so TuneSeam reports these.
+	snapSeam        atomic.Int32
+	snapSeamSettled atomic.Bool
 
 	cancelMu sync.Mutex
 	cancel   context.CancelFunc
@@ -766,6 +770,9 @@ func (s *Session) refresh() {
 	s.snapDevBlocks.Store(int32(s.st.GPULayers()))
 	s.snapAt.Store(time.Now().UnixMilli())
 	s.snapBatched.Store(s.lm.loop != nil && s.st.Steppable())
+	blocks, settled := s.st.SeamTuned()
+	s.snapSeam.Store(int32(blocks))
+	s.snapSeamSettled.Store(settled)
 	s.snapPlacement.Store(&placementSnapshot{
 		runs:        s.st.DeviceBlocks(),
 		declines:    s.st.DeviceDeclines(),
