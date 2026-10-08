@@ -122,6 +122,9 @@ type State struct {
 	spanTok []int32
 	// kvSkipped is what the last PrefillCached restored rather than computed.
 	kvSkipped int
+	// interrupt, when set, is asked before every prefill chunk
+	// (SetPrefillInterrupt).
+	interrupt func() bool
 
 	x, h, xb []float32 // residual stream and two same-width scratch vectors
 	// hf is a parallel block's FFN input (C6): the block input normed for the

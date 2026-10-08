@@ -11,7 +11,6 @@ import (
 	"io"
 	"slices"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -79,59 +78,6 @@ func (NoStore) Set(string, int, int, io.Reader) error { return nil }
 
 // Drop has nothing to forget.
 func (NoStore) Drop(string) error { return nil }
-
-// MemStore keeps pages in host memory, keyed by (cache, layer, index).
-//
-// NoStore and MemStore must produce the same tokens, which is the equality
-// gate. It locks because a store exists to be shared between sessions.
-type MemStore struct {
-	mu    sync.RWMutex
-	pages map[kvStoreKey][]byte
-}
-
-type kvStoreKey struct {
-	cache        string
-	layer, index int
-}
-
-// NewMemStore returns an empty MemStore.
-func NewMemStore() *MemStore { return &MemStore{pages: map[kvStoreKey][]byte{}} }
-
-// Get writes the held page into page, or returns ErrNoPage.
-func (m *MemStore) Get(cacheId string, layer, index int, page io.Writer) error {
-	m.mu.RLock()
-	b, ok := m.pages[kvStoreKey{cacheId, layer, index}]
-	m.mu.RUnlock()
-	if !ok {
-		return ErrNoPage
-	}
-	_, err := page.Write(b)
-	return err
-}
-
-// Set reads the page and holds a copy, replacing one held under the same key.
-func (m *MemStore) Set(cacheId string, layer, index int, page io.Reader) error {
-	b, err := io.ReadAll(page)
-	if err != nil {
-		return err
-	}
-	m.mu.Lock()
-	m.pages[kvStoreKey{cacheId, layer, index}] = b
-	m.mu.Unlock()
-	return nil
-}
-
-// Drop forgets every page held for cacheId.
-func (m *MemStore) Drop(cacheId string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for k := range m.pages {
-		if k.cache == cacheId {
-			delete(m.pages, k)
-		}
-	}
-	return nil
-}
 
 // kvKeyTile is how far past a row's causal width the score kernel may write, and
 // therefore the alignment a page boundary has to respect. jit/gpu/tier carries
