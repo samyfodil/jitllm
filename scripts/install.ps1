@@ -1,6 +1,6 @@
 # Installs jitllm from a GitHub release on Windows.
 #
-#   irm https://raw.githubusercontent.com/samyfodil/jitllm/main/scripts/install.ps1 | iex
+#   irm https://jitllm.org/install.ps1 | iex
 #
 # $env:JITLLM_PROGRAMS names the programs to install, separated by spaces or
 # commas: jitllm (the CLI), jitllmd (the server), desktop (jitllm-desktop),

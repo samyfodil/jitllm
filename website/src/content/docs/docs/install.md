@@ -16,7 +16,7 @@ curl -fsSL https://jitllm.org/install.sh | sh
 On Windows, in PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/samyfodil/jitllm/main/scripts/install.ps1 | iex
+irm https://jitllm.org/install.ps1 | iex
 ```
 
 The script finds the latest release, downloads the archives for this machine, checks each against the release's `checksums.txt`, and installs the binaries:
