@@ -33,7 +33,7 @@ import (
 	"time"
 
 	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/internal/goheap"
+	"github.com/samyfodil/jitllm/internal/cmd/goheap"
 	"github.com/samyfodil/jitllm/jit/gpu/tier"
 	"github.com/samyfodil/jitllm/server"
 )

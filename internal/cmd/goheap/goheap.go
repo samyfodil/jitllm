@@ -1,7 +1,8 @@
 // Package goheap is the process-wide collector setup both binaries share:
 // cmd/jitllm and server/cmd/jitllmd. It reads the environment, which is why it
-// is here and not in a library (AGENTS.md Scope: the libraries read none), and
-// it is one copy so the two binaries cannot drift apart.
+// sits under a cmd/ directory, not in a library (AGENTS.md Scope: the
+// libraries read none), and it is one copy so the two binaries cannot drift
+// apart.
 package goheap
 
 import (

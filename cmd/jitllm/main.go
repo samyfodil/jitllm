@@ -25,8 +25,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/samyfodil/jitllm/engine/sched"
-	"github.com/samyfodil/jitllm/internal/goheap"
 	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/samyfodil/jitllm/internal/cmd/goheap"
 
 	"os/exec"
 
