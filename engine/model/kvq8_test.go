@@ -175,7 +175,11 @@ func TestKVQ8RefusesByName(t *testing.T) {
 		{"synth-deepseek4.gguf", "compressor"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			p := jlmOf(t, testmodels.Path(c.name))
+			src, ok := existingModel(testmodels.Path(c.name))
+			if !ok {
+				testmodels.Missing(t, "%s", "MODEL MISSING: "+testmodels.Path(c.name))
+			}
+			p := jlmOf(t, src)
 			if _, err := Open(p, WithKVType(KVQ8_0)); err == nil || !strings.Contains(err.Error(), c.why) {
 				t.Fatalf("Open with a q8_0 cache: %v, want a refusal naming %q", err, c.why)
 			}

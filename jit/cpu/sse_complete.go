@@ -122,6 +122,7 @@ var sseProbes = []sseProbe{
 		_, err := em.AttnScoresTiled(64, 64, 64, 1024, 8, KVF32)
 		return err
 	}},
+	{"KVWiden", func(em *Emitters) error { _, err := em.KVWiden(64); return err }},
 	{"SampleSegMax", func(em *Emitters) error {
 		for _, f := range []bool{false, true} {
 			for _, m := range []bool{false, true} {

@@ -931,7 +931,7 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 	// empty. A q8_0 cache migrates converted (State.migrateKVAs).
 	if s.kvFmt == cpu.KVF16 && d != nil {
 		if s.pos != 0 {
-			return fmt.Errorf("model: a %s KV cache with history cannot move to a device", s.kvFmt)
+			return fmt.Errorf("model: a binary16 KV cache with history cannot move to a device")
 		}
 		s.stepDownKVToF32()
 	}
