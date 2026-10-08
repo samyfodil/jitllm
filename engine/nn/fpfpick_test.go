@@ -33,6 +33,48 @@ func TestPrefetchDistanceIsPickedPerShape(t *testing.T) {
 	defer j.Close()
 	ref := NewJIT(maxK, maxRows, []quant.Type{gt}, WithFusedPrefetch(0))
 	defer ref.Close()
+	// The probe decides which half this host runs: a tier whose fused kernel
+	// has no prefetch form (SSE) must not pick at all, and its matvec is the
+	// one fused kernel.
+	if _, err := cpu.EmittersFor(cpu.HostTier()).PackedFusedAhead(gt, cpu.FusedAheadWords); err != nil {
+		if j.distPick() {
+			t.Fatalf("tier %v has no prefetch form (%v), yet the JIT picks a distance per shape", cpu.HostTier(), err)
+		}
+		for si, sh := range shapes {
+			p := packSheet(t, gt, sh.rows, sh.k, si+1)
+			x := make([]float32, sh.k)
+			for i := range x {
+				x[i] = float32(math.Sin(float64(i)))
+			}
+			want := make([]float32, sh.rows)
+			ref.NewInput()
+			if !ref.MatVecPacked(want, gt, p, x, sh.rows, sh.k) {
+				t.Fatal("reference declined")
+			}
+			for c := 0; c < pickWarm+pickDistRounds+1; c++ {
+				got := poison(sh.rows)
+				j.NewInput()
+				if !j.MatVecPacked(got, gt, p, x, sh.rows, sh.k) {
+					t.Fatal("declined")
+				}
+				for r := range got {
+					if math.Float32bits(got[r]) != math.Float32bits(want[r]) {
+						t.Fatalf("%dx%d call %d row %d: %v, want %v", sh.rows, sh.k, c, r, got[r], want[r])
+					}
+				}
+			}
+		}
+		if pk := j.picks[pickKey{gt, shapes[0].rows, shapes[0].k, shapes[0].rows}]; pk != nil && pk.dist {
+			t.Fatalf("tier %v timed prefetch distances it cannot emit: %+v", cpu.HostTier(), pk)
+		}
+		for d, m := range j.fusedAt {
+			if d != 0 && m[gt] != nil {
+				t.Fatalf("tier %v emitted a distance-%d kernel it refuses", cpu.HostTier(), d)
+			}
+		}
+		t.Logf("tier %v: no prefetch form, no distance picked, the one fused kernel ran (%v)", cpu.HostTier(), err)
+		return
+	}
 	if !j.distPick() || ref.distPick() {
 		t.Fatalf("distPick: default %v, pinned %v", j.distPick(), ref.distPick())
 	}

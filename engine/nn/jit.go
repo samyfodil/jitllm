@@ -162,6 +162,9 @@ type JIT struct {
 	// fused kernel by distance, and packedFused points into one of them.
 	fpf     *fpfTuner
 	fusedAt map[int]map[quant.Type]*cpu.Code
+	// aheadForm is whether the tier emits the fused kernel at a prefetch
+	// distance (distPick).
+	aheadForm bool
 	// fpfNone is len(packedFused)+1 when newFPFTuner last found nothing to
 	// duel, so a model with no fused kernel (every weight a float) does not
 	// fingerprint an empty set again -- and allocate -- on every token.
@@ -416,6 +419,16 @@ func NewJIT(maxK, maxRows int, types []quant.Type, opts ...Option) *JIT {
 			if fc, err := cpu.MapNamed(fb, t.String()+"_packed_fused"); err == nil {
 				f.packedFused[t] = fc
 			}
+		}
+	}
+	// Whether this tier's fused kernel has a prefetch form at all. The SSE
+	// tier refuses every distance (cpu.EmitPackedMatVecFusedAheadSSE), and a
+	// per-shape pick over distances whose kernels were never emitted would
+	// time one kernel five times and settle on a distance nothing runs.
+	for t := range f.packedFused {
+		if _, err := f.em.PackedFusedAhead(t, cpu.FusedAheadWords); err == nil {
+			f.aheadForm = true
+			break
 		}
 	}
 	// The activation quantizer. Two kernels serve every format (the only thing
