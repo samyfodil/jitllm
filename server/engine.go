@@ -234,7 +234,7 @@ type LoadedModel struct {
 // finished records one generate: n tokens decoded, after a prefill of prefill,
 // in decode.
 func (lm *LoadedModel) finished(n int, prefill, decode time.Duration) {
-	lm.finished(n, prefill, decode)
+	lm.tokensGenerated.Add(int64(n))
 	lm.generates.Add(1)
 	lm.prefillNanos.Add(int64(prefill))
 	lm.decodeNanos.Add(int64(decode))
