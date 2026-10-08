@@ -37,7 +37,7 @@ fi
 case $(uname -s) in
 Linux) os=linux ;;
 Darwin) os=darwin ;;
-*) die "$(uname -s) is not supported by this script; on Windows use scripts/install.ps1" ;;
+*) die "$(uname -s) is not supported by this script; on Windows use https://jitllm.org/install.ps1" ;;
 esac
 case $(uname -m) in
 x86_64 | amd64) arch=amd64 ;;
