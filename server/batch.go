@@ -23,11 +23,11 @@ import (
 // path does, and its events go to an outbox its request goroutine drains, so a
 // slow client never holds up a step.
 //
-// The loop holds the model's gates while it has rows, as one generate held
-// them before; while another request waits on any of those gates it admits no
-// one new, lets its rows finish and hands the gates over, so a session on the
-// one-at-a-time path is delayed by a batch the way it was by a generate, and
-// never starved by one.
+// The loop is recorded on the model's gates while it has rows. Nothing queues
+// on a gate (gate.go), so the loop admits a waiting request as a row whenever
+// it has room (Config.MaxBatchRows), and a session on the one-at-a-time path runs
+// beside it, the two interleaving a step at a time rather than one waiting for
+// the other to finish.
 //
 // A joint step is not always the faster: for each row count the loop times it
 // against running the rows one session after another, in situ, and runs the
@@ -126,6 +126,7 @@ type row struct {
 	echo      bool
 	ephemeral bool
 	sampler   model.Sampler
+	logprobs  *model.Logprobs // nil unless the request asked for logprobs
 	maxTokens int
 	ignoreEOS bool
 	stream    *streamText
@@ -415,13 +416,14 @@ func (lp *stepLoop) decodeUnits() []unit {
 		}
 		next := r.sampler.Sample(r.logits)
 		r.sampler.Observe(next)
+		tlp := takeLogprob(r.logprobs, vocab, r.logits, next)
 		if !r.ignoreEOS && vocab.IsEOG(next) {
 			lp.finish(r, FinishEOS, "", nil)
 			continue
 		}
 		r.out = append(r.out, next)
 		chunk, hit, match := r.stream.push(r.out)
-		r.push(Event{Kind: EventToken, Token: &Token{ID: next, Text: chunk, Index: r.n}})
+		r.push(Event{Kind: EventToken, Token: &Token{ID: next, Text: chunk, Index: r.n, Logprob: tlp}})
 		if hit {
 			r.n++
 			lp.finish(r, FinishStop, match, nil)
@@ -636,6 +638,7 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 		echo:      o.Echo,
 		ephemeral: ephemeral,
 		sampler:   sampler,
+		logprobs:  newLogprobs(o),
 		maxTokens: maxTokens,
 		ignoreEOS: o.IgnoreEOS,
 		stream:    newStreamText(lm.m.Vocab.NewChatStream().Next, o.Stop),

@@ -22,7 +22,7 @@ func chatMessage(role, content string) model.ChatMessage {
 //	/v1/models              OpenAI-compatible
 //	/v1/embeddings          OpenAI-compatible
 //	/v1/messages            Anthropic-compatible
-//	/healthz
+//	/healthz, /health
 //
 // connect-go mounts each service at /<package>.<Service>/, so the /v1 routes
 // cannot collide with it.
@@ -41,10 +41,14 @@ func (e *Engine) Handler() http.Handler {
 
 	mux.HandleFunc("/metrics", e.serveMetrics)
 
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	health := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write([]byte("ok\n"))
-	})
+	}
+	mux.HandleFunc("/healthz", health)
+	// /health is the path vLLM and llama-server answer, and so the one their
+	// benchmark harnesses poll before sending load.
+	mux.HandleFunc("/health", health)
 
 	// h2c, because plain gRPC needs HTTP/2 and would otherwise fail over
 	// cleartext while Connect works. Behind TLS, ALPN takes over and this
