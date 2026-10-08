@@ -130,8 +130,8 @@ message LoadModelRequest {
   // Optional stable id. Generated when empty.
   string model_id = 2;
 
-  // Page budget in bytes. Zero takes the engine's own default, which is a
-  // fraction of the cgroup. A budget that lands one page short of fitting is
+  // Page budget in bytes, pinned. Zero takes a share of the engine's host
+  // budget, divided between the loaded models. A budget that lands one page short of fitting is
   // a cliff and not a gradient, so this is worth setting deliberately.
   uint64 page_budget_bytes = 3;
 

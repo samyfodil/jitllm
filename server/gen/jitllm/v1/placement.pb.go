@@ -1156,9 +1156,11 @@ func (x *GetResidencyResponse) GetResidency() *Residency {
 }
 
 type SetPageBudgetRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ModelId       string                 `protobuf:"bytes,1,opt,name=model_id,json=modelId,proto3" json:"model_id,omitempty"`
-	BudgetBytes   uint64                 `protobuf:"varint,2,opt,name=budget_bytes,json=budgetBytes,proto3" json:"budget_bytes,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	ModelId string                 `protobuf:"bytes,1,opt,name=model_id,json=modelId,proto3" json:"model_id,omitempty"`
+	// The model's budget, pinned: the other loaded models divide what is left.
+	// Zero releases the pin and the model takes a share again.
+	BudgetBytes   uint64 `protobuf:"varint,2,opt,name=budget_bytes,json=budgetBytes,proto3" json:"budget_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

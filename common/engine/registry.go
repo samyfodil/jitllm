@@ -5,26 +5,17 @@ import (
 
 	"github.com/samyfodil/jitllm/common/session"
 	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/engine/sched"
+	"github.com/samyfodil/jitllm/server"
 )
 
-// entry is one open model.
-//
-// Only the active entry has a session, a device and a worker pool. Every
-// model.State builds its own pool of sched.DecodeCores() workers, and a second
-// live pool is a contended core by construction (every region ends at a
-// barrier). A tier is also one model: its layer map is keyed by block index,
-// so two models offering block 0 overwrite each other. And the JIT's codegen
-// knobs are process-wide, last writer wins.
-//
-// So several models are open and one runs: weights and pager stay alive for
-// every entry; the session, device and pool belong to the one in use.
+// entry is one model the app loaded into the engine. Its tier, opened with
+// the device choice at load (spec), stays with it while another is in use;
+// the chat's session is the active entry's alone.
 type entry struct {
 	m    *model.Model
+	lm   *server.LoadedModel
 	path string
-	// grant is the host page budget this model currently holds, and pin the
-	// cap the user set for it (0 = divide automatically).
-	grant, pin uint64
+	spec string
 }
 
 // find returns the open entry for path, or nil.
@@ -37,45 +28,6 @@ func (e *Engine) find(path string) *entry {
 	return nil
 }
 
-// paths is the open models in load order, which is what first-come-first-served
-// means.
-func (e *Engine) paths() []string {
-	out := make([]string, 0, len(e.models))
-	for _, en := range e.models {
-		out = append(out, en.path)
-	}
-	return out
-}
-
-// rebudget re-divides the host budget and applies it to every open model.
-//
-// Model.SetPageBudget re-caps residency in bytes and can widen as well as
-// narrow. It is called on every load, unload and switch, because a share is a
-// function of the whole set.
-func (e *Engine) rebudget() {
-	if len(e.models) == 0 {
-		return
-	}
-	active := ""
-	if e.active != nil {
-		active = e.active.path
-	}
-	pins := make(map[string]uint64, len(e.models))
-	for _, en := range e.models {
-		if en.pin > 0 {
-			pins[en.path] = en.pin
-		}
-	}
-	for p, n := range shares(sched.MemBudget(), e.paths(), active, e.priority, pins) {
-		en := e.find(p)
-		if en == nil || en.m == nil {
-			continue
-		}
-		en.grant = n
-		en.m.SetPageBudget(n)
-	}
-}
-
 // publishModels mirrors the registry into the store.
 func (e *Engine) publishModels() {
 	out := make([]session.LoadedModel, 0, len(e.models))
@@ -84,8 +36,8 @@ func (e *Engine) publishModels() {
 			Path:   en.path,
 			Name:   short(en.path),
 			Colour: i,
-			Grant:  en.grant,
-			Pinned: en.pin > 0,
+			Grant:  en.lm.Budget(),
+			Pinned: en.lm.Pinned(),
 			Active: e.active == en,
 		}
 		if en.m != nil {
@@ -140,25 +92,32 @@ func (e *Engine) Unload(path string) {
 		if en == nil {
 			return
 		}
-		if e.active == en {
-			e.releaseSession()
-			e.active = nil
-		}
-		en.m.Close()
-		for i, x := range e.models {
-			if x == en {
-				e.models = append(e.models[:i], e.models[i+1:]...)
-				break
-			}
-		}
-		// Give the bytes back: the remaining models grow into what this one held.
-		e.rebudget()
+		e.unload(en)
 		e.publishModels()
 		if e.active == nil {
 			e.sh.Post(func() { e.st.Loaded.Set(false); e.st.Vision.Set(false) })
 		}
 		e.status("closed %s", short(path))
 	})
+}
+
+// unload closes en's model, and the chat's session with it when it is the
+// active one. Forced: an API session on the model closes with it. The
+// remaining models grow into the bytes it held (server.Engine.UnloadModel).
+func (e *Engine) unload(en *entry) {
+	if e.active == en {
+		e.releaseSession()
+		e.active = nil
+	}
+	if _, err := e.srv.UnloadModel(en.lm.ID(), true); err != nil {
+		e.status("closing %s: %v", short(en.path), err)
+	}
+	for i, x := range e.models {
+		if x == en {
+			e.models = append(e.models[:i], e.models[i+1:]...)
+			break
+		}
+	}
 }
 
 // Pin caps one model's host budget, or releases the cap at 0.
@@ -168,8 +127,10 @@ func (e *Engine) Pin(path string, bytes uint64) {
 		if en == nil {
 			return
 		}
-		en.pin = bytes
-		e.rebudget()
+		if err := e.srv.Pin(en.lm.ID(), bytes); err != nil {
+			e.status("%s: %v", short(path), err)
+			return
+		}
 		e.publishModels()
 		if bytes == 0 {
 			e.status("%s: budget divided automatically again", short(path))
@@ -182,8 +143,7 @@ func (e *Engine) Pin(path string, bytes uint64) {
 // SetPriority toggles whether the active model gets the lion's share.
 func (e *Engine) SetPriority(on bool) {
 	e.post("priority", func() {
-		e.priority = on
-		e.rebudget()
+		e.srv.SetPriority(on)
 		e.publishModels()
 		if on {
 			e.status("the model in use gets the memory; switching moves it")

@@ -1,4 +1,6 @@
-package engine
+package server
+
+import "github.com/samyfodil/jitllm/engine/sched"
 
 // backgroundShare is the fraction of the host budget that all backgrounded
 // models divide between them when the active model is given priority.
@@ -82,4 +84,95 @@ func shares(total uint64, paths []string, active string, priority bool, pins map
 		out[p] = each
 	}
 	return out
+}
+
+// hostTotal is the host budget every loaded model's share is divided from,
+// read once: sched.MemBudget follows MemAvailable, so a second read after the
+// weights are resident would count the engine's own footprint as taken.
+// Guarded by e.mu.
+func (e *Engine) hostTotal() uint64 {
+	if e.total == 0 {
+		e.total = sched.MemBudget()
+	}
+	return e.total
+}
+
+// sharesLocked divides the host budget between the loaded models, plus extra
+// when a load is about to add one. e.mu held.
+func (e *Engine) sharesLocked(extra string) map[string]uint64 {
+	ids := append([]string(nil), e.order...)
+	if extra != "" {
+		ids = append(ids, extra)
+	}
+	pins := map[string]uint64{}
+	for id, lm := range e.models {
+		if lm.pin > 0 {
+			pins[id] = lm.pin
+		}
+	}
+	return shares(e.hostTotal(), ids, e.favored, e.priority, pins)
+}
+
+// rebudget re-divides the host budget and applies each model's share. A share
+// is a function of the whole set, so it runs on every load, unload, pin and
+// change of priority.
+func (e *Engine) rebudget() {
+	e.mu.Lock()
+	sh := e.sharesLocked("")
+	models := make([]*LoadedModel, 0, len(e.models))
+	for id, lm := range e.models {
+		lm.mu.Lock()
+		lm.budget = sh[id]
+		lm.mu.Unlock()
+		models = append(models, lm)
+	}
+	e.mu.Unlock()
+	for _, lm := range models {
+		e.applyPageBudget(lm, nil)
+	}
+}
+
+// Pin caps one model's host budget at bytes, taken off the top before the
+// others divide the rest; 0 releases it back to the division.
+func (e *Engine) Pin(id string, bytes uint64) error {
+	lm, err := e.Model(id)
+	if err != nil {
+		return err
+	}
+	lm.mu.Lock()
+	lm.pin = bytes
+	lm.mu.Unlock()
+	e.rebudget()
+	return nil
+}
+
+// SetPriority gives the favoured model (Favor) everything but an eighth of the
+// budget, the rest dividing that eighth; off, the models divide it evenly.
+func (e *Engine) SetPriority(on bool) {
+	e.mu.Lock()
+	e.priority = on
+	e.mu.Unlock()
+	e.rebudget()
+}
+
+// Favor names the model in use, the one priority gives the budget to.
+func (e *Engine) Favor(id string) {
+	e.mu.Lock()
+	e.favored = id
+	e.mu.Unlock()
+	e.rebudget()
+}
+
+// Budget is the total this model's pager is divided from now.
+func (lm *LoadedModel) Budget() uint64 {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+	return lm.budget
+}
+
+// Pinned reports whether the model's budget is a pin rather than a share.
+func (lm *LoadedModel) Pinned() bool {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+	return lm.pin > 0
 }

@@ -24,7 +24,6 @@ import (
 
 	"github.com/samyfodil/jitllm/engine/model"
 	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/engine/sched"
 	"github.com/samyfodil/jitllm/jit/gpu/tier"
 )
 
@@ -117,6 +116,14 @@ type Engine struct {
 
 	seq atomic.Uint64
 
+	// The host budget the models divide (budget.go), guarded by mu: total is
+	// read once, order is the models in load order, and priority gives the
+	// favored model all but an eighth.
+	total    uint64
+	order    []string
+	priority bool
+	favored  string
+
 	// devices is the hardware probe, taken once. See devices.go for why it is
 	// not re-taken on every list.
 	devMu   sync.Mutex
@@ -195,7 +202,10 @@ type LoadedModel struct {
 	// budget is the total the pager is divided from -- the load's, or the
 	// last SetPageBudget's -- before the subtractions in hostWeightShare.
 	// Guarded by mu.
-	budget    uint64
+	budget uint64
+	// pin is a budget the caller set for this model (LoadOptions or
+	// SetPageBudget), taken off the top of the division; 0 is a share.
+	pin       uint64
 	maxBlocks int
 
 	// loop batches this model's device generates (batch.go). nil for a
@@ -302,6 +312,13 @@ type LoadOptions struct {
 	tierConfig func(*tier.Config)
 }
 
+// DeviceError is a load that failed on the devices it named rather than on
+// the file, so a front end can send the person to the device setting.
+type DeviceError struct{ Err error }
+
+func (d *DeviceError) Error() string { return d.Err.Error() }
+func (d *DeviceError) Unwrap() error { return d.Err }
+
 // ErrNotFound is returned for an unknown model or session id.
 var ErrNotFound = errors.New("server: not found")
 
@@ -348,12 +365,14 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 	}
 	e.mu.Unlock()
 
+	// The share is computed before the open, because model.Open and the tier
+	// otherwise read sched.MemBudget() themselves, ignoring what the loaded
+	// models already hold. A budget the caller named is a pin.
 	hostBudget := o.PageBudgetBytes
 	if hostBudget == 0 {
-		// Resolved once, before anything is allocated: sched.MemBudget reads
-		// MemAvailable, so asking again after the weights are resident would
-		// count the engine's own footprint.
-		hostBudget = sched.MemBudget()
+		e.mu.Lock()
+		hostBudget = e.sharesLocked(id)[id]
+		e.mu.Unlock()
 	}
 
 	var (
@@ -366,7 +385,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 	if spec := strings.Join(o.DeviceIDs, ","); spec != "" && spec != HostGateID {
 		es, err := tier.ParseDevices(spec)
 		if err != nil {
-			return nil, err
+			return nil, &DeviceError{err}
 		}
 		wantsDevice := false
 		for _, x := range es {
@@ -394,7 +413,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 				// device asked for that device; silently answering on the
 				// CPU would be a wrong answer with a right shape.
 				if len(es) != 1 || es[0].API != "auto" {
-					return nil, err
+					return nil, &DeviceError{err}
 				}
 			} else {
 				dev, gpu, closeDev = g, g, g.Close
@@ -426,6 +445,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		deviceIDs: devIDs,
 		gateKeys:  gateKeys,
 		budget:    hostBudget,
+		pin:       o.PageBudgetBytes,
 		maxBlocks: o.MaxDeviceBlocks,
 		sessions:  map[string]*Session{},
 	}
@@ -434,8 +454,18 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 	}
 
 	e.mu.Lock()
+	if _, ok := e.models[id]; ok {
+		e.mu.Unlock()
+		lm.closeLoop()
+		m.Close()
+		closeDev()
+		return nil, fmt.Errorf("%w: model id %q is already loaded", ErrExists, id)
+	}
 	e.models[id] = lm
+	e.order = append(e.order, id)
 	e.mu.Unlock()
+	// The models already loaded give up the bytes this one now holds.
+	e.rebudget()
 	return lm, nil
 }
 
@@ -500,6 +530,7 @@ func (e *Engine) UnloadModel(id string, force bool) (closed int, err error) {
 			ErrInUse, id, len(victims))
 	}
 	delete(e.models, id)
+	e.order = without(e.order, id)
 	for _, s := range victims {
 		delete(e.sessions, s.id)
 	}
@@ -517,7 +548,19 @@ func (e *Engine) UnloadModel(id string, force bool) (closed int, err error) {
 		err = cerr
 	}
 	lm.closeDev()
+	// The remaining models grow into what this one held.
+	e.rebudget()
 	return closed, err
+}
+
+func without(ids []string, id string) []string {
+	out := ids[:0]
+	for _, x := range ids {
+		if x != id {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 // Close tears the whole engine down in the order the engine requires.
@@ -533,6 +576,7 @@ func (e *Engine) Close() {
 	}
 	e.models = map[string]*LoadedModel{}
 	e.sessions = map[string]*Session{}
+	e.order = nil
 	e.mu.Unlock()
 
 	for _, s := range sessions {
@@ -570,6 +614,8 @@ type Session struct {
 
 	sampling model.Sampler
 	created  time.Time
+	// cached is a session with a prompt store: it prefills through it, alone.
+	cached bool
 
 	lastUsed  atomic.Int64
 	generated atomic.Int64
@@ -605,7 +651,17 @@ type SessionOptions struct {
 	DeviceIDs       []string
 	MaxDeviceBlocks int
 	Relocate        bool
-	Sampling        model.Sampler
+	// KeepOffHost turns off what a State does by default when its context
+	// outgrows the device: hand a block to the host. A device choice that
+	// leaves the CPU out is kept, and the token takes the device's refusal.
+	KeepOffHost bool
+	Sampling    model.Sampler
+	// KVStore keeps the session's prompt prefixes, so a prompt that starts as
+	// an earlier one did resumes from its cached keys and values; CacheKey
+	// names what may be shared (model.State.SetCacheKey). A session with a
+	// store prefills alone rather than as a row of the step loop.
+	KVStore  model.KVStore
+	CacheKey string
 }
 
 // CreateSession builds a model.State and offers its blocks to the model's
@@ -656,6 +712,17 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 	if o.Relocate {
 		st.SetRelocate(true)
 	}
+	if o.KeepOffHost {
+		st.SetRelocate(false)
+	}
+	if o.KVStore != nil {
+		st.SetKVStore(o.KVStore)
+		if o.CacheKey != "" {
+			// A refused key leaves the process-local default: the cache still
+			// serves this run, just not the next one.
+			st.SetCacheKey(o.CacheKey)
+		}
+	}
 	e.applyPageBudget(lm, st)
 
 	s := &Session{
@@ -666,6 +733,7 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 		maxSeq:   maxSeq,
 		sampling: o.Sampling,
 		created:  time.Now(),
+		cached:   o.KVStore != nil,
 	}
 	s.lastUsed.Store(time.Now().UnixMilli())
 	s.mu.Lock()
@@ -807,6 +875,9 @@ const (
 	PromptText
 	PromptIDs
 	PromptChat
+	// PromptSpans is token and embedding spans, a chat turn with a picture in
+	// its history; it runs alone, never as a row of the step loop.
+	PromptSpans
 )
 
 // ChatInput is a chat prompt: the messages, an optional system prompt given
@@ -825,10 +896,11 @@ type ChatInput struct {
 
 // Prompt is what a generate runs: the member Kind names is the one read.
 type Prompt struct {
-	Kind PromptKind
-	Text string
-	IDs  []int32
-	Chat *ChatInput
+	Kind  PromptKind
+	Text  string
+	IDs   []int32
+	Chat  *ChatInput
+	Spans []model.Span
 }
 
 // GenerateOptions is the one request shape: the Connect InferenceService and
@@ -977,18 +1049,27 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		return fmt.Errorf("server: model %q has no tokenizer: %v", lm.id, lm.m.TokErr)
 	}
 
+	if o.Prompt.Kind == PromptSpans {
+		if o.Continue {
+			return fmt.Errorf("%w: a span prompt starts its sequence; it cannot continue one", ErrInvalid)
+		}
+		if len(o.Prompt.Spans) == 0 {
+			return fmt.Errorf("%w: the prompt is empty", ErrInvalid)
+		}
+	}
 	ids, err := e.encode(lm, o.Prompt)
 	if err != nil {
 		return err
 	}
-	if len(ids) == 0 && !o.Continue {
+	spans := o.Prompt.Kind == PromptSpans
+	if !spans && len(ids) == 0 && !o.Continue {
 		return fmt.Errorf("%w: the prompt is empty and continue_session was not set", ErrInvalid)
 	}
-	if len(ids) == 0 {
+	if !spans && len(ids) == 0 {
 		return fmt.Errorf("%w: continue_session with no prompt has no token to run", ErrInvalid)
 	}
 
-	if lp := e.joins(s); lp != nil {
+	if lp := e.joins(s); lp != nil && !spans && !s.cached {
 		return e.generateBatched(ctx, lp, s, o, ids, ephemeral, emit)
 	}
 
@@ -1011,12 +1092,22 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		s.st.Reset()
 	}
 	prefillStart := time.Now()
-	logits, err := s.st.Prefill(ids)
+	var logits []float32
+	prompted := len(ids)
+	switch {
+	case spans:
+		prompted = model.SpanPositions(o.Prompt.Spans, lm.m.Cfg.NEmbd)
+		logits, err = s.st.PrefillCachedMixed(o.Prompt.Spans...)
+	case s.cached && !o.Continue:
+		logits, err = s.st.PrefillCached(ids)
+	default:
+		logits, err = s.st.Prefill(ids)
+	}
 	if err != nil {
 		return err
 	}
-	s.prefilled.Add(int64(len(ids)))
-	lm.tokensPrefilled.Add(int64(len(ids)))
+	s.prefilled.Add(int64(prompted))
+	lm.tokensPrefilled.Add(int64(prompted))
 	prefill := time.Since(prefillStart)
 
 	devBlocks := s.st.GPULayers()
@@ -1024,7 +1115,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		SessionID:    s.id,
 		ModelID:      lm.id,
 		Ephemeral:    ephemeral,
-		PromptTokens: len(ids),
+		PromptTokens: prompted,
 		QueuedFor:    waited,
 		QueueDepth:   depth,
 		DeviceBlocks: devBlocks,
@@ -1036,7 +1127,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		return err
 	}
 
-	if o.Echo {
+	if o.Echo && !spans {
 		if err := emit(Event{Kind: EventToken, Token: &Token{
 			ID: -1, Text: lm.m.Vocab.Decode(ids), Index: -1,
 		}}); err != nil {
@@ -1108,7 +1199,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	return emit(Event{Kind: EventFinished, Finished: &Finished{
 		Reason:           reason,
 		StopMatched:      stopMatched,
-		PromptTokens:     len(ids),
+		PromptTokens:     prompted,
 		CompletionTokens: n,
 		Prefill:          prefill,
 		Decode:           decode,
@@ -1165,7 +1256,7 @@ func (e *Engine) encode(lm *LoadedModel, p Prompt) ([]int32, error) {
 			msgs = append([]model.ChatMessage{{Role: "system", Content: p.Chat.System}}, msgs...)
 		}
 		return lm.m.ChatIDsTools(msgs, p.Chat.Tools, p.Chat.AddGenerationPrompt)
-	case PromptNone:
+	case PromptNone, PromptSpans:
 		return nil, nil
 	}
 	return nil, fmt.Errorf("%w: unknown prompt kind %d", ErrInvalid, p.Kind)
@@ -1342,6 +1433,34 @@ func (s *Session) ID() string { return s.id }
 // ModelID is the model this session holds a sequence of.
 func (s *Session) ModelID() string { return s.modelID }
 
+// Model is the loaded model's engine handle, for an in-process front end that
+// renders prompts and reads the model's configuration and counters.
+func (lm *LoadedModel) Model() *model.Model { return lm.m }
+
+// GPU is the model's device tier, nil for a host-only model.
+func (lm *LoadedModel) GPU() *tier.GPU { return lm.gpu }
+
+// Inspect runs f with the session's State under the session's lock, so it
+// never overlaps a generate: what a front end reads between turns (placement,
+// the prompt cache's counters) or does on the session's own JIT (a picture).
+func (s *Session) Inspect(f func(st *model.State)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f(s.st)
+}
+
+// SetDeviceBlocks moves the seam: it asks the devices to hold n blocks of this
+// session and returns how many they took. Growing is best effort, and a shrink
+// whose history cannot move leaves the seam where it was.
+func (e *Engine) SetDeviceBlocks(s *Session, n int) int {
+	s.mu.Lock()
+	got := s.st.SetGPULayers(n)
+	s.refresh()
+	s.mu.Unlock()
+	e.applyPageBudget(s.lm, nil)
+	return got
+}
+
 // hostWeightShare is what the HOST may spend on paged weights, given a total
 // budget: the dense region never pages, and skipping that subtraction
 // double-spends -- a budget one page short costs a read every token. What a
@@ -1381,15 +1500,23 @@ func (e *Engine) applyPageBudget(lm *LoadedModel, newest *model.State) {
 	}
 	avail := lm.hostWeightShare(lm.budget)
 
-	// The newest session is not in the map yet, so it is counted separately.
-	kv := uint64(newest.MaxSeq()) * uint64(lm.m.Cfg.KVDim()) * 4 * 2 * uint64(lm.m.Cfg.NLayer)
-	minDev := newest.GPULayers()
+	// The newest session is not in the map yet, so it is counted separately;
+	// a rebudget has none.
+	var kv uint64
+	minDev := lm.m.Cfg.NLayer
+	if newest != nil {
+		kv = uint64(newest.MaxSeq()) * uint64(lm.m.Cfg.KVDim()) * 4 * 2 * uint64(lm.m.Cfg.NLayer)
+		minDev = newest.GPULayers()
+	}
 	e.mu.RLock()
 	for _, s := range lm.sessions {
 		kv += s.snapKV.Load()
 		if d := int(s.snapDevBlocks.Load()); d < minDev {
 			minDev = d
 		}
+	}
+	if newest == nil && len(lm.sessions) == 0 {
+		minDev = 0 // no session has placed anything yet
 	}
 	e.mu.RUnlock()
 

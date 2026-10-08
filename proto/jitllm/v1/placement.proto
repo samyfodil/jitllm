@@ -202,6 +202,8 @@ message GetResidencyResponse {
 
 message SetPageBudgetRequest {
   string model_id = 1;
+  // The model's budget, pinned: the other loaded models divide what is left.
+  // Zero releases the pin and the model takes a share again.
   uint64 budget_bytes = 2;
 }
 

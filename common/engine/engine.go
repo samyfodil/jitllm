@@ -5,6 +5,10 @@
 // stall the same way. Every entry point here queues and returns, as the
 // window's screen.Engine requires.
 //
+// Models and sessions live in a server.Engine (Server): the app's chat is one
+// session on it, and the API, when a front end serves it, is the same engine
+// seen over HTTP -- one budget, one pager per model, one set of gates.
+//
 // The engine knows no front end. It reports through a [Front] and the [State]
 // values the front end hands it; the window and the terminal each implement
 // both.
@@ -16,6 +20,8 @@
 package engine
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"image"
 	"os"
@@ -28,8 +34,8 @@ import (
 
 	"github.com/samyfodil/jitllm/common/session"
 	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/engine/nn"
 	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/samyfodil/jitllm/server"
 )
 
 // Engine is the app's single owner of a loaded model.
@@ -54,23 +60,25 @@ type Engine struct {
 	// running; Store.Busy is published from it. See busyEnd.
 	busyJobs atomic.Int32
 
+	// srv holds every model and session; its methods are safe from any
+	// goroutine, and an API serving it runs beside this worker.
+	srv *server.Engine
+
 	// Everything below is touched only on the worker goroutine.
 	//
-	// models is every open model and active the one running. The scalars below
-	// (m, sess, dev, gpu, closeDev, path, sessMax) belong to the active entry.
-	// See entry's doc for why only one runs.
-	models   []*entry
-	active   *entry
-	priority bool
+	// models is every model the app opened and active the one its chat runs
+	// on. The scalars below (m, sess, gpu, path, sessMax) belong to the active
+	// entry.
+	models []*entry
+	active *entry
 
-	m    *model.Model
-	sess *model.State
-	dev  nn.Device
-	// gpu is dev when it is a tier, kept because nn.Device cannot answer
-	// "how much of each card is this model using" -- only *tier.GPU can.
-	gpu      *tier.GPU
-	closeDev func()
-	path     string
+	m *model.Model
+	// sess is the chat's session on the active model.
+	sess *server.Session
+	// gpu is the active model's tier, nil on the host: only *tier.GPU can
+	// answer "how much of each card is this model using".
+	gpu  *tier.GPU
+	path string
 	// sessMax is the window this session was built for, so the decode loop can
 	// tell a context that filled from a cap that was reached.
 	sessMax int
@@ -95,10 +103,15 @@ const queueDepth = 16
 
 // New starts the worker. Close stops it.
 func New(sh Front, st State) *Engine {
-	e := &Engine{sh: sh, st: st, cmds: make(chan func(), queueDepth), done: make(chan struct{})}
+	e := &Engine{sh: sh, st: st, cmds: make(chan func(), queueDepth), done: make(chan struct{}),
+		srv: server.New(server.Config{Version: "app"})}
 	go e.run()
 	return e
 }
+
+// Server is the engine the app's models and chat live in, for a front end to
+// serve as the API (server.Engine.Handler).
+func (e *Engine) Server() *server.Engine { return e.srv }
 
 func (e *Engine) run() {
 	defer close(e.done)
@@ -156,30 +169,27 @@ func (e *Engine) Close() {
 // release tears down the current model and device. Worker goroutine only.
 func (e *Engine) release() {
 	e.releaseSession()
-	for _, en := range e.models {
-		if en.m != nil {
-			en.m.Close()
-			en.m = nil
-		}
-	}
+	// Every model in the engine, the API's included: the app is the process.
+	e.srv.Close()
 	e.models, e.active = nil, nil
 }
 
-// releaseSession drops what belongs to the active model and leaves the model
-// itself open. A session carries the worker pool, the device tier and the KV
-// cache; the model carries the weights and the pager. A switch gives up the
-// first and keeps the second, so a backgrounded model is cheap to return to and
-// two worker pools never exist at once.
+// releaseSession closes the chat's session and leaves its model loaded, with
+// its tier: a backgrounded model keeps its blocks where they are, and API
+// sessions on it are untouched.
 func (e *Engine) releaseSession() {
 	if e.sess != nil {
-		e.sess.Close()
+		e.srv.CloseSession(e.sess.ID())
 		e.sess = nil
 	}
-	if e.closeDev != nil {
-		e.closeDev()
-		e.closeDev = nil
+	e.gpu, e.m, e.path, e.sessMax = nil, nil, "", 0
+}
+
+// inspect runs f on the chat session's State between turns.
+func (e *Engine) inspect(f func(st *model.State)) {
+	if e.sess != nil {
+		e.sess.Inspect(f)
 	}
-	e.dev, e.gpu, e.m, e.path, e.sessMax = nil, nil, nil, "", 0
 }
 
 // touch says a turn's content changed without the turn count moving.
@@ -255,54 +265,49 @@ func (e *Engine) stage(s string) {
 // active. Re-loading a model already open is a switch, not a second copy: two
 // entries over one file would be two pagers over the same bytes.
 func (e *Engine) load(path string) {
+	// The device choice is the model's for as long as it is loaded: its tier
+	// holds its blocks while another model is in use. Loading an open model
+	// again under another choice re-opens it there; under the same one it is a
+	// switch.
+	spec := e.st.DeviceSpec.Get()
+	if spec == "" {
+		spec = "auto"
+	}
 	if en := e.find(path); en != nil {
-		if err := e.activate(en); err != nil {
-			e.report(stageDevice, path, err)
+		if en.spec == spec {
+			if err := e.activate(en); err != nil {
+				e.report(stageDevice, path, err)
+			}
+			return
 		}
-		return
+		e.unload(en)
 	}
 
-	// The share is computed before the open, because model.Open otherwise reads
-	// sched.MemBudget() itself, ignoring what the open models already hold.
-	e.models = append(e.models, &entry{path: path})
-	e.rebudget()
-	en := e.find(path)
-
-	m, err := model.Open(path, model.WithPageBudget(en.grant))
+	lm, err := e.srv.LoadModel(server.LoadOptions{Path: path, DeviceIDs: strings.Split(spec, ",")})
 	if err != nil {
 		// A GGUF or a stale container is the commonest wrong file; report turns
 		// both into the button that fixes them.
-		e.drop(en)
-		e.report(stageOpen, path, err)
+		stage := stageOpen
+		var de *server.DeviceError
+		if errors.As(err, &de) {
+			stage = stageDevice
+		}
+		e.report(stage, path, err)
+		if e.active == nil {
+			e.unpublish()
+		}
 		return
 	}
-	en.m = m
-	// With the model open its real share can be applied, and the models that
-	// were already open give up the bytes this one now holds.
-	e.rebudget()
+	en := &entry{path: path, lm: lm, m: lm.Model(), spec: spec}
+	e.models = append(e.models, en)
 
 	if err := e.activate(en); err != nil {
 		e.report(stageDevice, path, err)
 	}
 }
 
-// drop removes an entry that never opened.
-func (e *Engine) drop(en *entry) {
-	for i, x := range e.models {
-		if x == en {
-			e.models = append(e.models[:i], e.models[i+1:]...)
-			break
-		}
-	}
-	e.rebudget()
-}
-
-// activate gives one open model the session, the device and the worker pool,
-// and takes them from whichever model had them.
-//
-// The previous session is closed first, and the order matters: two live States
-// are two worker pools on the same cores, two live tiers over one card do not
-// arbitrate its memory, and the JIT's codegen knobs are process-wide.
+// activate gives one loaded model the chat's session, closing the one the
+// previous model had. Its tier was opened at load and stays with it.
 //
 // The history is not carried across. In chat mode every turn renders the whole
 // conversation through the model's own template, so the next message
@@ -314,60 +319,44 @@ func (e *Engine) activate(en *entry) error {
 	}
 	e.releaseSession()
 	e.active = en
-
-	spec := e.st.DeviceSpec.Get()
-	if spec == "" {
-		spec = "auto"
-	}
+	// The model in use is the one priority gives the memory to.
+	e.srv.Favor(en.lm.ID())
 	m, path := en.m, en.path
 
-	e.stage("Opening the device")
-	dev, closeDev, devName, err := openDevices(spec, en.grant)
-	if err != nil {
-		// The previous session is already closed, so the screen must stop showing
-		// it. The model stays open and listed, ready once the device is fixed.
-		e.active = nil
-		e.publishModels()
-		e.sh.Post(func() {
-			e.st.Loaded.Set(false)
-			e.st.ModelPath.Set("")
-			e.st.ModelSummary.Set("")
-			e.st.Vision.Set(false)
-			e.st.BlockMap.Set(nil)
-			e.st.Alloc.Set(session.Allocation{})
-		})
-		return err
-	}
-
 	window := maxSeq(m, e.st.MaxSeq.Get())
-	st := m.NewState(window)
-	if dev != nil {
-		e.stage("Placing layers on the GPU")
-		if err := st.SetDevice(dev); err != nil {
-			// The model still runs, on the host; say why the device holds nothing.
-			e.report(stageDevice, path, err)
-		}
-	}
 	// A context that outgrows the card hands blocks to the host one at a time
 	// -- only where the device choice lets the host run them, as the CLI's
 	// -relocate does. A choice of devices alone keeps the model off the CPU, so
 	// there the token takes the device's refusal instead.
-	relocate, _ := tier.AdmitsHost(spec)
-	st.SetRelocate(relocate)
-
+	relocate, _ := tier.AdmitsHost(en.spec)
+	o := server.SessionOptions{ModelID: en.lm.ID(), MaxSeq: window, KeepOffHost: !relocate}
 	cacheOff := "turned off in Settings"
 	if e.st.KVCache.Get() {
-		cacheOff = attachKVCache(st, path)
+		o.KVStore, o.CacheKey, cacheOff = kvCache(path)
+	}
+	if en.lm.GPU() != nil {
+		e.stage("Placing layers on the GPU")
+	}
+	s, err := e.srv.CreateSession(o)
+	if err != nil {
+		// The previous session is already closed, so the screen must stop showing
+		// it. The model stays loaded and listed, ready once the device is fixed.
+		e.active = nil
+		e.unpublish()
+		return err
 	}
 
-	e.m, e.sess, e.dev, e.closeDev, e.path, e.sessMax = m, st, dev, closeDev, path, window
-	e.gpu, _ = dev.(*tier.GPU)
-	// The active model's share changes when it becomes active, so this runs
-	// after e.active is set and before anything is reported.
-	e.rebudget()
+	e.m, e.sess, e.gpu, e.path, e.sessMax = m, s, en.lm.GPU(), path, window
 	e.publishModels()
 
-	c := m.Cfg
+	devName := "cpu"
+	if e.gpu != nil {
+		devName = en.spec
+		if ds := e.gpu.DevStats(); len(ds) > 0 {
+			devName = fmt.Sprintf("%s (%d device(s))", en.spec, len(ds))
+		}
+	}
+
 	// A base model cannot chat, so the header says "completion only" and Chat
 	// is switched off at load rather than failing every turn.
 	summary := e.headerNow().String()
@@ -375,9 +364,13 @@ func (e *Engine) activate(en *entry) error {
 	vision := m.Tower() != nil
 	// A different model is a different preprocessor: every picture is stale.
 	e.pictures = nil
-	blocks := placementOf(m, st, e.gpu)
+	var blocks []byte
+	var alloc session.Allocation
+	e.inspect(func(st *model.State) {
+		blocks = placementOf(m, st, e.gpu)
+		alloc = allocStat(m, st, e.gpu, m.Cfg.NLayer)
+	})
 	pager := pagerStat(m)
-	alloc := allocStat(m, st, e.gpu, c.NLayer)
 
 	e.sh.Post(func() {
 		if !chatOK {
@@ -401,6 +394,20 @@ func (e *Engine) activate(en *entry) error {
 		e.sh.SetStatus(loaded)
 	})
 	return nil
+}
+
+// unpublish stops the screen showing a session when none is active, and lists
+// what is still open.
+func (e *Engine) unpublish() {
+	e.publishModels()
+	e.sh.Post(func() {
+		e.st.Loaded.Set(false)
+		e.st.ModelPath.Set("")
+		e.st.ModelSummary.Set("")
+		e.st.Vision.Set(false)
+		e.st.BlockMap.Set(nil)
+		e.st.Alloc.Set(session.Allocation{})
+	})
 }
 
 // maxSeq is the context window a session allocates: what the caller asked for,
@@ -451,31 +458,6 @@ func short(p string) string {
 		return p[i+1:]
 	}
 	return p
-}
-
-// openDevices mirrors cmd/jitllm's, narrowed to what the app needs.
-//
-// "cpu" opens nothing, and a spec that names a missing device is an error
-// rather than a silent fall back to the CPU. Only "auto" may fall back.
-func openDevices(spec string, hostBudget uint64) (nn.Device, func(), string, error) {
-	if spec == "" || spec == "cpu" {
-		return nil, func() {}, "cpu", nil
-	}
-	g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithHostBudget(hostBudget))
-	if err != nil || g == nil {
-		if spec == "auto" {
-			return nil, func() {}, "cpu", nil
-		}
-		if err == nil {
-			err = fmt.Errorf("no device matched %q", spec)
-		}
-		return nil, nil, "", err
-	}
-	name := spec
-	if ds := g.DevStats(); len(ds) > 0 {
-		name = fmt.Sprintf("%s (%d device(s))", spec, len(ds))
-	}
-	return g, func() { g.Close() }, name, nil
 }
 
 // blockMap is the memory map's input: one byte a block, saying which device
@@ -621,11 +603,16 @@ func (e *Engine) Relocate(n int) {
 			e.status("this model is on the host: load it with a device to move blocks")
 			return
 		}
-		was := e.sess.GPULayers()
-		got := e.sess.SetGPULayers(n)
+		var was int
+		e.inspect(func(st *model.State) { was = st.GPULayers() })
+		got := e.srv.SetDeviceBlocks(e.sess, n)
 		nb := e.m.Cfg.NLayer
-		blocks := placementOf(e.m, e.sess, e.gpu)
-		alloc := allocStat(e.m, e.sess, e.gpu, nb)
+		var blocks []byte
+		var alloc session.Allocation
+		e.inspect(func(st *model.State) {
+			blocks = placementOf(e.m, st, e.gpu)
+			alloc = allocStat(e.m, st, e.gpu, nb)
+		})
 		summary := e.headerNow().String()
 
 		msg := fmt.Sprintf("%d of %d block(s) on a device", got, nb)
@@ -701,78 +688,50 @@ func (e *Engine) generate(r session.ChatRequest) {
 
 	ph := e.m.NewPhaseMeter()
 	ph.Mark("load")
-	moved0 := e.sess.Relocations()
+	var moved0 int
+	e.inspect(func(st *model.State) { moved0 = st.Relocations() })
 	_, _, outs0 := e.m.PageStats()
-	// The sequence is reset before every turn: a chat prompt is the whole history
-	// re-rendered, so prefilling onto a session still holding the last turn would
-	// show the model the conversation twice. Reset is cheap, and the prefix cache
-	// makes re-prefilling the history affordable.
-	e.sess.Reset()
 
-	t0 := time.Now()
-	// PrefillCached, because a chat turn is its whole history and a plain Prefill
-	// would re-read it from position zero every turn. It falls back to an ordinary
-	// prefill when no store is attached.
-	var logits []float32
-	prompted := len(ids)
+	// The session resets before every turn (server.Engine.Generate): a chat
+	// prompt is the whole history re-rendered, so prefilling onto a session
+	// still holding the last turn would show the model the conversation twice.
+	// With a prompt store attached the prefill resumes from the longest prefix
+	// it holds, so re-prefilling the history is affordable.
+	p := server.Prompt{Kind: server.PromptIDs, IDs: ids}
 	if spans != nil {
-		prompted = model.SpanPositions(spans, e.m.Cfg.NEmbd)
-		logits, err = e.sess.PrefillCachedMixed(spans...)
-	} else {
-		logits, err = e.sess.PrefillCached(ids)
+		p = server.Prompt{Kind: server.PromptSpans, Spans: spans}
 	}
-	if err != nil {
-		e.report(stageReply, e.path, err)
-		return
-	}
-	prefill := time.Since(t0)
-	reused := e.sess.KVRestored()
-	ph.Mark("prefill")
-	promptRate := float64(prompted) / prefill.Seconds()
-	// Printed even when zero: a working cache and a silently dead one look the
-	// same on the first turn otherwise.
-	fails := e.sess.KVStoreFailures()
-	e.lastPromptTok = prompted
-	kvNote := ""
-	if prompted > 0 {
-		kvNote = fmt.Sprintf("  |  kv %d/%d reused (%.0f%%)",
-			reused, prompted, 100*float64(reused)/float64(prompted))
-	}
-	if fails > 0 {
-		kvNote += fmt.Sprintf("  %d STORE WRITE FAILURE(S)", fails)
-	}
-	e.sh.Post(func() { e.st.PromptTokS.Set(promptRate) })
-
 	max := r.MaxTokens
 	if max <= 0 {
 		max = session.DefaultMaxTokens
 	}
 	sm := samplerFor(r.Sampling)
 	out := make([]int32, 0, max)
-	t1 := time.Now()
+	var t1 time.Time
+	var fin *server.Finished
 	n := 0
 
-	// Why a reply ended is part of the reply: a cap, a full context and Stop
-	// otherwise all look like a finished answer.
-	stop := "end of text"
-	for i := 0; i < max; i++ {
+	err = e.srv.Generate(context.Background(), server.GenerateOptions{
+		SessionID: e.sess.ID(), Prompt: p, MaxTokens: max, Sampling: sm,
+	}, func(ev server.Event) error {
+		switch ev.Kind {
+		case server.EventStarted:
+			ph.Mark("prefill")
+			e.lastPromptTok = ev.Started.PromptTokens
+			rate := float64(ev.Started.PromptTokens) / ev.Started.Prefill.Seconds()
+			e.sh.Post(func() { e.st.PromptTokS.Set(rate) })
+			t1 = time.Now()
+		case server.EventFinished:
+			fin = ev.Finished
+			return nil
+		}
+		if ev.Kind != server.EventToken || ev.Token.ID < 0 {
+			return nil
+		}
 		if e.cancel.Load() {
-			stop = "stopped"
-			break
+			return errStopped
 		}
-		if i == max-1 {
-			stop = fmt.Sprintf("hit the %d-token cap", max)
-		}
-		if e.sess.Pos() >= e.sessMax-1 {
-			stop = fmt.Sprintf("context full at %d positions", e.sessMax)
-			break
-		}
-		next := sm.Sample(logits)
-		sm.Observe(next)
-		if e.m.Vocab.IsEOG(next) {
-			break
-		}
-		out = append(out, next)
+		out = append(out, ev.Token.ID)
 		n++
 		// Every token is published. RequestRedraw is coalesced and the post queue
 		// drops on overflow, so no throttle is needed here. The real cost is one
@@ -811,10 +770,42 @@ func (e *Engine) generate(r session.ChatRequest) {
 			// paint over its neighbour. InvalidateData re-measures.
 			e.touch()
 		})
-		if logits, err = e.sess.Forward(next); err != nil {
-			e.report(stageReply, e.path, err)
-			return
-		}
+		return nil
+	})
+
+	// Why a reply ended is part of the reply: a cap, a full context and Stop
+	// otherwise all look like a finished answer.
+	stop := "end of text"
+	switch {
+	case errors.Is(err, errStopped):
+		stop = "stopped"
+	case err != nil:
+		e.report(stageReply, e.path, err)
+		return
+	case fin.Reason == server.FinishMaxTokens && n < max:
+		stop = fmt.Sprintf("context full at %d positions", e.sessMax)
+	case fin.Reason == server.FinishMaxTokens:
+		stop = fmt.Sprintf("hit the %d-token cap", max)
+	}
+	if t1.IsZero() {
+		t1 = time.Now()
+	}
+	var reused, prompted int
+	var fails int64
+	var moved int
+	e.inspect(func(st *model.State) {
+		reused, fails, moved = st.KVRestored(), st.KVStoreFailures(), st.Relocations()-moved0
+	})
+	prompted = e.lastPromptTok
+	// Printed even when zero: a working cache and a silently dead one look the
+	// same on the first turn otherwise.
+	kvNote := ""
+	if prompted > 0 {
+		kvNote = fmt.Sprintf("  |  kv %d/%d reused (%.0f%%)",
+			reused, prompted, 100*float64(reused)/float64(prompted))
+	}
+	if fails > 0 {
+		kvNote += fmt.Sprintf("  %d STORE WRITE FAILURE(S)", fails)
 	}
 
 	decode := time.Since(t1)
@@ -829,13 +820,17 @@ func (e *Engine) generate(r session.ChatRequest) {
 	gbs := dec.Rate() / (1 << 30)
 	pager := pagerStat(e.m)
 	pager.TurnOuts = pager.PageOuts - outs0
-	alloc := allocStat(e.m, e.sess, e.gpu, e.m.Cfg.NLayer)
-	blocks := placementOf(e.m, e.sess, e.gpu)
+	var alloc session.Allocation
+	var blocks []byte
+	e.inspect(func(st *model.State) {
+		alloc = allocStat(e.m, st, e.gpu, e.m.Cfg.NLayer)
+		blocks = placementOf(e.m, st, e.gpu)
+	})
 	summary := e.headerNow().String()
 	modelName, modelColour := e.activeName()
 	reply := r.Reply
 	// A block moved to the host runs at host speed from here on, so say so.
-	if moved := e.sess.Relocations() - moved0; moved > 0 {
+	if moved > 0 {
 		kvNote += fmt.Sprintf("  |  %d layer(s) moved to the CPU to fit the context", moved)
 	}
 
@@ -943,7 +938,9 @@ func (e *Engine) picture(path string) (*model.Picture, error) {
 	if err != nil {
 		return nil, err
 	}
-	return e.sess.Picture(img)
+	var pc *model.Picture
+	e.inspect(func(st *model.State) { pc, err = st.Picture(img) })
+	return pc, err
 }
 
 // display is the decoded text made safe to put on screen.
@@ -1047,32 +1044,28 @@ const (
 	thinkClose = "</think>"
 )
 
-// attachKVCache gives the session a prefix cache in session.KVCacheDir,
-// and returns why not when it cannot. That is not an error: the session still
-// runs and re-prefills, but the load says so.
+// kvCache is the prefix cache in session.KVCacheDir and the key its pages
+// are named under, or why there is none. That is not an error: the session
+// still runs and re-prefills, but the load says so.
 //
 // The namespace carries size and mtime, not just the basename: many containers
 // are named model.jlm, and the geometry hash cannot separate two fine-tunes of
 // one architecture.
-func attachKVCache(st *model.State, path string) string {
+func kvCache(path string) (model.KVStore, string, string) {
 	dir := session.KVCacheDir()
 	if dir == "" {
-		return "this system has no cache folder"
+		return nil, "", "this system has no cache folder"
 	}
 	// Bounded, because nothing in a KV cache expires.
 	store, err := model.NewFileStoreLimit(dir, kvCacheMax)
 	if err != nil {
-		return err.Error()
+		return nil, "", err.Error()
 	}
-	st.SetKVStore(store)
 	ns := "jlm/" + filepath.Base(path)
 	if fi, err := os.Stat(path); err == nil {
 		ns = fmt.Sprintf("jlm/%s/%d-%d", filepath.Base(path), fi.Size(), fi.ModTime().UnixNano())
 	}
-	// A refused key leaves the process-local default: the cache still serves
-	// this run, just not the next one.
-	st.SetCacheKey(ns)
-	return ""
+	return store, ns, ""
 }
 
 // kvCacheMax bounds the prefix cache on disk. 8 GiB is cmd/jitllm's default
@@ -1095,19 +1088,18 @@ func kvStatus(reused, prompted int, fails int64) string {
 // lastReused and lastFailures expose the prefix cache's own counters for the
 // turn just finished. They read the session directly and so must be called
 // when no generation is in flight, which a test after pump() is.
-func (e *Engine) lastReused() int {
-	if e.sess == nil {
-		return 0
-	}
-	return e.sess.KVRestored()
+func (e *Engine) lastReused() (n int) {
+	e.inspect(func(st *model.State) { n = st.KVRestored() })
+	return n
 }
 
-func (e *Engine) lastFailures() int64 {
-	if e.sess == nil {
-		return 0
-	}
-	return e.sess.KVStoreFailures()
+func (e *Engine) lastFailures() (n int64) {
+	e.inspect(func(st *model.State) { n = st.KVStoreFailures() })
+	return n
 }
+
+// errStopped ends a generate the person stopped.
+var errStopped = errors.New("stopped")
 
 // lastPrompt is how many tokens the last prompt was, for the reuse probe.
 func (e *Engine) lastPrompt() int { return e.lastPromptTok }
