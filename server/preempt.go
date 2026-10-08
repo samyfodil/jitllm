@@ -1,0 +1,138 @@
+package server
+
+import (
+	"fmt"
+	"sync/atomic"
+)
+
+// Preemption under memory pressure. A model may carry a KV budget
+// (SetKVBudget): the bytes its sessions' histories may hold at once, wherever
+// they live (model.State.HistoryBytes). A generate that would take the model
+// past it parks other sessions of the model first (model.State.Park: their
+// blocks' KV and recurrent state home from the device, their sealed pages
+// into a store) and the parked session resumes, byte for byte, the next time
+// it generates. Nothing is refused for it and nothing is recomputed.
+//
+// The victim is the lowest priority (SetPriority), then the least recently
+// stepped. Only an idle session is a victim: one whose lock is free, so it is
+// never parked inside a step or a generate. When no idle session is left to
+// park, the generate runs over the budget, as it did before there was one;
+// the budget orders who gives way, it does not refuse.
+
+// preemptStats counts what preemption did, for Stats and the gates.
+type preemptStats struct {
+	parks, resumes     atomic.Int64
+	pagesOut, pagesIn  atomic.Int64
+	overBudgetAdmitted atomic.Int64
+}
+
+// SetKVBudget caps the bytes model id's sessions' histories may hold at once;
+// 0, the default, is no cap.
+func (e *Engine) SetKVBudget(id string, bytes uint64) error {
+	lm, err := e.Model(id)
+	if err != nil {
+		return err
+	}
+	lm.mu.Lock()
+	lm.kvBudget = bytes
+	lm.mu.Unlock()
+	return nil
+}
+
+// SetPriority orders this session against the others of its model when one
+// must be parked: a lower priority is parked first. 0 is the default.
+func (s *Session) SetPriority(p int32) { s.priority.Store(p) }
+
+// Parked reports whether the session is parked.
+func (s *Session) Parked() bool { return s.parked.Load() }
+
+// PreemptCounts is what preemption has done: sessions parked and resumed, and
+// the KV pages (a key and a value page each count) sent out and brought in.
+func (e *Engine) PreemptCounts() (parks, resumes, pagesOut, pagesIn int64) {
+	p := &e.preempt
+	return p.parks.Load(), p.resumes.Load(), p.pagesOut.Load(), p.pagesIn.Load()
+}
+
+// admit makes room for s to generate grow more positions: it resumes s if it
+// is parked, then parks other sessions of its model until the model's
+// histories fit its KV budget with s's grown one. The caller holds s.mu.
+func (e *Engine) admit(s *Session, grow int) error {
+	if s.st.Parked() {
+		in, err := s.st.Resume()
+		if err != nil {
+			return fmt.Errorf("server: session %q could not resume: %w", s.id, err)
+		}
+		s.parked.Store(false)
+		e.preempt.resumes.Add(1)
+		e.preempt.pagesIn.Add(int64(in))
+	}
+	lm := s.lm
+	lm.mu.Lock()
+	budget := lm.kvBudget
+	lm.mu.Unlock()
+	if budget == 0 {
+		return nil
+	}
+	need := s.st.HistoryBytes() + uint64(max(grow, 0))*s.st.PositionBytes()
+	// busy is the sessions found stepping: looked past, not waited on.
+	var busy map[*Session]bool
+	for {
+		e.mu.RLock()
+		var used uint64
+		var victim *Session
+		for _, o := range lm.sessions {
+			if o == s || o.closed.Load() || o.parked.Load() {
+				continue
+			}
+			used += o.snapHist.Load()
+			if victim == nil || o.priority.Load() < victim.priority.Load() ||
+				o.priority.Load() == victim.priority.Load() && o.lastUsed.Load() < victim.lastUsed.Load() {
+				if !o.running.Load() && !busy[o] {
+					victim = o
+				}
+			}
+		}
+		e.mu.RUnlock()
+		if used+need <= budget {
+			return nil
+		}
+		if victim == nil {
+			e.preempt.overBudgetAdmitted.Add(1)
+			return nil
+		}
+		parked, err := e.park(victim)
+		if err != nil {
+			return err
+		}
+		if !parked {
+			if busy == nil {
+				busy = map[*Session]bool{}
+			}
+			busy[victim] = true
+		}
+	}
+}
+
+// park parks v if it is idle, reporting whether it did. An idle session's
+// lock is free; TryLock never waits on one that is stepping, which a later
+// admit may take once it is idle.
+func (e *Engine) park(v *Session) (bool, error) {
+	if !v.mu.TryLock() {
+		return false, nil
+	}
+	defer v.mu.Unlock()
+	if v.closed.Load() || v.st.Parked() {
+		v.snapHist.Store(0)
+		return true, nil
+	}
+	ps, err := v.st.Park()
+	if err != nil {
+		return false, fmt.Errorf("server: parking session %q: %w", v.id, err)
+	}
+	v.parked.Store(true)
+	v.snapHist.Store(0)
+	e.preempt.parks.Add(1)
+	e.preempt.pagesOut.Add(int64(ps.PagesOut))
+	v.refresh()
+	return true, nil
+}

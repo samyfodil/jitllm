@@ -115,6 +115,8 @@ type Engine struct {
 	priority bool
 	favored  string
 
+	preempt preemptStats
+
 	// devices is the hardware probe, taken once. See devices.go for why it is
 	// not re-taken on every list.
 	devMu   sync.Mutex
@@ -199,6 +201,9 @@ type LoadedModel struct {
 	// SetPageBudget), taken off the top of the division; 0 is a share.
 	pin       uint64
 	maxBlocks int
+	// kvBudget caps the bytes this model's sessions' histories hold at once
+	// (SetKVBudget, preempt.go); 0 is none. Guarded by mu.
+	kvBudget uint64
 
 	// loop batches this model's device generates (batch.go). nil for a
 	// host-only model, or with batching off. Set before the model is
@@ -633,6 +638,13 @@ type Session struct {
 	cancel   context.CancelFunc
 
 	closed atomic.Bool
+
+	// priority, parked and snapHist are preemption's (preempt.go): the order
+	// a session is parked in, whether it is parked, and its history's bytes
+	// as of the last snapshot (model.State.HistoryBytes).
+	priority atomic.Int32
+	parked   atomic.Bool
+	snapHist atomic.Uint64
 }
 
 // SessionOptions is CreateSession's input.
@@ -766,6 +778,7 @@ type placementSnapshot struct {
 func (s *Session) refresh() {
 	s.snapPos.Store(int32(s.st.Pos()))
 	s.snapKV.Store(s.st.KVBytes())
+	s.snapHist.Store(s.st.HistoryBytes())
 	s.snapDevBlocks.Store(int32(s.st.GPULayers()))
 	s.snapAt.Store(time.Now().UnixMilli())
 	s.snapBatched.Store(s.lm.loop != nil && s.st.Steppable())
@@ -1060,6 +1073,12 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		return fmt.Errorf("%w: continue_session with no prompt has no token to run", ErrInvalid)
 	}
 
+	// Room for this generate's history, parking idle sessions of the model
+	// if its KV budget is short (preempt.go), and this session back if it
+	// was the one parked.
+	if err := e.admit(s, len(ids)+tokenLimit(o.MaxTokens, s.st.MaxSeq()-s.st.Pos()-len(ids))); err != nil {
+		return err
+	}
 	if lp := e.joins(s); lp != nil && !spans && !s.cached {
 		return e.generateBatched(ctx, lp, s, o, ids, ephemeral, emit)
 	}
