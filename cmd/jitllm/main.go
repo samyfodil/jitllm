@@ -17,7 +17,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"runtime/debug"
 	"runtime/pprof"
 	"sort"
 	"strconv"
@@ -27,6 +26,7 @@ import (
 
 	"github.com/samyfodil/jitllm/engine/sched"
 	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/samyfodil/jitllm/internal/cmd/goheap"
 
 	"os/exec"
 
@@ -401,7 +401,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	if maxmem == 0 {
 		maxmem = sched.MemBudget()
 	}
-	capGoHeap()
+	goheap.Cap()
 	opts := loadOpts(topts, maxmem)
 	if place != nil {
 		opts = append(opts, model.WithPlacement(*place))
@@ -417,7 +417,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	if err == nil && asked == 0 && m.DirectIO() {
 		// Direct reads leave no page-cache shadow copy, so the budget may
 		// claim more than sched.MemBudget's eight tenths. Nine tenths, not all:
-		// the KV cache and the pool's scratch are anonymous, and capGoHeap
+		// the KV cache and the pool's scratch are anonymous, and goheap.Cap
 		// keeps the collector a gigabyte under the same ceiling.
 		//
 		// The raise is also capped by sched.GCBudgetCap: page frames are
@@ -1473,47 +1473,6 @@ func runCmd(args []string) error {
 		return fmt.Errorf("-placement-strict needs -placement")
 	}
 	return run(fs.Arg(0), strings.Join(fs.Args()[1:], " "), *n, *depth, *dev, *layers, *vram, *maxmem, *grow, *tuneSeam, *noFallback, *relocate, sm, *imgPath, topts, cs, *kvCache, *kvCacheMax, *kvBudget, place, specOpts)
-}
-
-// capGoHeap tells Go's collector about the cgroup, which it cannot see.
-// Without it GOGC lets the heap target twice the live page frames, far past
-// memory.high, and the run spends its time in direct reclaim.
-//
-// The headroom covers what the limit charges and the heap does not: goroutine
-// stacks, runtime allocations and device-backend mappings. It is set here, not
-// in a library, because debug.SetMemoryLimit is process-wide.
-func capGoHeap() {
-	lim := sched.MemLimit()
-	// JITLLM_GOMEMLIMIT=0 sets no limit, leaving the collector on GOGC alone:
-	// the control arm for an off-heap measurement, with the frames on the heap.
-	if lim == 0 || os.Getenv("JITLLM_GOMEMLIMIT") == "0" {
-		if v := os.Getenv("JITLLM_GOGC"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil {
-				sched.SetGCPercent(n)
-			}
-		}
-		return
-	}
-	// The same constant sched.MemBudget reserves against, so the budget and
-	// the goal cannot drift apart.
-	if lim <= sched.GCHeadroom {
-		return
-	}
-	debug.SetMemoryLimit(int64(lim - sched.GCHeadroom))
-	// JITLLM_GC_RESERVE is the bytes the weight budget leaves below the
-	// collector's goal: lower it to hold more weights, raise it if
-	// GODEBUG=gctrace=1 shows cycles that free nothing. JITLLM_GOGC is the
-	// ordinary GOGC, applied after the limit so it composes with it.
-	if v := os.Getenv("JITLLM_GC_RESERVE"); v != "" {
-		if n, err := strconv.ParseUint(v, 10, 64); err == nil {
-			sched.SetGCReserve(n)
-		}
-	}
-	if v := os.Getenv("JITLLM_GOGC"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			sched.SetGCPercent(n)
-		}
-	}
 }
 
 // tokenizerOption turns a -tokenizer path into the tok.Option it names, plus the

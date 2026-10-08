@@ -21,6 +21,10 @@ func (s *SessionService) CreateSession(ctx context.Context, req *connect.Request
 		MaxSeq:    int(m.MaxSeq),
 		DeviceIDs: m.DeviceIds,
 		Relocate:  m.RelocateWhileServing,
+
+		KeepOffHost: m.KeepOffHost,
+		PromptCache: m.PromptCache,
+		CacheKey:    m.CacheKey,
 	}
 	if m.MaxDeviceBlocks != nil {
 		o.MaxDeviceBlocks = int(*m.MaxDeviceBlocks)

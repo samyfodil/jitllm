@@ -129,13 +129,14 @@ Every client command takes `-addr` (`host:port`, `:port` or a full URL; default 
 | `-devices SPEC` | CPU only | devices for `-load`, in the [device grammar](/docs/guides/devices/#the-device-grammar) |
 | `-maxmem SIZE` | engine's own | host page budget for `-load`, e.g. `8G` |
 | `-gpu-layers N` | -1 | at most N blocks on a device; -1 is as many as fit |
-| `-sessions N` | 1 | concurrent sessions each device block reserves a KV cache for |
+| `-sessions N` | 1 | concurrent sessions each linear device block reserves a recurrent state for; attention history is paged and reserves nothing |
 | `-max-seq N` | model's context | default KV capacity per session, in positions |
-| `-host-concurrency N` | 1 | sessions that may run on the CPU at once |
-| `-device-concurrency N` | 1 | sessions that may run alone on one device at once; sessions wholly on a device batch instead |
 | `-max-batch N` | 0 | requests of one device model that decode as rows of one step; 0 is the widest step the device runs, 1 turns batching off |
 | `-prompt-chunk N` | 0 | prompt tokens a joining request feeds into one shared step; 0 is one device prefill chunk |
 | `-joint-steps MODE` | `auto` | `auto` times a joint step against the rows one after another and runs the faster; `always` or `never` |
+| `-kv-f16` | engine's own | the KV cache width of every load that names none: `-kv-f16` binary16, `-kv-f16=false` f32 |
+| `-kv-cache DIR` | | where sessions created with `prompt_cache` keep their prompt prefixes; without it such a session is refused |
+| `-kv-cache-max SIZE` | `8G` | what `-kv-cache` may occupy before its least recently used pages go; 0 is unbounded |
 | `-version S` | `dev` | the version `GetServerInfo` reports |
 
 ### run
@@ -167,7 +168,7 @@ Every client command takes `-addr` (`host:port`, `:port` or a full URL; default 
 | Flag | Meaning |
 |---|---|
 | (none) | list sessions; `-model` filters |
-| `-new` | create a session on `-model`, with `-id`, `-devices`, `-gpu-layers`, `-max-seq` and `-gpu-grow` |
+| `-new` | create a session on `-model`, with `-id`, `-devices`, `-gpu-layers`, `-max-seq`, `-gpu-grow`, `-keep-off-host`, `-prompt-cache` and `-cache-key` |
 | `-reset ID` | back to position 0 |
 | `-close ID` | close it |
 | `-queue DEVICE` | the queue waiting on a device |

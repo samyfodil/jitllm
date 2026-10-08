@@ -39,7 +39,7 @@ func gcSummary() {
 
 // offHeapLimit re-derives the collector's memory limit once a model's weight
 // memory is off the heap: the runtime cannot see those bytes and the cgroup
-// can, so they come off the limit capGoHeap set. maxmem is the page budget the
+// can, so they come off the limit goheap.Cap set. maxmem is the page budget the
 // frames will grow to; what is mapped already (the dense region and the frames
 // Open faulted) is added on top, conservatively.
 //
