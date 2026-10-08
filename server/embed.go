@@ -162,8 +162,9 @@ func (e *Engine) resolveModel(name string) (*LoadedModel, error) {
 
 // embedders is a model's idle embedders. An Embedder is one sequence at a time
 // and owns a worker pool (an encoder) or a session (a decoder), so it is built
-// once and reused; the host gate bounds how many run at once, and so how many
-// this list ever holds.
+// once and reused. Nothing bounds how many run at once: each concurrent request
+// takes one (building it when the list is empty), so the list grows to the
+// highest concurrency the model has seen and keeps that many idle.
 type embedders struct {
 	free   []*model.Embedder
 	busy   int

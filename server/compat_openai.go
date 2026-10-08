@@ -40,15 +40,13 @@ type oaToolCall struct {
 }
 
 type oaChatRequest struct {
-	Model       string          `json:"model"`
-	Messages    []oaMessage     `json:"messages"`
-	MaxTokens   *int            `json:"max_tokens"`
-	Temperature *float64        `json:"temperature"`
-	TopP        *float64        `json:"top_p"`
-	Stream      bool            `json:"stream"`
-	Stop        json.RawMessage `json:"stop"`
-	Seed        *int64          `json:"seed"`
-	User        string          `json:"user"`
+	Model     string          `json:"model"`
+	Messages  []oaMessage     `json:"messages"`
+	MaxTokens *int            `json:"max_tokens"`
+	Stream    bool            `json:"stream"`
+	Stop      json.RawMessage `json:"stop"`
+	User      string          `json:"user"`
+	oaSampling
 	// Tools is handed to the model's own chat template as `tools`, bytes
 	// untouched so the schema keeps the key order the client wrote.
 	// tool_choice "none" withholds them; "auto", "required" and a named
@@ -70,16 +68,14 @@ type oaChatRequest struct {
 }
 
 type oaCompletionRequest struct {
-	Model       string          `json:"model"`
-	Prompt      json.RawMessage `json:"prompt"`
-	MaxTokens   *int            `json:"max_tokens"`
-	Temperature *float64        `json:"temperature"`
-	TopP        *float64        `json:"top_p"`
-	Stream      bool            `json:"stream"`
-	Stop        json.RawMessage `json:"stop"`
-	Seed        *int64          `json:"seed"`
-	Echo        bool            `json:"echo"`
-	IgnoreEOS   bool            `json:"ignore_eos"`
+	Model     string          `json:"model"`
+	Prompt    json.RawMessage `json:"prompt"`
+	MaxTokens *int            `json:"max_tokens"`
+	Stream    bool            `json:"stream"`
+	Stop      json.RawMessage `json:"stop"`
+	Echo      bool            `json:"echo"`
+	IgnoreEOS bool            `json:"ignore_eos"`
+	oaSampling
 
 	JitllmSession string `json:"jitllm_session,omitempty"`
 }
@@ -193,6 +189,9 @@ func (e *compat) openAIModels(w http.ResponseWriter, r *http.Request) {
 		Object  string `json:"object"`
 		Created int64  `json:"created"`
 		OwnedBy string `json:"owned_by"`
+		// MaxModelLen is the context a request on this model gets, vLLM's
+		// field; a benchmark harness reads it to size its prompts.
+		MaxModelLen int `json:"max_model_len,omitempty"`
 	}
 	out := struct {
 		Object string  `json:"object"`
@@ -200,13 +199,13 @@ func (e *compat) openAIModels(w http.ResponseWriter, r *http.Request) {
 	}{Object: "list", Data: []entry{}}
 	for _, lm := range e.b.ListLoaded() {
 		out.Data = append(out.Data, entry{
-			ID: lm.ID, Object: "model", Created: lm.LoadedAt.Unix(), OwnedBy: "jitllm",
+			ID: lm.ID, Object: "model", Created: lm.LoadedAt.Unix(), OwnedBy: "jitllm", MaxModelLen: lm.MaxModelLen,
 		})
 		if lm.Name != lm.ID && lm.Name != "" {
 			// The file name is an alias, so a client configured with the model
 			// name rather than the generated id still resolves.
 			out.Data = append(out.Data, entry{
-				ID: lm.Name, Object: "model", Created: lm.LoadedAt.Unix(), OwnedBy: "jitllm",
+				ID: lm.Name, Object: "model", Created: lm.LoadedAt.Unix(), OwnedBy: "jitllm", MaxModelLen: lm.MaxModelLen,
 			})
 		}
 	}
@@ -244,6 +243,11 @@ func (e *compat) openAIChatCompletions(w http.ResponseWriter, r *http.Request) {
 	} else {
 		chat.Tools = t
 	}
+	sampling, err := req.sampler(req.JitllmSession)
+	if err != nil {
+		oaFail(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+		return
+	}
 	maxTok := 0
 	if req.MaxTokens != nil {
 		maxTok = *req.MaxTokens
@@ -254,7 +258,7 @@ func (e *compat) openAIChatCompletions(w http.ResponseWriter, r *http.Request) {
 		Prompt:    Prompt{Kind: PromptChat, Chat: chat},
 		MaxTokens: maxTok,
 		Stop:      oaStop(req.Stop),
-		Sampling:  samplerFrom(req.Temperature, req.TopP, req.Seed),
+		Sampling:  sampling,
 		IgnoreEOS: req.IgnoreEOS,
 	}
 	if err := e.b.BindTarget(&o, req.JitllmSession, req.Model); err != nil {
@@ -274,46 +278,117 @@ func (e *compat) openAICompletions(w http.ResponseWriter, r *http.Request) {
 		oaFail(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
 		return
 	}
-	// `prompt` is `string | []string | []int | [][]int`. The first two are
-	// honoured; a token-id prompt goes through as ids, which this engine can
-	// take directly.
-	var p Prompt
+	sampling, err := req.sampler(req.JitllmSession)
+	if err != nil {
+		oaFail(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+		return
+	}
+	// `prompt` is `string | []string | []int | [][]int`. A token-id prompt goes
+	// through as ids, which this engine can take directly. A list of prompts
+	// is one choice each, run one after another (runCompletions); a streamed
+	// list is refused, since its chunks would interleave choices.
+	var ps []Prompt
 	var s string
 	var ids []int32
+	var many []string
+	var manyIDs [][]int32
 	switch {
 	case json.Unmarshal(req.Prompt, &s) == nil:
-		p = Prompt{Kind: PromptText, Text: s}
+		ps = []Prompt{{Kind: PromptText, Text: s}}
 	case json.Unmarshal(req.Prompt, &ids) == nil:
-		p = Prompt{Kind: PromptIDs, IDs: ids}
-	default:
-		var many []string
-		if err := json.Unmarshal(req.Prompt, &many); err == nil && len(many) > 0 {
-			// Batched prompts would need one choice each and the engine's
-			// batched path has no accelerator arm, so only the first is run
-			// and the response says so by carrying one choice.
-			p = Prompt{Kind: PromptText, Text: many[0]}
-		} else {
-			oaFail(w, http.StatusBadRequest, "prompt must be a string, an array of strings, or token ids", "invalid_request_error")
-			return
+		ps = []Prompt{{Kind: PromptIDs, IDs: ids}}
+	case json.Unmarshal(req.Prompt, &many) == nil && len(many) > 0:
+		for _, t := range many {
+			ps = append(ps, Prompt{Kind: PromptText, Text: t})
 		}
+	case json.Unmarshal(req.Prompt, &manyIDs) == nil && len(manyIDs) > 0:
+		for _, t := range manyIDs {
+			ps = append(ps, Prompt{Kind: PromptIDs, IDs: t})
+		}
+	default:
+		oaFail(w, http.StatusBadRequest, "prompt must be a string, an array of strings, or token ids", "invalid_request_error")
+		return
+	}
+	if len(ps) > 1 && req.Stream {
+		oaFail(w, http.StatusBadRequest, "a list of prompts cannot be streamed; send one request per prompt", "invalid_request_error")
+		return
 	}
 	maxTok := 0
 	if req.MaxTokens != nil {
 		maxTok = *req.MaxTokens
 	}
 	o := GenerateOptions{
-		Prompt:    p,
+		Prompt:    ps[0],
 		MaxTokens: maxTok,
 		Stop:      oaStop(req.Stop),
 		Echo:      req.Echo,
-		Sampling:  samplerFrom(req.Temperature, req.TopP, req.Seed),
+		Sampling:  sampling,
 		IgnoreEOS: req.IgnoreEOS,
 	}
 	if err := e.b.BindTarget(&o, req.JitllmSession, req.Model); err != nil {
 		oaFail(w, http.StatusNotFound, err.Error(), "invalid_request_error")
 		return
 	}
+	if len(ps) > 1 {
+		e.runCompletions(w, r, o, ps, req.Model)
+		return
+	}
 	e.runOpenAI(w, r, o, req.Model, req.Stream, false)
+}
+
+// runCompletions answers a list of prompts with one choice each, in order. The
+// prompts run one after another, each with a copy of the sampler, so a seeded
+// request draws the same text for a prompt wherever it sits in the list.
+func (e *compat) runCompletions(w http.ResponseWriter, r *http.Request, o GenerateOptions, ps []Prompt, modelName string) {
+	type choice struct {
+		Index        int       `json:"index"`
+		Text         string    `json:"text"`
+		FinishReason *string   `json:"finish_reason"`
+		Logprobs     *struct{} `json:"logprobs"`
+	}
+	var choices []choice
+	usage := &oaUsage{}
+	for i, p := range ps {
+		oi := o
+		oi.Prompt = p
+		if o.Sampling != nil {
+			sc := *o.Sampling
+			oi.Sampling = &sc
+		}
+		var text strings.Builder
+		var fin *Finished
+		err := e.b.Generate(r.Context(), oi, func(ev Event) error {
+			switch ev.Kind {
+			case EventToken:
+				text.WriteString(ev.Token.Text)
+			case EventFinished:
+				fin = ev.Finished
+			}
+			return nil
+		})
+		if err != nil {
+			oaFailErr(w, err)
+			return
+		}
+		if fin == nil {
+			oaFail(w, http.StatusInternalServerError,
+				"the generate finished without a finished event", "server_error")
+			return
+		}
+		reason := oaFinish(fin.Reason)
+		choices = append(choices, choice{Index: i, Text: text.String(), FinishReason: &reason})
+		usage.PromptTokens += fin.PromptTokens
+		usage.CompletionTokens += fin.CompletionTokens
+	}
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	writeJSON(w, http.StatusOK, struct {
+		ID      string   `json:"id"`
+		Object  string   `json:"object"`
+		Created int64    `json:"created"`
+		Model   string   `json:"model"`
+		Choices []choice `json:"choices"`
+		Usage   *oaUsage `json:"usage"`
+	}{"cmpl-" + e.b.NextID("oa"), "text_completion", time.Now().Unix(), modelName, choices, usage})
 }
 
 // runOpenAI is the one place a generate becomes an OpenAI response, streaming
@@ -548,9 +623,11 @@ func oaFinish(r FinishReason) string {
 		return "length"
 	case FinishStop, FinishEOS:
 		return "stop"
-	case FinishCancelled:
-		return "cancelled"
 	}
+	// A cancelled generate has no value of its own in the API's vocabulary
+	// (stop, length, content_filter, tool_calls), and the client that cancelled
+	// it has gone and reads none; "stop" is the standard value a proxy or log
+	// that does read it can parse.
 	return "stop"
 }
 
@@ -572,23 +649,6 @@ func (e *Engine) BindTarget(o *GenerateOptions, sessionID, modelName string) err
 	}
 	o.ModelID = lm.id
 	return nil
-}
-
-func samplerFrom(temp, topP *float64, seed *int64) *model.Sampler {
-	if temp == nil && topP == nil && seed == nil {
-		return nil
-	}
-	s := &model.Sampler{}
-	if temp != nil {
-		s.Temp = *temp
-	}
-	if topP != nil {
-		s.TopP = *topP
-	}
-	if seed != nil {
-		s.Seed = *seed
-	}
-	return s
 }
 
 func oaFail(w http.ResponseWriter, status int, msg, typ string) {
