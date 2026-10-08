@@ -472,6 +472,17 @@ type State struct {
 	stepTok    []int32
 	stepLogits []float32
 	stepRes    [][]float32
+	// A step across host sessions (stepHost) this State leads: each row's
+	// session, whether the row is its session's furthest (the one that
+	// faults its attention window in), and each row's slot, always 0.
+	rowOwn []*State
+	rowWin []bool
+	rowSeq []int
+	// ra and raRun are a ragged step's attention fan-out (rowsHost).
+	ra    rowsAttn
+	raRun func(lo, hi int)
+	// rowCausal is a ragged step's rows in position order (rowsHost).
+	rowCausal []int
 	// onDev[li] says block li runs on a device: the truth for execution, where
 	// gpuLayers is the truth for the seam. Placement is a set and migration a
 	// boundary: gpuLayers is the contiguous device prefix (what -gpu-layers

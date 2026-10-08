@@ -278,10 +278,14 @@ func (p *runsPlan) together(t *testing.T, m *Model, g *tier.GPU) ([][]float32, i
 }
 
 // placed is a State of maxSeq positions with every block and the head on g,
-// or the gate skips naming the card.
+// or the gate skips naming the card; with g nil, a State on the host.
 func (p *runsPlan) placed(t *testing.T, m *Model, g *tier.GPU, maxSeq int) *State {
 	t.Helper()
 	st := m.NewState(maxSeq)
+	// No tier is the host arm (hoststep_test.go): the State stays home.
+	if g == nil {
+		return st
+	}
 	if err := st.SetDevice(g); err != nil {
 		t.Fatal(err)
 	}

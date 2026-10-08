@@ -1190,6 +1190,9 @@ type Model struct {
 	expReads int64
 	expBytes int64
 	expCalls int64
+	// hostStepRows is the rows StepRuns has run as host steps across
+	// sessions (stepHost); HostStepRows reports it.
+	hostStepRows int64
 
 	embd tensor
 	// hardEmbd is Gemma 3n's hard vision tokens' rows (mobilenet.go), nil

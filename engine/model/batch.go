@@ -48,7 +48,7 @@ func (s *State) ForwardBatch(tokens []int32) ([]float32, error) {
 // Each sequence's position moves on by the rows it took.
 func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float32, error) {
 	defer s.m.enterPager()()
-	m, c := s.m, s.c
+	c := s.c
 	if !s.batched {
 		return nil, errBatch{}
 	}
@@ -88,6 +88,42 @@ func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float
 	if s.devCount() > 0 && !rowsDev {
 		return nil, errBatchDevice{}
 	}
+	lg, err := s.rowsHost(tokens, seq, pos, nlogit, s.nseq)
+	if err != nil {
+		return nil, err
+	}
+	s.advanceSeqs(took)
+	// Seal and trim against the slowest row, not s.pos: a page holds every
+	// row's slots, so a page the furthest row has left is one a lagging row may
+	// still be writing. (Positions advance in advanceSeqs, not via advance().)
+	if low := s.lowPos(); low > 0 {
+		s.kv.seal(low)
+		s.kv.trim(low)
+	}
+	// A page the store could not return fails the request; see kvFault.
+	if err := s.kvCheck(); err != nil {
+		return nil, err
+	}
+	return lg, nil
+}
+
+// rowOwner is the State whose history row i of a ragged step reads and
+// writes, and the slot there: the batch's own slot seq[i], or in a step across
+// sessions (stepHost) the row's own session, whose one sequence is slot 0.
+func (s *State) rowOwner(i int, seq []int) (*State, int) {
+	if len(s.rowOwn) > 0 {
+		return s.rowOwn[i], 0
+	}
+	return s, seq[i]
+}
+
+// rowsHost runs a ragged step's blocks and head and returns the wanted rows'
+// logits; the caller moves the positions on. seqs is how many sequences the
+// rows hold: a step of one row per sequence fans attention out over (row,
+// head) units.
+func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]float32, error) {
+	m, c := s.m, s.c
+	n := len(tokens)
 	// The ragged head applies the final softcap itself, as decode's head does.
 	// AltUp's head reads the streams' mean, which the host takes (altup.go).
 	headOnDev := s.devCount() > 0 && s.headWithLastBlock() && !c.streamHead()
@@ -107,12 +143,17 @@ func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float
 	// head) would be rows x heads x context, a quarter of a GiB for 512 rows of
 	// 32 heads at a 4096 context.
 	unitHeads := 1
-	if n > s.nseq {
+	if n > seqs {
 		unitHeads = c.NHead
 	}
 	units := n * c.NHead / unitHeads
-	if len(s.bathf) < units*s.attStride {
-		s.bathf = make([]float32, units*s.attStride)
+	// Across sessions each row's scores span its own session's context.
+	astride := s.attStride
+	for _, o := range s.rowOwn {
+		astride = max(astride, o.attStride)
+	}
+	if len(s.bathf) < units*astride {
+		s.bathf = make([]float32, units*astride)
 	}
 
 	// c.AttnScale rather than 1/sqrt(hd): they differ under YaRN (DeepSeek).
@@ -162,7 +203,8 @@ func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float
 	// At each row's rotary position, which an image earlier in its sequence
 	// has moved off its cache position (mrope.go).
 	for i := 0; i < n; i++ {
-		s.ropeRow(i, s.ropeOf(seq[i], pos[i]))
+		o, slot := s.rowOwner(i, seq)
+		s.ropeRow(i, o.ropeOf(slot, pos[i]))
 	}
 
 	var devSlot []int
@@ -174,7 +216,8 @@ func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float
 	// step (its logit row leads), and its summary must see them as written.
 	var causal []int
 	if s.recurrent() {
-		causal = make([]int, n)
+		causal = slices.Grow(s.rowCausal[:0], n)[:n]
+		s.rowCausal = causal
 		for i := range causal {
 			causal[i] = i
 		}
@@ -260,8 +303,9 @@ func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float
 				if kind.Attends() {
 					out = s.bhf[r*c.NEmbd : (r+1)*c.NEmbd]
 				}
-				s.jit.NewInput()
-				if err := s.linearAttn(li, l, seq[r], h, out); err != nil {
+				o, slot := s.rowOwner(r, seq)
+				o.jit.NewInput()
+				if err := o.linearAttn(li, l, slot, h, out); err != nil {
 					return nil, err
 				}
 			}
@@ -284,8 +328,9 @@ func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float
 				// A KV-sharing block: q alone, then its source's history.
 				if c.KVShared(li) {
 					for i := 0; i < n; i++ {
-						s.attnPrep(l, s.bq[i*qDim:(i+1)*qDim], nil, nil,
-							s.ropeTable(li, cs, csSWA, i), li, seq[i], pos[i])
+						o, slot := s.rowOwner(i, seq)
+						o.attnPrep(l, s.bq[i*qDim:(i+1)*qDim], nil, nil,
+							s.ropeTable(li, cs, csSWA, i), li, slot, pos[i])
 					}
 					goto attend
 				}
@@ -316,8 +361,9 @@ func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float
 					}
 					// Each row has its own position, table slice and cache slot.
 					// Every row's K and V land here, before any row attends.
-					s.attnPrep(l, s.bq[i*qDim:(i+1)*qDim], k, v,
-						s.ropeTable(li, cs, csSWA, i), li, seq[i], pos[i])
+					o, slot := s.rowOwner(i, seq)
+					o.attnPrep(l, s.bq[i*qDim:(i+1)*qDim], k, v,
+						s.ropeTable(li, cs, csSWA, i), li, slot, pos[i])
 				}
 			}
 		attend:
@@ -327,7 +373,7 @@ func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float
 			// as the context grows. A step with a chunk has rows enough.
 			t0 = s.tick()
 			bq, bxb, bqf, bxbf := s.bq, s.bxb, s.bqf, s.bxbf
-			bathf, fast, astride := s.bathf, s.attnAt(li), s.attStride
+			bathf := s.bathf
 			hd, qDim, gqa := c.HeadDimAt(li), c.QDimAt(li), c.GQAAt(li)
 			// MLA reads a wider query than it writes, and every head reads the
 			// same cached row: qw is the whole row, ow its latent prefix, and
@@ -345,7 +391,15 @@ func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float
 				maxNp = max(maxNp, pos[i]+1)
 			}
 			kvli := c.KVSource(li)
-			s.kvEnsureWindow(kvli, 0, maxNp)
+			if len(s.rowOwn) == 0 {
+				s.kvEnsureWindow(kvli, 0, maxNp)
+			} else {
+				for i, o := range s.rowOwn {
+					if s.rowWin[i] {
+						o.kvEnsureWindow(kvli, 0, pos[i]+1)
+					}
+				}
+			}
 			masks, mstride := s.idxMasks, 0
 			if c.Indexer() {
 				s.idxRows(kvli, n, func(i int) int { return seq[i] }, func(i int) int { return pos[i] + 1 }, masks)
@@ -354,41 +408,18 @@ func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float
 				masks, mstride = s.msaMasks, astride
 				s.msaRows(kvli, n, func(i int) int { return seq[i] }, func(i int) int { return pos[i] + 1 }, masks)
 			}
-			s.jit.Parallel(units, 1, func(lo, hi int) {
-				for idx := lo * unitHeads; idx < hi*unitHeads; idx++ {
-					i, hh := idx/nh, idx%nh
-					// The row's own length, not the batch's: past pos[i] the
-					// slot holds stale or unwritten keys -- or, for a prompt
-					// chunk, the keys of its own later rows -- and this bound is
-					// what keeps them unreachable (which is why Retire copies
-					// nothing). The sliding window applies here as in decode.
-					w0, np := c.AttnWindow(li, pos[i])
-					qh := qsrc[i*nh*qw+hh*qw : i*nh*qw+(hh+1)*qw]
-					if !mla {
-						copy(qh, bq[i*qDim+hh*hd:])
-					}
-					kvh := hh / gqaN
-					// The unit's scores row: a unit's heads run in turn on it.
-					u := idx / unitHeads
-					af := bathf[u*astride : u*astride+np]
-					s.kvScores(fast, kvli, seq[i], kvh, qh, af, w0, np)
-					s.scale(af, float32(scale*c.AttnTemp(li, pos[i])))
-					softcap(af, c.AttnSoftcap)
-					if masks != nil && masks[i] != nil {
-						s.idxApply(af, masks[i][kvh*mstride:], w0)
-					}
-					s.softmaxSink(af, l.sinks, hh)
-					out := odst[i*nh*ow+hh*ow : i*nh*ow+(hh+1)*ow]
-					s.kvAcc(fast, kvli, seq[i], kvh, out, af, w0, np)
-					// MLA's result stays in bmlaAcc, where the un-absorb
-					// reads it; bxb is the wrong width for it.
-					if !mla {
-						for j, v := range out {
-							bxb[i*qDim+hh*hd+j] = v
-						}
-					}
-				}
-			})
+			// The fan-out's arguments are State fields and its function a
+			// method value made once: a closure over these locals escapes,
+			// an allocation per block per step.
+			s.ra = rowsAttn{s: s, l: l, li: li, kvli: kvli, unitHeads: unitHeads, nh: nh,
+				seq: seq, pos: pos, qsrc: qsrc, odst: odst, bq: bq, bxb: bxb, bathf: bathf,
+				astride: astride, qw: qw, ow: ow, hd: hd, qDim: qDim, gqaN: gqaN, mla: mla,
+				scale: scale, masks: masks, mstride: mstride}
+			if s.raRun == nil {
+				s.raRun = s.ra.run
+			}
+			s.jit.Parallel(units, 1, s.raRun)
+			s.ra = rowsAttn{}
 			s.tock(opAttn, t0)
 			s.jit.NewInput()
 
@@ -544,18 +575,6 @@ func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float
 	} else {
 		s.finishLogits(s.blogits[:nlogit*c.NVocab])
 	}
-	s.advanceSeqs(took)
-	// Seal and trim against the slowest row, not s.pos: a page holds every
-	// row's slots, so a page the furthest row has left is one a lagging row may
-	// still be writing. (Positions advance in advanceSeqs, not via advance().)
-	if low := s.lowPos(); low > 0 {
-		s.kv.seal(low)
-		s.kv.trim(low)
-	}
-	// A page the store could not return fails the request; see kvFault.
-	if err := s.kvCheck(); err != nil {
-		return nil, err
-	}
 	return s.blogits[:nlogit*c.NVocab], nil
 }
 
@@ -588,4 +607,61 @@ type errBatchDevice struct{}
 func (errBatchDevice) Error() string {
 	return "model: a batch runs on a device only with every block and the head on one device " +
 		"that runs ragged rows; this placement splits the model, and a split device holds one sequence's KV cache"
+}
+
+// rowsAttn is a ragged step's attention fan-out over (row, head) units, one
+// block's: what rowsHost hands the pool.
+type rowsAttn struct {
+	s                               *State
+	l                               *layer
+	li, kvli, unitHeads, nh         int
+	seq, pos                        []int
+	qsrc, odst, bq, bxb, bathf      []float32
+	astride, qw, ow, hd, qDim, gqaN int
+	mla                             bool
+	scale                           float64
+	masks                           [][]float32
+	mstride                         int
+}
+
+func (j *rowsAttn) run(lo, hi int) {
+	s, c, l, li, kvli, unitHeads, nh := j.s, j.s.c, j.l, j.li, j.kvli, j.unitHeads, j.nh
+	seq, pos, qsrc, odst, bq, bxb, bathf := j.seq, j.pos, j.qsrc, j.odst, j.bq, j.bxb, j.bathf
+	astride, qw, ow, hd, qDim, gqaN, mla := j.astride, j.qw, j.ow, j.hd, j.qDim, j.gqaN, j.mla
+	scale, masks, mstride := j.scale, j.masks, j.mstride
+	for idx := lo * unitHeads; idx < hi*unitHeads; idx++ {
+		i, hh := idx/nh, idx%nh
+		// The row's own length, not the batch's: past pos[i] the
+		// slot holds stale or unwritten keys -- or, for a prompt
+		// chunk, the keys of its own later rows -- and this bound is
+		// what keeps them unreachable (which is why Retire copies
+		// nothing). The sliding window applies here as in decode.
+		w0, np := c.AttnWindow(li, pos[i])
+		qh := qsrc[i*nh*qw+hh*qw : i*nh*qw+(hh+1)*qw]
+		if !mla {
+			copy(qh, bq[i*qDim+hh*hd:])
+		}
+		kvh := hh / gqaN
+		// The unit's scores row: a unit's heads run in turn on it.
+		u := idx / unitHeads
+		af := bathf[u*astride : u*astride+np]
+		o, slot := s.rowOwner(i, seq)
+		fast := o.attnAt(li)
+		o.kvScores(fast, kvli, slot, kvh, qh, af, w0, np)
+		s.scale(af, float32(scale*c.AttnTemp(li, pos[i])))
+		softcap(af, c.AttnSoftcap)
+		if masks != nil && masks[i] != nil {
+			s.idxApply(af, masks[i][kvh*mstride:], w0)
+		}
+		s.softmaxSink(af, l.sinks, hh)
+		out := odst[i*nh*ow+hh*ow : i*nh*ow+(hh+1)*ow]
+		o.kvAcc(fast, kvli, slot, kvh, out, af, w0, np)
+		// MLA's result stays in bmlaAcc, where the un-absorb
+		// reads it; bxb is the wrong width for it.
+		if !mla {
+			for j, v := range out {
+				bxb[i*qDim+hh*hd+j] = v
+			}
+		}
+	}
 }
