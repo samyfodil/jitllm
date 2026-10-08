@@ -192,6 +192,8 @@ func (s *PlacementService) TuneSeam(ctx context.Context, req *connect.Request[v1
 	}
 	sess.mu.Lock()
 	sess.st.SetSeamTuning(true)
+	m := req.Msg
+	sess.st.SetSeamSchedule(int(m.WarmupTokens), int(m.TokensPerRun), int(m.Rounds))
 	sess.refresh()
 	sess.mu.Unlock()
 

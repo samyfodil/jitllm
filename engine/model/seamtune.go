@@ -139,6 +139,26 @@ func (s *State) SetSeamTuning(on bool) {
 	}
 }
 
+// SetSeamSchedule sets this session's seam tuner's ABBA shape, as
+// WithSeamTuneSchedule does for every session of the model; a non-positive
+// value keeps what the tuner has. It shapes the tuner SetSeamTuning armed and
+// does nothing to the stream trial, whose schedule is the load's.
+func (s *State) SetSeamSchedule(warmup, perRun, rounds int) {
+	t := s.seam
+	if t == nil || t.trial {
+		return
+	}
+	if warmup > 0 {
+		t.warmup = warmup
+	}
+	if perRun > 0 {
+		t.perRun = perRun
+	}
+	if rounds > 0 {
+		t.rounds = rounds
+	}
+}
+
 // SeamTuned reports the placement the tuner settled on, and whether it settled.
 func (s *State) SeamTuned() (blocks int, settled bool) {
 	if s.seam == nil {
