@@ -114,14 +114,17 @@ func TestOnlyTheConverterReachesGGUF(t *testing.T) {
 	// jitllmd reach gguf through the converter.
 	const daemonConverts = "ModelService.Convert streams a conversion, so the daemon runs the converter"
 	allowed := map[string]string{
-		modPath + "/convert":            "the converter: GGUF in, .jlm out, and the only package that knows two formats",
-		modPath + "/cmd/jitllm":         "`jitllm info` and `jitllm tokenize` inspect a GGUF; neither runs a model",
-		modPath + "/ui":                 uiConverts,
-		modPath + "/ui/app":             uiConverts,
-		modPath + "/ui/engine":          uiConverts,
-		modPath + "/ui/screen":          uiConverts,
-		modPath + "/ui/cmd/shots":       uiConverts,
-		modPath + "/ui/mock":            uiConverts,
+		modPath + "/convert":      "the converter: GGUF in, .jlm out, and the only package that knows two formats",
+		modPath + "/cmd/jitllm":   "`jitllm info` and `jitllm tokenize` inspect a GGUF; neither runs a model",
+		modPath + "/ui":           uiConverts,
+		modPath + "/ui/app":       uiConverts,
+		modPath + "/ui/engine":    uiConverts,
+		modPath + "/ui/screen":    uiConverts,
+		modPath + "/ui/cmd/shots": uiConverts,
+		modPath + "/ui/mock":      uiConverts,
+		// The packager draws the window's icon from ui/app, which links the
+		// app whole; it converts nothing itself.
+		modPath + "/ui/cmd/pack":        uiConverts,
 		modPath + "/ui/stage":           uiConverts,
 		modPath + "/common/catalog":     frontConverts,
 		modPath + "/common/config":      frontConverts,

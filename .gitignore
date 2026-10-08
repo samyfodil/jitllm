@@ -67,3 +67,8 @@ local-*
 
 # goreleaser --snapshot output
 /dist/
+
+# The desktop app's packaging output (ui/cmd/pack): the Windows resource
+# object the linker picks up, and the macOS bundles.
+/ui/*.syso
+/ui/dist-app/

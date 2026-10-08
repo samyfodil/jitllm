@@ -123,10 +123,14 @@ func markBands(dark bool) [5]widget.Color {
 }
 
 // Icon is the window icon: the website's favicon, the "j" on its dark square.
-func Icon() image.Image {
+func Icon() image.Image { return IconAt(184) }
+
+// IconAt is the same mark drawn size pixels square, for the icon files a
+// package carries (cmd/pack): the Windows resource and the macOS .icns.
+func IconAt(size int) image.Image {
 	var bands [5]color.Color
 	for i, h := range darkMark {
 		bands[i] = color.RGBA{R: uint8(h >> 16), G: uint8(h >> 8), B: uint8(h), A: 0xFF}
 	}
-	return widgets.LogoIcon(184, color.RGBA{R: 0x0E, G: 0x0E, B: 0x14, A: 0xFF}, bands)
+	return widgets.LogoIcon(size, color.RGBA{R: 0x0E, G: 0x0E, B: 0x14, A: 0xFF}, bands)
 }
