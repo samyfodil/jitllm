@@ -152,7 +152,14 @@ func EmitSoftcapSSE() ([]byte, error) {
 // copies, R11 cursor. XMM7..XMM15 are exp's constants (XMM8 = 1.0);
 // XMM3/XMM4 the maximum's halves, then XMM3 the maximum and XMM4/XMM5 the
 // sum's halves, then XMM6 = 1/sum; XMM0..XMM2 are the body's.
-func EmitSoftmaxSSE() ([]byte, error) {
+func EmitSoftmaxSSE() ([]byte, error) { return emitSoftmaxSSE(false) }
+
+// EmitLogSoftmaxSSE is EmitLogSoftmax for the SSE tier: pass 2 sums without
+// storing, ln(sum) is emitLnSum's sequence without FMA, and pass 3 subtracts
+// max + ln(sum).
+func EmitLogSoftmaxSSE() ([]byte, error) { return emitSoftmaxSSE(true) }
+
+func emitSoftmaxSSE(log bool) ([]byte, error) {
 	var a Buf
 	a.DeclareISA(ISATierSSE)
 	a.MOVLoad(RCX, At(RDI, 0))  // Out -> the row, read and written in place
@@ -194,17 +201,36 @@ func EmitSoftmaxSSE() ([]byte, error) {
 		a.MOVUPSLoad(XMM0, At(R11, off))
 		a.SUBPS(XMM0, XMM0, XMM3)
 		emitExpSSE(&a, XMM0, XMM1, XMM2)
-		a.MOVUPSStore(At(R11, off), XMM0)
+		if !log {
+			a.MOVUPSStore(At(R11, off), XMM0)
+		}
 		s := half(off, XMM4, XMM5)
 		a.ADDPS(s, s, XMM0)
 	}, func() {
 		a.MOVSSLoad(XMM0, At(R11, 0))
 		a.SUBPS(XMM0, XMM0, XMM3)
 		emitExpSSE(&a, XMM0, XMM1, XMM2)
-		a.MOVSSStore(At(R11, 0), XMM0)
+		if !log {
+			a.MOVSSStore(At(R11, 0), XMM0)
+		}
 		a.ADDSS(XMM4, XMM4, XMM0) // lane 0 only: lanes 1..3 held exp(-max)
 	})
 	hsum8SSE(&a, XMM4, XMM5) // XMM4 = the sum, in every lane
+
+	if log {
+		emitLnSumSSE(&a)
+		pass(func(off int32) {
+			a.MOVUPSLoad(XMM0, At(R11, off))
+			a.SUBPS(XMM0, XMM0, XMM3)
+			a.MOVUPSStore(At(R11, off), XMM0)
+		}, func() {
+			a.MOVSSLoad(XMM0, At(R11, 0))
+			a.SUBPS(XMM0, XMM0, XMM3)
+			a.MOVSSStore(At(R11, 0), XMM0)
+		})
+		a.RET()
+		return a.Bytes(), nil
+	}
 
 	// ---- pass 3: multiply by 1/sum ----
 	a.DIVPS(XMM6, XMM8, XMM4) // 1/sum, XMM8 being exp's 1.0
@@ -442,4 +468,38 @@ func emitActBodySSE(a *Buf, k ActKind, mul bool, ld func(Reg, Reg), st func(Reg,
 		a.MULPS(XMM0, XMM0, XMM4)
 	}
 	st(RCX, XMM0)
+}
+
+// emitLnSumSSE is emitLnSum without FMA: XMM3 += ln(XMM4), every lane, XMM7
+// the exponent bias and XMM8 1.0 (loadExpConstsSSE). Clobbers XMM0..XMM2,
+// XMM5, XMM6.
+func emitLnSumSSE(a *Buf) {
+	a.PSRLD(XMM0, XMM4, 23)
+	a.PSUBD(XMM0, XMM0, XMM7)
+	a.CVTDQ2PS(XMM0, XMM0)         // e
+	bcastSS(a, XMM1, At(RBX, 172)) // the mantissa mask
+	a.PAND(XMM1, XMM1, XMM4)
+	a.POR(XMM1, XMM1, XMM8)   // m
+	a.SUBPS(XMM1, XMM1, XMM8) // u
+	bcastSS(a, XMM2, At(RBX, 80))
+	a.ADDPS(XMM2, XMM2, XMM1) // 2 + u
+	a.MOVAPS(XMM5, XMM1)
+	a.DIVPS(XMM5, XMM5, XMM2) // s
+	a.MOVAPS(XMM1, XMM5)
+	a.MULPS(XMM1, XMM1, XMM5) // s^2
+	bcastSS(a, XMM6, At(RBX, 84))
+	for _, off := range []int32{88, 92, 96} {
+		a.MULPS(XMM6, XMM6, XMM1)
+		bcastSS(a, XMM2, At(RBX, off))
+		a.ADDPS(XMM6, XMM6, XMM2)
+	}
+	a.MULPS(XMM6, XMM6, XMM1)
+	a.ADDPS(XMM6, XMM6, XMM8)
+	a.MULPS(XMM6, XMM6, XMM5)
+	bcastSS(a, XMM2, At(RBX, 80))
+	a.MULPS(XMM6, XMM6, XMM2) // ln(m)
+	bcastSS(a, XMM2, At(RBX, 176))
+	a.MULPS(XMM0, XMM0, XMM2)
+	a.ADDPS(XMM0, XMM0, XMM6) // e*ln2 + ln(m)
+	a.ADDPS(XMM3, XMM3, XMM0)
 }
