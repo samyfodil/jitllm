@@ -42,6 +42,9 @@ func TestGEMMTileSweep(t *testing.T) {
 		win = 256
 	}
 	t.Logf("format %v, activation window %d", qt, win)
+	if ggufDeclined(t, qt) {
+		return
+	}
 	// The shape is a knob too: a model's projections differ in k and rows, and
 	// the tuner keys on rows because the tile that fits one does not fit the
 	// other.

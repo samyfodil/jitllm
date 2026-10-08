@@ -39,11 +39,7 @@ func TestAttnKernels(t *testing.T) {
 		}
 
 		// scores
-		code, err := EmitAttnScores(shape.hd, shape.kvStride, false)
-		if err != nil {
-			t.Fatal(err)
-		}
-		kern := mustMap(t, code)
+		kern := onHost(t)(hostTable().AttnScores(shape.hd, shape.kvStride, false))
 		got := sentinelRow(shape.npos)
 		args := Args{Out: &got[0], W: (*byte)(nil), Rows: int64(shape.npos), Q32: &q[0]}
 		args.W = f32bytes(kv)
@@ -70,14 +66,7 @@ func TestAttnKernels(t *testing.T) {
 		}
 
 		// weighted accumulation
-		code, err = EmitAttnAcc(shape.hd, shape.kvStride, false)
-		if err != nil {
-			t.Fatal(err)
-		}
-		kern, err = Map(code)
-		if err != nil {
-			t.Fatal(err)
-		}
+		kern = onHost(t)(hostTable().AttnAcc(shape.hd, shape.kvStride, false))
 		out := sentinelRow(shape.hd)
 		args = Args{Out: &out[0], W: f32bytes(kv), AScale: &att[0], Rows: int64(shape.npos)}
 		kern.Call(&args)
@@ -98,7 +87,28 @@ func TestAttnKernels(t *testing.T) {
 			sse += d * d
 			sy2 += want * want
 		}
-		if nmse := sse / sy2; nmse > 1e-12 || math.IsNaN(nmse) {
+		accBound := 1e-12
+		if HostTier() == TierSSE {
+			// No FMA on this tier: each position is out + float32(v*w), a
+			// product rounded before the add, and the kernel is held to that
+			// to the bit (attnAxpyModelSSE's arithmetic) before the float64
+			// bound. At hd=1 the NMSE is one element's relative error, nothing
+			// averages it, and a cancelling sum on these inputs reaches 1.3e-12.
+			model := make([]float32, shape.hd)
+			for tt := 0; tt < shape.npos; tt++ {
+				for i := range model {
+					model[i] = model[i] + float32(kv[tt*shape.kvStride+i]*att[tt])
+				}
+			}
+			for i := range model {
+				if math.Float32bits(out[i]) != math.Float32bits(model[i]) {
+					t.Fatalf("acc hd=%d stride=%d npos=%d: dimension %d is %v, the unfused accumulate gives %v",
+						shape.hd, shape.kvStride, shape.npos, i, out[i], model[i])
+				}
+			}
+			accBound = 1e-10
+		}
+		if nmse := sse / sy2; nmse > accBound || math.IsNaN(nmse) {
 			t.Errorf("acc hd=%d stride=%d npos=%d: NMSE %.3e", shape.hd, shape.kvStride, shape.npos, nmse)
 		}
 	}

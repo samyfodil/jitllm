@@ -44,6 +44,8 @@ func TestArgsLayout(t *testing.T) {
 // argument passing, a load, a store and the return path.
 func TestExecuteScalar(t *testing.T) {
 	var a Buf
+	// Scalar moves only: declared at the SSE2 floor, every x86-64 host runs it.
+	a.DeclareISA(ISASSE2)
 	a.MOVLoad(RAX, At(RDI, 32)) // args.Rows
 	a.MOVLoad(RCX, At(RDI, 56)) // args.Scr
 	a.MOVStore(At(RCX, 0), RAX)
@@ -172,7 +174,13 @@ func TestMapRejects(t *testing.T) {
 	if _, err := Map(nil); err == nil {
 		t.Error("Map accepted empty code")
 	}
-	c := mustMap(t, []byte{0xC3}) // ret
+	var ret Buf
+	ret.DeclareISA(ISASSE2) // a bare ret runs on every x86-64 host
+	ret.RET()
+	c, err := Map(ret.Bytes())
+	if err != nil {
+		t.Fatalf("Map: %v", err)
+	}
 	if err := c.Close(); err != nil {
 		t.Fatal(err)
 	}

@@ -18,6 +18,9 @@ func TestPackWidthSweep(t *testing.T) {
 	if testing.Short() {
 		t.Skip("allocates 128 MB")
 	}
+	if ggufDeclined(t, quant.Q8_0) || ggufDeclined(t, quant.Q4_0) {
+		return
+	}
 	const k = 2048
 	nb := k / 32
 	for _, wt := range []quant.Type{quant.Q8_0, quant.Q4_0} {

@@ -59,11 +59,7 @@ func ropeInput(hd, heads int) []float32 {
 
 func ropeRun(t *testing.T, hd, nrot int, neox bool, heads int) []float32 {
 	t.Helper()
-	b, err := EmitRoPE(hd, nrot, neox)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c := mustMap(t, b)
+	c := onHost(t)(hostTable().RoPE(hd, nrot, neox))
 	defer c.Close()
 	x := ropeInput(hd, heads)
 	cs := ropeTable(nrot)

@@ -35,7 +35,7 @@ func TestAttnPairedIsBitIdentical(t *testing.T) {
 		w0, w1 := f32(shape.npos), f32(shape.npos)
 
 		// --- scores: two single-head calls, then one paired call ---
-		single := mustMap(t, emitOrFail(t, func() ([]byte, error) { return EmitAttnScores(shape.hd, shape.kvStride, false) }))
+		single := onHost(t)(hostTable().AttnScores(shape.hd, shape.kvStride, false))
 		want0, want1 := make([]float32, shape.npos), make([]float32, shape.npos)
 		a0 := Args{Out: &want0[0], W: f32bytes(kv), Rows: int64(shape.npos), Q32: &q0[0]}
 		single.Call(&a0)
@@ -43,7 +43,7 @@ func TestAttnPairedIsBitIdentical(t *testing.T) {
 		single.Call(&a1)
 		single.Close()
 
-		paired, err := Map(emitOrFail(t, func() ([]byte, error) { return EmitAttnScores2(shape.hd, shape.kvStride, false) }))
+		paired, err := Map(emitOrFail(t, func() ([]byte, error) { return hostTable().AttnScores2(shape.hd, shape.kvStride, false) }))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -56,7 +56,7 @@ func TestAttnPairedIsBitIdentical(t *testing.T) {
 		diffBits(t, "scores head1", shape.hd, shape.npos, want1, got1)
 
 		// --- accumulate ---
-		singleA, err := Map(emitOrFail(t, func() ([]byte, error) { return EmitAttnAcc(shape.hd, shape.kvStride, false) }))
+		singleA, err := Map(emitOrFail(t, func() ([]byte, error) { return hostTable().AttnAcc(shape.hd, shape.kvStride, false) }))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -67,7 +67,7 @@ func TestAttnPairedIsBitIdentical(t *testing.T) {
 		singleA.Call(&b1)
 		singleA.Close()
 
-		pairedA, err := Map(emitOrFail(t, func() ([]byte, error) { return EmitAttnAcc2(shape.hd, shape.kvStride, false) }))
+		pairedA, err := Map(emitOrFail(t, func() ([]byte, error) { return hostTable().AttnAcc2(shape.hd, shape.kvStride, false) }))
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -26,11 +26,7 @@ func TestPackedRowMatchesTheLayout(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s has no device layout", gt)
 		}
-		code, err := cpu.EmitPackedRow(q)
-		if err != nil {
-			t.Fatalf("%s: %v", gt, err)
-		}
-		c := hybMapRunnable(t, code)
+		c := onHost(t)(hostTable().PackedRow(q))
 		k := 512
 		if k%int(gt.BlockElems()) != 0 {
 			k = int(gt.BlockElems()) * 2
@@ -98,7 +94,7 @@ func TestPackedRowMatchesTheLayout(t *testing.T) {
 // vector loop, the single-element loop and both, with a guard after dst.
 func TestWidenEveryLength(t *testing.T) {
 	for _, bf := range []bool{false, true} {
-		c := hybMapRunnable(t, cpu.EmitWiden(bf))
+		c := onHost(t)(hostTable().Widen(bf))
 		lanes := cpu.ElemLanes
 		for _, n := range []int{1, 3, lanes, lanes + 1, 3*lanes + 2, 40, 1023} {
 			src := make([]uint16, n)

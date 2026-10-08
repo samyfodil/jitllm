@@ -17,7 +17,7 @@ func TestEmitLayerNormMatchesReference(t *testing.T) {
 	// zeroed lane contributes (0-mean)^2 unless it is cleared.
 	for _, n := range []int{8, 24, 64, 768, 1024, 3072, 1, 2, 3, 5, 7, 9, 13, 33, 35, 100} {
 		for _, bias := range []bool{false, true} {
-			code := mustMap(t, EmitLayerNorm(n, bias))
+			code := onHost(t)(hostTable().LayerNorm(n, bias))
 			x := make([]float32, n)
 			w := make([]float32, n)
 			b := make([]float32, n)
@@ -90,11 +90,8 @@ func TestEmitActMatchesActMul(t *testing.T) {
 	for _, k := range []ActKind{ActSiLU, ActGELU} {
 		// ReLU2 has no gated twin to compare with; its values are held to
 		// max(x,0)^2 by TestElementwiseSSEEveryWidth on both tiers.
-		ref := mustMap(t, EmitActMul(k))
-		got, err := Map(EmitAct(k))
-		if err != nil {
-			t.Fatal(err)
-		}
+		ref := onHost(t)(hostTable().ActMul(k))
+		got := onHost(t)(hostTable().Act(k))
 		mk := func() ([]float32, []float32) {
 			d := make([]float32, n)
 			u := make([]float32, n)

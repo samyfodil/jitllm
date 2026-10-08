@@ -142,6 +142,9 @@ func kernelVsReference(t *testing.T, wt quant.Type, accs int8) {
 // TestQ40KernelVsTrueDot reports how much accuracy activation quantization
 // costs against the unquantized answer. Not a gate.
 func TestQ40KernelVsTrueDot(t *testing.T) {
+	if ggufDeclined(t, quant.Q4_0) {
+		return
+	}
 	code, err := Emit(Spec{W: quant.Q4_0, Rows: 1, Accs: 1, Cols: 1})
 	if err != nil {
 		t.Fatal(err)

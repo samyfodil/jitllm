@@ -18,6 +18,22 @@ import (
 var ssdShapes = [][2]int{{1, 1}, {5, 3}, {8, 8}, {12, 7}, {16, 64}, {33, 5}, {64, 16},
 	{128, 64}, {128, 1}, {130, 9}, {64, 128}}
 
+// ssdStateSSE is the SSE tier's state update to the bit (EmitGatedSSDSSE):
+// x*dt rounded, then each element's decay product and input product rounded
+// apart and added, as MULPS, MULPS, ADDPS with no FMA. The float32 conversions
+// keep Go from fusing either product into the add.
+func ssdStateSSE(st, k, v []float32, decay, dt float32) []float32 {
+	n := len(k)
+	out := append([]float32(nil), st...)
+	for j := range v {
+		xdt := float32(v[j] * dt)
+		for i := 0; i < n; i++ {
+			out[j*n+i] = float32(out[j*n+i]*decay) + float32(k[i]*xdt)
+		}
+	}
+	return out
+}
+
 // ssdNMSE is got against want in float64.
 func ssdNMSE(got []float32, want []float64) float64 {
 	var se, sy float64
@@ -46,11 +62,7 @@ func ssdWiden(v []float32) []float64 {
 func TestEmitGatedSSDMatchesOracle(t *testing.T) {
 	for _, sh := range ssdShapes {
 		n, rows := sh[0], sh[1]
-		b, err := cpu.EmitGatedSSD(n)
-		if err != nil {
-			t.Fatalf("n=%d: %v", n, err)
-		}
-		code := hybMapRunnable(t, b)
+		code := onHost(t)(hostTable().GatedSSD(n))
 		rnd := rand.New(rand.NewSource(int64(31*n + rows)))
 		st := make([]float32, rows*n)
 		for i := range st {
@@ -69,6 +81,12 @@ func TestEmitGatedSSDMatchesOracle(t *testing.T) {
 			wantSt := ssdWiden(st)
 			wantO := make([]float64, rows)
 			oracle.GatedSSD(wantO, wantSt, ssdWiden(k), ssdWiden(q), ssdWiden(v), float64(decay), float64(dt), float64(d))
+			// The SSE tier has no FMA: its state update is defined to the bit by
+			// ssdStateSSE, and is held to it before the float64 bound below.
+			var model []float32
+			if cpu.HostTier() == cpu.TierSSE {
+				model = ssdStateSSE(st, k, v, decay, dt)
+			}
 			noD := make([]float64, rows)
 			oracle.GatedSSD(noD, ssdWiden(st), ssdWiden(k), ssdWiden(q), ssdWiden(v), float64(decay), float64(dt), 0)
 
@@ -83,7 +101,21 @@ func TestEmitGatedSSDMatchesOracle(t *testing.T) {
 			if e := ssdNMSE(o[:rows], wantO); e > 1e-10 {
 				t.Errorf("n=%d rows=%d tok %d: output NMSE %.3e", n, rows, tok, e)
 			}
-			if e := ssdNMSE(st, wantSt); e > 1e-12 {
+			stateBound := 1e-12
+			if model != nil {
+				for i := range st {
+					if math.Float32bits(st[i]) != math.Float32bits(model[i]) {
+						t.Fatalf("n=%d rows=%d tok %d: state[%d] = %v, the SSE tier's unfused update gives %v",
+							n, rows, tok, i, st[i], model[i])
+					}
+				}
+				// A product rounded before each add, three to an element: at n=1
+				// the NMSE is one element's relative error, nothing averages it,
+				// and a cancelling decay and input reach 5.8e-12 on these inputs.
+				// The bit-exact model above is the kernel's bar on this tier.
+				stateBound = 1e-10
+			}
+			if e := ssdNMSE(st, wantSt); e > stateBound {
 				t.Errorf("n=%d rows=%d tok %d: STATE NMSE %.3e", n, rows, tok, e)
 			}
 			// The skip is load-bearing at this bound: without it the oracle
@@ -101,7 +133,7 @@ func TestEmitGatedSSDMatchesOracle(t *testing.T) {
 // large positive argument, where softplus is the identity, and a large
 // negative one, where it underflows toward zero).
 func TestEmitSSDGateMatchesOracle(t *testing.T) {
-	code := hybMapRunnable(t, cpu.EmitSSDGate())
+	code := onHost(t)(hostTable().SSDGate())
 	defer code.Close()
 	consts := cpu.DeltaGateConsts()
 	for _, n := range []int{1, 3, 7, 8, 9, 16, 24, 31, 64, 128, 130} {

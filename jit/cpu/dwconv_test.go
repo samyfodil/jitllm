@@ -67,11 +67,7 @@ func dwInputs(s cpu.DWShape, seed int64) (in, w []float32) {
 func TestEmitDWConvMatchesReference(t *testing.T) {
 	const guard = 8
 	for i, s := range dwShapes() {
-		b, err := cpu.EmitDWConv(s)
-		if err != nil {
-			t.Fatalf("%+v: %v", s, err)
-		}
-		code := hybMapRunnable(t, b)
+		code := onHost(t)(hostTable().DWConv(s))
 		in, w := dwInputs(s, int64(i))
 		want := dwRef(s, in, w)
 		out := make([]float32, s.WOut*s.Chans+guard)
@@ -100,11 +96,7 @@ func TestEmitDWConvMatchesReference(t *testing.T) {
 			copy(wt[(kx*3+ky)*s.Chans:(kx*3+ky+1)*s.Chans], w[(ky*3+kx)*s.Chans:(ky*3+kx+1)*s.Chans])
 		}
 	}
-	b, err := cpu.EmitDWConv(s)
-	if err != nil {
-		t.Fatal(err)
-	}
-	code := hybMapRunnable(t, b)
+	code := onHost(t)(hostTable().DWConv(s))
 	defer code.Close()
 	out := make([]float32, s.WOut*s.Chans)
 	code.Call(&cpu.Args{Out: &out[0], AScale: &wt[0], Q32: &in[0]})

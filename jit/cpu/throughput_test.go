@@ -58,6 +58,10 @@ func TestGeneratedThroughput(t *testing.T) {
 	a.VZEROUPPER()
 	a.RET()
 
+	if HostTier() == TierSSE {
+		avx2Primitive(t, a.Bytes(), "the packed family's SSE throughput in dev/bench (this is a VPDPBUSD streaming probe)")
+		return
+	}
 	code := mustMap(t, a.Bytes())
 	defer code.Close()
 	t.Logf("kernel is %d bytes", code.Size)

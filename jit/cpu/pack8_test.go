@@ -14,6 +14,9 @@ import (
 )
 
 func packVsReference(t *testing.T, wt quant.Type, rows, k int) {
+	if ggufDeclined(t, wt) {
+		return
+	}
 	nb := k / 32
 	code, err := EmitInterleaved(wt, rows, nb)
 	if err != nil {
@@ -74,6 +77,9 @@ func TestPack8MatchesReference(t *testing.T) {
 func TestABPack8(t *testing.T) {
 	if testing.Short() {
 		t.Skip("allocates 128 MB")
+	}
+	if ggufDeclined(t, quant.Q8_0) {
+		return
 	}
 	const k = 2048
 	nb := k / 32

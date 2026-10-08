@@ -16,17 +16,15 @@ import (
 // apart it must differ from it (a kernel that read A twice passes the first
 // check and fails this one).
 func TestEmitRoPESplitMatchesReference(t *testing.T) {
-	type emit struct {
-		name string
-		fn   func(hd, nrot int) ([]byte, error)
-	}
-	tiers := []emit{{"host", EmitRoPESplit}}
-	if runtime.GOARCH == "amd64" {
-		tiers = append(tiers, emit{"sse", EmitRoPESplitSSE})
+	// The host tier first, then the SSE tier wherever it is a second one this
+	// host runs: on an SSE-only host the host tier IS the SSE tier.
+	tiers := []*Emitters{hostTable()}
+	if runtime.GOARCH == "amd64" && HostTier() != TierSSE {
+		tiers = append(tiers, EmittersFor(TierSSE))
 	}
 	run := func(t *testing.T, code []byte, hd, heads int, cs []float32) []float32 {
 		t.Helper()
-		c := mustMap(t, code)
+		c := onHost(t)(code, nil)
 		defer c.Close()
 		x := ropeInput(hd, heads)
 		c.Call(&Args{Out: &x[0], AScale: &cs[0], Rows: int64(heads)})
@@ -44,7 +42,7 @@ func TestEmitRoPESplitMatchesReference(t *testing.T) {
 					th := 2.9 * math.Pow(10000, -2*float64(p)/float64(nrot))
 					b[2*p], b[2*p+1] = float32(math.Cos(th)), float32(math.Sin(th))
 				}
-				code, err := tr.fn(hd, nrot)
+				code, err := tr.RoPESplit(hd, nrot)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -65,18 +63,13 @@ func TestEmitRoPESplitMatchesReference(t *testing.T) {
 						}
 						g := got[h*hd+i]
 						if d := math.Abs(float64(g) - want); d > 1e-5*(1+math.Abs(want)) {
-							t.Fatalf("%s hd=%d nrot=%d head %d dim %d: %v, want %v", tr.name, hd, nrot, h, i, g, want)
+							t.Fatalf("%s hd=%d nrot=%d head %d dim %d: %v, want %v", tr.Tier, hd, nrot, h, i, g, want)
 						}
 					}
 				}
 				// A equal to B: EmitRoPE's NEOX rotation to the bit.
 				same := run(t, code, hd, heads, append(append([]float32(nil), a...), a...))
-				var plain []byte
-				if tr.name == "sse" {
-					plain, err = EmitRoPESSE(hd, nrot, true)
-				} else {
-					plain, err = EmitRoPE(hd, nrot, true)
-				}
+				plain, err := tr.RoPE(hd, nrot, true)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -84,7 +77,7 @@ func TestEmitRoPESplitMatchesReference(t *testing.T) {
 				for i := range same {
 					if math.Float32bits(same[i]) != math.Float32bits(ref[i]) {
 						t.Fatalf("%s hd=%d nrot=%d: with A == B, element %d is %v where the NEOX kernel gives %v",
-							tr.name, hd, nrot, i, same[i], ref[i])
+							tr.Tier, hd, nrot, i, same[i], ref[i])
 					}
 				}
 				differs := false
@@ -94,7 +87,7 @@ func TestEmitRoPESplitMatchesReference(t *testing.T) {
 					}
 				}
 				if !differs {
-					t.Fatalf("%s hd=%d nrot=%d: B's table changed nothing", tr.name, hd, nrot)
+					t.Fatalf("%s hd=%d nrot=%d: B's table changed nothing", tr.Tier, hd, nrot)
 				}
 				cases++
 			}

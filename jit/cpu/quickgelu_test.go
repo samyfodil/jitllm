@@ -14,10 +14,7 @@ func quickGELURef(x float64) float64 { return x / (1 + math.Exp(-1.702*x)) }
 // is far from SiLU and GELU-tanh (which a wrong kernel could plausibly emit).
 // The separation bars sit just under the measured separations over [-12,12].
 func TestQuickGELUMatchesItsDefinition(t *testing.T) {
-	c, err := Map(EmitAct(ActQuickGELU))
-	if err != nil {
-		t.Skipf("no ungated activation kernel on this host: %v", err)
-	}
+	c := onHost(t)(hostTable().Act(ActQuickGELU))
 	consts := ActConsts()
 
 	n := 4096
@@ -51,10 +48,7 @@ func TestQuickGELUMatchesItsDefinition(t *testing.T) {
 		k    ActKind
 		min  float64
 	}{{"silu", ActSiLU, 0.15}, {"gelu-tanh", ActGELU, 0.02}} {
-		oc, err := Map(EmitAct(other.k))
-		if err != nil {
-			t.Fatalf("%s: %v", other.name, err)
-		}
+		oc := onHost(t)(hostTable().Act(other.k))
 		buf := append([]float32(nil), x...)
 		call(oc, buf, consts)
 		sep := 0.0
@@ -86,10 +80,7 @@ func TestUngatedActivationsAreAllDistinct(t *testing.T) {
 	}
 	outs := make([][]float32, len(Ungated))
 	for i, k := range Ungated {
-		c, err := Map(EmitAct(k))
-		if err != nil {
-			t.Skipf("no ungated activation kernel on this host: %v", err)
-		}
+		c := onHost(t)(hostTable().Act(k))
 		outs[i] = append([]float32(nil), x...)
 		call(c, outs[i], consts)
 	}
