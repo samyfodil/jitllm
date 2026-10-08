@@ -57,8 +57,17 @@ func (f *File) Preload(depth int, stop <-chan struct{}) error {
 					return
 				}
 				f.pageStart()
-				err := f.EnsurePage(i)
+				read := f.EnsurePage
+				if f.preloadRead != nil {
+					read = f.preloadRead
+				}
+				err := read(i)
 				f.inPages.Add(-1)
+				// The budget may have narrowed while the page was in flight:
+				// a pinned frame is no victim, so the shrink could not take
+				// it, and it would stay resident beyond the budget. It goes
+				// now, and the CanEvict check above ends the preload.
+				f.fitBudget()
 				if err != nil {
 					errMu.Lock()
 					if first == nil {
@@ -72,6 +81,19 @@ func (f *File) Preload(depth int, stop <-chan struct{}) error {
 	}
 	wg.Wait()
 	return first
+}
+
+// fitBudget evicts until what is resident is inside the budget: what SetBudget
+// does, for frames that were pinned when it ran.
+func (f *File) fitBudget() {
+	defer f.flushRecycled()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for f.budget > 0 && f.resident > f.budget {
+		if !f.evictOne() {
+			return
+		}
+	}
 }
 
 // ReadConcurrency is the most read requests that were ever outstanding at

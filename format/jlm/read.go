@@ -55,6 +55,9 @@ type File struct {
 	inIO, peakIO, readBytes atomic.Int64
 	// inPages and peakPages are PreloadDepth's: pages Preload has in flight.
 	inPages, peakPages atomic.Int64
+	// preloadRead stands in for EnsurePage in Preload, for a gate that holds
+	// a page mid-read; nil is EnsurePage.
+	preloadRead func(i int) error
 	// waitNs is wall time a caller spent blocked in EnsureRanges waiting for
 	// its runs to land: serial time on the decode path, which is what a
 	// prefetch would have to hide. It is the only exposed-I/O number on the
