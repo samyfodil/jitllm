@@ -10,6 +10,7 @@
 package server
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -1170,7 +1171,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	}
 	maxTokens := tokenLimit(o.MaxTokens, s.st.MaxSeq()-s.st.Pos())
 
-	st := newStreamText(lm.m.Vocab, o.Stop)
+	st := newStreamText(lm.m.Vocab.NewChatStream().Next, o.Stop)
 	reason := FinishMaxTokens
 	stopMatched := ""
 	out := make([]int32, 0, min(maxTokens, 4096))
@@ -1297,28 +1298,27 @@ func (e *Engine) encode(lm *LoadedModel, p Prompt) ([]int32, error) {
 // streamText turns a growing token id list into incremental text, and applies
 // stop strings.
 //
-// Neither tokenizer decodes per token (a BPE token can split a rune, SPM's
-// leading space depends on position), so each step re-decodes the whole id
-// list and diffs the prefix. DecodeChat, not Decode, so a harmony vocabulary
+// Each new id is decoded once, through tok.ChatStream, whose pieces
+// concatenate to DecodeChat of the whole list at every prefix -- so the text
+// is what re-decoding the whole list would give, at a cost per token that does
+// not grow with the completion. DecodeChat, not Decode, so a harmony vocabulary
 // does not leave role and channel headers glued to the text.
 //
 // The tail is held back so the start of a stop string never reaches the
 // client before the match completes; the window is one byte short of the
 // longest stop string.
 type streamText struct {
-	vocab   vocabDecoder
+	next    func(id int32) string
 	stops   []string
 	hold    int
-	decoded string
+	n       int // ids decoded so far
+	decoded []byte
 	emitted int
 }
 
-type vocabDecoder interface {
-	DecodeChat(ids []int32) string
-	Decode(ids []int32) string
-}
-
-func newStreamText(v vocabDecoder, stops []string) *streamText {
+// newStreamText streams through next, one id's text at a time: a
+// tok.ChatStream's Next for a model's vocabulary.
+func newStreamText(next func(id int32) string, stops []string) *streamText {
 	hold := 0
 	for _, s := range stops {
 		if len(s) > hold {
@@ -1328,26 +1328,34 @@ func newStreamText(v vocabDecoder, stops []string) *streamText {
 	if hold > 0 {
 		hold--
 	}
-	return &streamText{vocab: v, stops: stops, hold: hold}
+	return &streamText{next: next, stops: stops, hold: hold}
 }
 
 // push takes the full id list so far and returns the text safe to emit now,
-// whether a stop string matched, and which one.
+// whether a stop string matched, and which one. Only the ids past the last
+// push are decoded.
 func (t *streamText) push(ids []int32) (chunk string, stopped bool, match string) {
-	t.decoded = t.vocab.DecodeChat(ids)
+	before := len(t.decoded)
+	for _, id := range ids[t.n:] {
+		t.decoded = append(t.decoded, t.next(id)...)
+	}
+	t.n = len(ids)
 
-	// A stop string is matched against the text generated SINCE the emit
-	// pointer started, i.e. the whole completion, because a stop may straddle
-	// any number of tokens.
+	// A stop string is matched against the whole completion, because a stop
+	// may straddle any number of tokens. The text before this push held no
+	// match, so a new one ends in the new bytes and starts no earlier than
+	// len(s)-1 before them: only that window is searched.
 	for _, s := range t.stops {
 		if s == "" {
 			continue
 		}
-		if i := strings.Index(t.decoded, s); i >= 0 {
+		from := max(0, before-len(s)+1)
+		if i := bytes.Index(t.decoded[from:], []byte(s)); i >= 0 {
+			i += from
 			// Emit up to the stop and no further. The stop string itself is
 			// never part of the completion.
 			if i > t.emitted {
-				chunk = t.decoded[t.emitted:i]
+				chunk = string(t.decoded[t.emitted:i])
 			}
 			t.emitted = len(t.decoded)
 			return truncPartialRune(chunk), true, s
@@ -1358,7 +1366,7 @@ func (t *streamText) push(ids []int32) (chunk string, stopped bool, match string
 	if safe <= t.emitted {
 		return "", false, ""
 	}
-	chunk = truncPartialRune(t.decoded[t.emitted:safe])
+	chunk = truncPartialRune(string(t.decoded[t.emitted:safe]))
 	t.emitted += len(chunk)
 	return chunk, false, ""
 }
@@ -1368,7 +1376,7 @@ func (t *streamText) flush() string {
 	if len(t.decoded) <= t.emitted {
 		return ""
 	}
-	chunk := t.decoded[t.emitted:]
+	chunk := string(t.decoded[t.emitted:])
 	t.emitted = len(t.decoded)
 	return chunk
 }
