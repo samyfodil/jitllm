@@ -80,7 +80,7 @@ func (s *State) mnGrow() {
 			if b.kDown != nil {
 				pad = max(pad, pin(b.hin, b.win, b.kvK, 2, b.cin))
 			}
-			s.jit.AttnSetFor(b.kd, b.kd, b.kd, false)
+			s.jit.AttnSetFor(b.kd, b.kd, b.kd, cpu.KVF32)
 		}
 	}
 	a, bt := s.m.layers[s.lo+mt.tapA].mn, s.m.layers[s.lo+mt.tapB].mn
@@ -323,7 +323,7 @@ func (s *State) mnBlockRun(li int) error {
 				return err
 			}
 		}
-		r.op, r.att, r.attM, r.attKD, r.attHeads = mnOpAttn, s.jit.AttnSetFor(b.kd, b.kd, b.kd, false), m, b.kd, b.heads
+		r.op, r.att, r.attM, r.attKD, r.attHeads = mnOpAttn, s.jit.AttnSetFor(b.kd, b.kd, b.kd, cpu.KVF32), m, b.kd, b.heads
 		r.chunk = s.mnChunk(nin)
 		s.jit.Parallel(nin, r.chunk, r.fn)
 		r.att = nil

@@ -211,7 +211,7 @@ func TestAttnKernelsSSE(t *testing.T) {
 			}
 
 			// scores
-			b, err := EmitAttnScoresSSE(s.hd, s.stride, f16)
+			b, err := EmitAttnScoresSSE(s.hd, s.stride, KVOf(f16))
 			sc := sseAttnKernel(t, tag("scores"), b, err)
 			got := sentinelRow(s.npos)
 			a := args(got)
@@ -243,7 +243,7 @@ func TestAttnKernelsSSE(t *testing.T) {
 				if into {
 					emit, name = EmitAttnAccIntoSSE, "acc_into"
 				}
-				b, err := emit(s.hd, s.stride, f16)
+				b, err := emit(s.hd, s.stride, KVOf(f16))
 				ac := sseAttnKernel(t, tag(name), b, err)
 				out := sentinelRow(s.hd)
 				model, orc := make([]float32, s.hd), make([]float32, s.hd)
@@ -295,7 +295,7 @@ func TestAttnEmptyWindowSSE(t *testing.T) {
 	for _, f16 := range []bool{false, true} {
 		for _, k := range []struct {
 			name string
-			emit func(int, int, bool) ([]byte, error)
+			emit func(int, int, KVFmt) ([]byte, error)
 			want func(i int, seed float32) float32
 		}{
 			{"scores", EmitAttnScoresSSE, func(_ int, seed float32) float32 { return seed }},
@@ -305,7 +305,7 @@ func TestAttnEmptyWindowSSE(t *testing.T) {
 			{"acc_into", EmitAttnAccIntoSSE, func(_ int, seed float32) float32 { return seed }},
 			{"acc2_into", EmitAttnAcc2IntoSSE, func(_ int, seed float32) float32 { return seed }},
 		} {
-			b, err := k.emit(17, 17, f16)
+			b, err := k.emit(17, 17, KVOf(f16))
 			c := sseAttnKernel(t, "empty_"+k.name, b, err)
 			o1, o2 := sentinelRow(17), sentinelRow(17)
 			for i := 0; i < 17; i++ {
@@ -328,7 +328,7 @@ func TestAttnEmptyWindowSSE(t *testing.T) {
 				}
 			}
 			if !sseAttnGuarded(o1, 17) || !sseAttnGuarded(o2, 17) {
-				t.Fatalf("%s f16=%v: Rows=0 wrote past the row", k.name, f16)
+				t.Fatalf("%s f16=%v: Rows=0 wrote past the row", k.name, KVOf(f16))
 			}
 		}
 	}
@@ -350,8 +350,8 @@ func TestAttnPairedIsBitIdenticalSSE(t *testing.T) {
 			tag := func(k string) string {
 				return k + "_hd" + itoa(s.hd) + "_s" + itoa(s.stride) + map[bool]string{true: "_f16"}[f16]
 			}
-			emit := func(name string, f func(int, int, bool) ([]byte, error)) *Code {
-				b, err := f(s.hd, s.stride, f16)
+			emit := func(name string, f func(int, int, KVFmt) ([]byte, error)) *Code {
+				b, err := f(s.hd, s.stride, KVOf(f16))
 				return sseAttnKernel(t, tag(name), b, err)
 			}
 			base := Args{W: d.cache(f16, 0), Rows: int64(s.npos)}
@@ -431,8 +431,8 @@ func TestAttnIntoSplitsBitIdenticallySSE(t *testing.T) {
 			for _, f16 := range []bool{false, true} {
 				d := newAttnSSEData(hd, hd, npos, int64(hd*1000+npos), false)
 				tag := "hd" + itoa(hd) + map[bool]string{true: "_f16"}[f16]
-				k := func(name string, f func(int, int, bool) ([]byte, error)) *Code {
-					b, err := f(hd, hd, f16)
+				k := func(name string, f func(int, int, KVFmt) ([]byte, error)) *Code {
+					b, err := f(hd, hd, KVOf(f16))
 					return sseAttnKernel(t, name+"_"+tag, b, err)
 				}
 				acc, into := k("acc", EmitAttnAccSSE), k("acc_into", EmitAttnAccIntoSSE)
@@ -489,15 +489,15 @@ func TestAttnIntoSplitsBitIdenticallySSE(t *testing.T) {
 func TestAttnF16MatchesF32OnExactHalvesSSE(t *testing.T) {
 	type kern struct {
 		name string
-		emit func(hd, stride int, f16 bool) ([]byte, error)
+		emit func(hd, stride int, fm KVFmt) ([]byte, error)
 		acc  bool
 	}
 	kerns := []kern{
 		{"scores", EmitAttnScoresSSE, false}, {"scores2", EmitAttnScores2SSE, false},
 		{"acc", EmitAttnAccSSE, true}, {"acc_into", EmitAttnAccIntoSSE, true},
 		{"acc2", EmitAttnAcc2SSE, true}, {"acc2_into", EmitAttnAcc2IntoSSE, true},
-		{"scores_t1", func(hd, stride int, f16 bool) ([]byte, error) {
-			return EmitAttnScoresTiledSSE(hd, stride, 0, 0, 1, f16)
+		{"scores_t1", func(hd, stride int, fm KVFmt) ([]byte, error) {
+			return EmitAttnScoresTiledSSE(hd, stride, 0, 0, 1, fm)
 		}, false},
 	}
 	for _, hd := range []int{1, 2, 3, 4, 5, 8, 12, 17, 64, 128, 256} {
@@ -506,7 +506,7 @@ func TestAttnF16MatchesF32OnExactHalvesSSE(t *testing.T) {
 			d := newAttnSSEData(hd, stride, npos, int64(hd*9176+npos), true)
 			for _, k := range kerns {
 				run := func(f16 bool) ([]float32, []float32) {
-					b, err := k.emit(hd, stride, f16)
+					b, err := k.emit(hd, stride, KVOf(f16))
 					c := sseAttnKernel(t, k.name+"_exact_hd"+itoa(hd)+map[bool]string{true: "_f16"}[f16], b, err)
 					n := npos
 					if k.acc {
@@ -522,7 +522,7 @@ func TestAttnF16MatchesF32OnExactHalvesSSE(t *testing.T) {
 						Q32: &d.q[0], Q2: &d.q2[0], AScale: &d.w[0], AScale2: &d.w2[0]}
 					c.Call(&a)
 					if !sseAttnGuarded(o0, n) || !sseAttnGuarded(o1, n) {
-						t.Fatalf("%s hd=%d f16=%v: wrote past the row", k.name, hd, f16)
+						t.Fatalf("%s hd=%d f16=%v: wrote past the row", k.name, hd, KVOf(f16))
 					}
 					return o0[:n], o1[:n]
 				}
@@ -549,8 +549,8 @@ func TestAttnF16MatchesF32OnExactHalvesSSE(t *testing.T) {
 // so the SSE tier keeps an f32 cache unless the caller forces f16.
 func TestAttnF16KernelSizeSSE(t *testing.T) {
 	for _, hd := range []int{64, 80, 128, 256} {
-		size := func(f func(int, int, bool) ([]byte, error), f16 bool) int {
-			b, err := f(hd, hd*4, f16)
+		size := func(f func(int, int, KVFmt) ([]byte, error), f16 bool) int {
+			b, err := f(hd, hd*4, KVOf(f16))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -595,7 +595,7 @@ func TestAttnScoresTiledSSE(t *testing.T) {
 					}
 				}
 				tag := "scores_t" + itoa(qt) + "_hd" + itoa(hd) + map[bool]string{true: "_f16"}[f16]
-				b, err := EmitAttnScoresTiledSSE(hd, stride, stride, scoreStride, qt, f16)
+				b, err := EmitAttnScoresTiledSSE(hd, stride, stride, scoreStride, qt, KVOf(f16))
 				c := sseAttnKernel(t, tag, b, err)
 				scores := make([]float32, qt*scoreStride+attnGuard)
 				for i := range scores {
@@ -638,7 +638,7 @@ func TestAttnScoresTiledSSE(t *testing.T) {
 			if f16 {
 				over = 12
 			}
-			if _, err := EmitAttnScoresTiledSSE(hd, stride, stride, scoreStride, over, f16); err == nil {
+			if _, err := EmitAttnScoresTiledSSE(hd, stride, stride, scoreStride, over, KVOf(f16)); err == nil {
 				t.Errorf("hd=%d f16=%v: qt=%d emitted, and it needs more than sixteen XMM registers", hd, f16, over)
 			}
 		}

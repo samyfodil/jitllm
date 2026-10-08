@@ -26,6 +26,11 @@ type turn struct {
 	q     []chan struct{}
 }
 
+// onTurnQueue, set only by a test, is told under t.mu each time a caller
+// queues behind the holder. It is on the contended path alone, so the
+// uncontended turn pays nothing for it.
+var onTurnQueue func(wake chan struct{})
+
 const (
 	turnFree int32 = iota
 	turnHeld
@@ -53,6 +58,9 @@ func (t *turn) Lock(wake chan struct{}) {
 			fallthrough
 		case turnQueued:
 			t.q = append(t.q, wake)
+			if onTurnQueue != nil {
+				onTurnQueue(wake)
+			}
 			t.mu.Unlock()
 			<-wake // the holder handed the turn over; it is ours
 			return

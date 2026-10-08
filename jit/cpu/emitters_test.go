@@ -136,28 +136,28 @@ func emitterCalls() []emitterCall {
 		}
 	}
 	for _, hd := range []int{64, 80, 128} {
-		for _, f16 := range []bool{false, true} {
+		for _, fm := range []KVFmt{KVF32, KVF16, KVQ8} {
 			kv := 4 * hd
 			attn := []struct {
 				name   string
-				table  func(em *Emitters) func(int, int, bool) ([]byte, error)
-				direct func(int, int, bool) ([]byte, error)
+				table  func(em *Emitters) func(int, int, KVFmt) ([]byte, error)
+				direct func(int, int, KVFmt) ([]byte, error)
 			}{
-				{"attn_scores", func(em *Emitters) func(int, int, bool) ([]byte, error) { return em.AttnScores }, EmitAttnScores},
-				{"attn_acc", func(em *Emitters) func(int, int, bool) ([]byte, error) { return em.AttnAcc }, EmitAttnAcc},
-				{"attn_acc_into", func(em *Emitters) func(int, int, bool) ([]byte, error) { return em.AttnAccInto }, EmitAttnAccInto},
-				{"attn_scores2", func(em *Emitters) func(int, int, bool) ([]byte, error) { return em.AttnScores2 }, EmitAttnScores2},
-				{"attn_acc2", func(em *Emitters) func(int, int, bool) ([]byte, error) { return em.AttnAcc2 }, EmitAttnAcc2},
-				{"attn_acc2_into", func(em *Emitters) func(int, int, bool) ([]byte, error) { return em.AttnAcc2Into }, EmitAttnAcc2Into},
+				{"attn_scores", func(em *Emitters) func(int, int, KVFmt) ([]byte, error) { return em.AttnScores }, EmitAttnScores},
+				{"attn_acc", func(em *Emitters) func(int, int, KVFmt) ([]byte, error) { return em.AttnAcc }, EmitAttnAcc},
+				{"attn_acc_into", func(em *Emitters) func(int, int, KVFmt) ([]byte, error) { return em.AttnAccInto }, EmitAttnAccInto},
+				{"attn_scores2", func(em *Emitters) func(int, int, KVFmt) ([]byte, error) { return em.AttnScores2 }, EmitAttnScores2},
+				{"attn_acc2", func(em *Emitters) func(int, int, KVFmt) ([]byte, error) { return em.AttnAcc2 }, EmitAttnAcc2},
+				{"attn_acc2_into", func(em *Emitters) func(int, int, KVFmt) ([]byte, error) { return em.AttnAcc2Into }, EmitAttnAcc2Into},
 			}
 			for _, a := range attn {
-				add(a.name+"/"+shapeName(hd)+map[bool]string{true: "/f16"}[f16], func(em *Emitters) ([]byte, error) { return a.table(em)(hd, kv, f16) },
-					func() ([]byte, error) { return a.direct(hd, kv, f16) })
+				add(a.name+"/"+shapeName(hd)+"/"+fm.String(), func(em *Emitters) ([]byte, error) { return a.table(em)(hd, kv, fm) },
+					func() ([]byte, error) { return a.direct(hd, kv, fm) })
 			}
 		}
 	}
-	add("attn_scores_tiled", func(em *Emitters) ([]byte, error) { return em.AttnScoresTiled(64, 64, 64, 1024, 8, false) },
-		func() ([]byte, error) { return EmitAttnScoresTiled(64, 64, 64, 1024, 8, false) })
+	add("attn_scores_tiled", func(em *Emitters) ([]byte, error) { return em.AttnScoresTiled(64, 64, 64, 1024, 8, KVF32) },
+		func() ([]byte, error) { return EmitAttnScoresTiled(64, 64, 64, 1024, 8, KVF32) })
 	for _, ft := range []quant.Type{quant.F32, quant.F16, quant.BF16} {
 		s := Spec{W: ft, Rows: 1, Cols: 1, Accs: 1}
 		add("row_major/"+ft.String(), func(em *Emitters) ([]byte, error) { return em.RowMajor(s) },

@@ -94,8 +94,8 @@ type JIT struct {
 	// by AddDWConv before the calls that read them (a convolutional tower's
 	// load), so the calls only read the map.
 	dw map[cpu.DWShape]*cpu.Code
-	// attnF16 records the cache width the attention kernels were emitted for.
-	attnF16 bool
+	// attnKV records the cache format the attention kernels were emitted for.
+	attnKV cpu.KVFmt
 	// The qt-wide score kernels, one per geometry (AttnTiledFor), for
 	// bidirectional callers; attnT is the default AddAttnTiled made.
 	attnTiled []*AttnTiledSet
@@ -180,6 +180,12 @@ type JIT struct {
 	// qscr is the narrow kernel's per-worker spill space, one run of
 	// cpu.QuantActNarrowScratch float32 each.
 	qscr []float32
+	// kvPad and kvScr are the q8 cache append's padded row and spill space
+	// (QuantizeKVRows): it runs outside any region, so it shares no worker's.
+	kvPad, kvScr []float32
+	// kvWiden is the q8 cache's widening to float32 per head width
+	// (WidenKVRows), emitted on first ask.
+	kvWiden map[int]*cpu.Code
 
 	q        []int8
 	pairs    []float32
@@ -735,6 +741,10 @@ func (f *JIT) Close() error {
 	}
 	f.wsGEMM = nil
 	f.tiledMu.Unlock()
+	for _, c := range f.kvWiden {
+		c.Close()
+	}
+	f.kvWiden = nil
 	if f.deltaC != nil {
 		f.deltaC.Close()
 		f.deltaC = nil

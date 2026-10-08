@@ -149,10 +149,7 @@ func (s *Sampler) Sample(logits []float32) int32 {
 			return 0
 		}
 		if bounded {
-			// The candidates carry logits here; the distribution is the softmax
-			// over exactly these k at temperature T.
-			nn.Scale32JIT(s.p[:have], float32(1/s.Temp))
-			nn.Softmax32JIT(s.p[:have], have)
+			return s.drawBounded(have, u)
 		}
 		r := s.draw.Run(s.p[:have], minp, topp, u, sumAll)
 		if !r.Cut && !haveSum {
@@ -164,7 +161,7 @@ func (s *Sampler) Sample(logits []float32) int32 {
 		// A cut decides the surviving set on its own; without one, a walk that
 		// terminated inside the prefix has already found its token, because
 		// every candidate below the prefix is below the one it landed on.
-		if bounded || r.Cut || r.Resolved || have == n {
+		if r.Cut || r.Resolved || have == n {
 			res := r.Res
 			if res < 0 {
 				res = 0 // MinP > 1 cuts everything; the Go loop indexed c[-1]
@@ -183,12 +180,73 @@ func (s *Sampler) Sample(logits []float32) int32 {
 		if have == want {
 			return s.ids[have-1]
 		}
-		if bounded {
-			// The softmax above rewrote s.p in place, so a second round would
-			// exponentiate it twice. Unreachable: bounded never grows.
-			return s.ids[0]
-		}
 	}
+}
+
+// drawBounded is the end of a top-k draw: the candidates are the k best
+// logits in s.ids and s.p, best first, and the distribution is the softmax
+// over exactly these k at temperature T, cut by min-p and top-p and walked at
+// u. Sample and SampleFrom both end here, so a device's candidates draw what
+// the host's would.
+func (s *Sampler) drawBounded(have int, u float32) int32 {
+	topp := float32(math.Inf(1))
+	if s.TopP > 0 && s.TopP < 1 {
+		topp = float32(s.TopP)
+	}
+	nn.Scale32JIT(s.p[:have], float32(1/s.Temp))
+	nn.Softmax32JIT(s.p[:have], have)
+	r := s.draw.Run(s.p[:have], float32(s.MinP), topp, u, -1)
+	res := r.Res
+	if res < 0 {
+		res = 0 // MinP > 1 cuts everything; the Go loop indexed c[-1]
+	}
+	if res >= have {
+		res = have - 1
+	}
+	return s.ids[res]
+}
+
+// Bounded reports whether a draw over n logits is a top-k draw, the one a
+// device can select for (nn.Head.SampleK): sampled, with 0 < TopK < n.
+func (s *Sampler) Bounded(n int) bool {
+	return s != nil && s.Temp > 0 && s.TopK > 0 && s.TopK < n
+}
+
+// DeviceArgs is the device sampler's argument block (kernels.SampleArgsWords):
+// the history's length, the penalty's bits and the history, which the device
+// penalizes exactly as Sample's scatter does -- once per entry, in order.
+// The history is empty when the penalty is off. dst is reused.
+func (s *Sampler) DeviceArgs(dst []uint32) []uint32 {
+	dst = dst[:0]
+	if s.RepeatPen > 1 && len(s.hist) > 0 {
+		dst = append(dst, uint32(len(s.hist)), math.Float32bits(float32(s.RepeatPen)))
+		for _, t := range s.hist {
+			dst = append(dst, uint32(t))
+		}
+		return dst
+	}
+	return append(dst, 0, math.Float32bits(1))
+}
+
+// SampleFrom is Sample for a caller holding the top-k candidates already --
+// the k best (penalized) logits, best first, the lower id on a tie, as a
+// device's sampler returns them -- instead of the row. It draws the same
+// uniform Sample would, so for the same candidates and seed it returns the
+// same token.
+func (s *Sampler) SampleFrom(vals []float32, ids []uint32) int32 {
+	s.seed()
+	u := float32(s.rng.Float64())
+	k := len(vals)
+	if k == 0 {
+		return 0
+	}
+	s.ids = grow32i(s.ids, k)
+	s.p = grow32(s.p, k)
+	copy(s.p, vals)
+	for i, id := range ids[:k] {
+		s.ids[i] = int32(id)
+	}
+	return s.drawBounded(k, u)
 }
 
 // seed starts the sampler's stream on first use.

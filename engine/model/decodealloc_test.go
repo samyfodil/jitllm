@@ -127,6 +127,25 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 			// runs a host-only model's requests through.
 			t.Run("host-step", func(t *testing.T) { hostStepAllocs(t, m, false) })
 			t.Run("host-step-chunk", func(t *testing.T) { hostStepAllocs(t, m, true) })
+			// The q8_0 cache: its append is the generated quantizer, with
+			// padding and spill space reserved at load, so a warm token
+			// allocates nothing either.
+			t.Run("host-q8", func(t *testing.T) {
+				if err := m.Cfg.KVTypeRefusal(KVQ8_0); err != nil {
+					t.Skipf("refused by name: %v", err)
+				}
+				if err := m.SetKVType(KVQ8_0); err != nil {
+					t.Fatal(err)
+				}
+				defer m.ClearKVF16()
+				s := m.NewState(8)
+				q8 := s.KVType() == KVQ8_0
+				s.Close()
+				if !q8 {
+					t.Fatal("a q8_0 cache was asked for and not selected")
+				}
+				decodeAllocs(t, m, nil)
+			})
 			for _, spec := range specs {
 				t.Run(spec, func(t *testing.T) {
 					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)

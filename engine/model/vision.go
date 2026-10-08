@@ -6,6 +6,7 @@ import (
 
 	"github.com/samyfodil/jitllm/engine/sched"
 	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/samyfodil/jitllm/jit/cpu"
 
 	"github.com/samyfodil/jitllm/engine/nn"
 	"github.com/samyfodil/jitllm/format/jlm"
@@ -1018,16 +1019,16 @@ func (t *Tower) newState(j *nn.JIT, owned bool) *State {
 	s.jit = j
 	// The image's rows are one page: K and V are contiguous for every query
 	// tile, and the page is the pair every block borrows in turn (lend).
-	s.kvl = kvLayout{maxSeq: n, nKV: c.NKVHead, headDim: c.HeadDim, elem: 4}
+	s.kvl = kvLayout{maxSeq: n, nKV: c.NKVHead, headDim: c.HeadDim}
 	s.kv = newKVCacheRange(c, nextCacheID(), 1, s.kvl, nil, align(n, kvKeyTile), s.lo, s.hi)
 	qDim := c.NHead * c.HeadDim
-	s.attnG = s.jit.AttnSetFor(c.HeadDim, c.HeadDim, s.kvl.Stride(), false)
+	s.attnG = s.jit.AttnSetFor(c.HeadDim, c.HeadDim, s.kvl.Stride(), cpu.KVF32)
 	s.attnL = s.attnG
 	// The tiled score kernel, usable only by a bidirectional caller: the
 	// queries arrive as a block against one K. The accumulate stays at two
 	// queries because its accumulator is qt*hd floats and must fit the
 	// register file.
-	v.tiled = s.jit.AttnTiledFor(c.HeadDim, s.kvl.Stride(), qDim, v.attStride, towerQT, false)
+	v.tiled = s.jit.AttnTiledFor(c.HeadDim, s.kvl.Stride(), qDim, v.attStride, towerQT, cpu.KVF32)
 	// The text attention's per-row score rows are not used: an image's rows
 	// attend through visAttend's tiles.
 	s.attStride = attStride(1)

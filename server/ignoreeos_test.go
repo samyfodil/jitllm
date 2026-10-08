@@ -136,6 +136,7 @@ func TestIgnoreEOSRunsToMaxTokensBatched(t *testing.T) {
 	if lm.loop == nil {
 		t.Fatal("a model loaded onto a device has no step loop")
 	}
+	requireWholeOnDevice(t, e, lm)
 	c := serveEngine(t, e)
 	conv, err := lm.m.ChatIDsTools([]model.ChatMessage{{Role: "user", Content: ignoreEOSQuestion}}, nil, true)
 	if err != nil {

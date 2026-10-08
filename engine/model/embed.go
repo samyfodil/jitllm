@@ -7,6 +7,7 @@ import (
 	"github.com/samyfodil/jitllm/engine/nn"
 	"github.com/samyfodil/jitllm/format/jlm"
 	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/samyfodil/jitllm/jit/cpu"
 )
 
 // Embeddings: a sequence in, one L2-normalised vector out.
@@ -83,7 +84,7 @@ func (m *Model) NewEmbedder() (*Embedder, error) {
 		}
 		// f32 k and v at the residual's stride: the encoder's k/v are its
 		// projections, rows of NEmbd, the layout the tower's attention reads.
-		e.jit.AddAttn(c.HeadDim, c.NEmbd, false)
+		e.jit.AddAttn(c.HeadDim, c.NEmbd, cpu.KVF32)
 	}
 	e.ones = make([]float32, c.NEmbd)
 	for i := range e.ones {

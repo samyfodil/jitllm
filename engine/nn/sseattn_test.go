@@ -50,7 +50,7 @@ func TestSSEAttnUnderTheForcedTier(t *testing.T) {
 	for _, f16 := range []bool{false, true} {
 		for _, hd := range []int{64, 128, 256, 12, 17} {
 			before := cpu.MappedByTier()
-			f.AddAttn(hd, hd, f16)
+			f.AddAttn(hd, hd, cpu.KVOf(f16))
 			after := cpu.MappedByTier()
 			if d := after[cpu.TierSSE] - before[cpu.TierSSE]; d != 6 {
 				t.Fatalf("hd=%d f16=%v: AddAttn mapped %d SSE-tier kernels, want 6", hd, f16, d)
@@ -67,8 +67,8 @@ func TestSSEAttnUnderTheForcedTier(t *testing.T) {
 
 	// The tower's tiled scores.
 	const hd, stride, npos, qt = 64, 64, 37, 8
-	f.AddAttn(hd, stride, false)
-	f.AddAttnTiled(hd, stride, stride, npos, qt, false)
+	f.AddAttn(hd, stride, cpu.KVF32)
+	f.AddAttnTiled(hd, stride, stride, npos, qt, cpu.KVF32)
 	if f.AttnTiledQt() != qt {
 		t.Fatalf("AddAttnTiled(qt=%d) on the SSE tier provisioned qt=%d", qt, f.AttnTiledQt())
 	}
