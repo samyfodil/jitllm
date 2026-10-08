@@ -60,6 +60,7 @@ func init() {
 // an earlier caller mapped.
 type elemSet struct {
 	softmax *cpu.Code
+	logSm   *cpu.Code                   // the softmax's log form, for a reply's logprobs
 	actMul  [len(cpu.Gated)]*cpu.Code   // indexed as cpu.Gated
 	act     [len(cpu.Ungated)]*cpu.Code // indexed as cpu.Ungated
 	sigMul  *cpu.Code                   // sigma(gate) * value, for a gated attention output
@@ -146,6 +147,7 @@ func (s *elemSet) init(em *cpu.Emitters) {
 	s.softcap = mustEmit("softcap")(em.Softcap())
 	s.clamp = mustEmit("clamp")(em.Clamp())
 	s.softmax = mustEmit("softmax")(em.Softmax())
+	s.logSm = mustEmit("logsoftmax")(em.LogSoftmax())
 	for i, k := range cpu.Gated {
 		s.actMul[i] = mustEmit("actmul/" + k.String())(em.ActMul(k))
 	}
@@ -203,6 +205,26 @@ func Softmax32JIT(row []float32, n int) {
 		Rows: int64(n % cpu.ElemLanes),
 	}
 	e.softmax.Call(&args)
+}
+
+// LogSoftmax32JIT replaces row[:n] with its log-softmax, x - max -
+// ln(sum exp(x - max)), with generated code, at any n >= 1. Nothing past n is
+// read or written.
+func LogSoftmax32JIT(row []float32, n int) {
+	e := elemFor()
+	if n <= 0 {
+		return
+	}
+	if len(row) < n {
+		lengthPanic("logsoftmax", n, len(row))
+	}
+	args := cpu.Args{
+		Out:  &row[0],
+		Scr:  (*byte)(unsafe.Pointer(&elemConsts[0])),
+		K:    int64(n / cpu.ElemLanes),
+		Rows: int64(n % cpu.ElemLanes),
+	}
+	e.logSm.Call(&args)
 }
 
 // ActMul32JIT computes dst = act(dst) * up with generated code -- for

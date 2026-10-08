@@ -10,6 +10,8 @@
 package server
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -33,6 +35,10 @@ type Config struct {
 	// (default "models", relative to the working directory).
 	ModelDir string
 
+	// BatchDir is where the OpenAI Files and Batch APIs keep their files
+	// (default ".jitllm-batch" under ModelDir).
+	BatchDir string
+
 	// MaxBatchRows bounds how many generates of one device model decode as
 	// rows of one step (batch.go). Zero takes the engine's bound, the widest
 	// step a device runs across sessions; 1 turns batching off, and every
@@ -53,6 +59,15 @@ type Config struct {
 	// DefaultMaxSeq is the KV capacity a session gets when it asks for none.
 	// Zero takes the model's own context length.
 	DefaultMaxSeq int
+
+	// KVF16 is the KV cache width a load that names none gets: true binary16,
+	// false f32, nil the engine's own per-host choice (model.WithKVF16).
+	KVF16 *bool
+
+	// PromptStore is where a session created with PromptCache keeps its
+	// prompt prefixes; nil refuses such a session. jitllmd's -kv-cache is a
+	// model.FileStore.
+	PromptStore model.KVStore
 
 	// Version is reported by GetServerInfo.
 	Version string
@@ -184,6 +199,10 @@ type LoadedModel struct {
 
 	// dev is the tier, shared by every session of this model: the tier owns
 	// the model, a session owns the sequence. nil for a host-only model.
+	// grammars are the structured-output grammars compiled over this
+	// model's tokenizer (grammar.go).
+	grammars grammars
+
 	dev       nn.Device
 	gpu       *tier.GPU
 	closeDev  func()
@@ -222,6 +241,22 @@ type LoadedModel struct {
 
 	tokensGenerated atomic.Int64
 	tokensPrefilled atomic.Int64
+
+	// generates, prefillNanos and decodeNanos are every finished generate's
+	// count and the time it spent in its prefill (the time to its first
+	// token, queueing aside) and its decode: /metrics' summaries.
+	generates    atomic.Int64
+	prefillNanos atomic.Int64
+	decodeNanos  atomic.Int64
+}
+
+// finished records one generate: n tokens decoded, after a prefill of prefill,
+// in decode.
+func (lm *LoadedModel) finished(n int, prefill, decode time.Duration) {
+	lm.tokensGenerated.Add(int64(n))
+	lm.generates.Add(1)
+	lm.prefillNanos.Add(int64(prefill))
+	lm.decodeNanos.Add(int64(decode))
 }
 
 // gateIDs is what a session of this model must hold to run: one gate per
@@ -298,9 +333,10 @@ type LoadOptions struct {
 	DeviceIDs       []string
 	MaxDeviceBlocks int // -1 means "as many as fit"
 	KVF16           *bool
-	// Sessions is how many concurrent sessions every placed block reserves a
-	// history for (tier.Config.Sessions). 0 and 1 are one: a second session
-	// then gets what the first left over, and on a full card that is the host.
+	// Sessions is how many concurrent sessions every placed linear block
+	// reserves a recurrent pair for (tier.Config.Sessions); attention history
+	// is paged and reserves nothing. 0 and 1 are one: a second session then
+	// gets what the first left over, and on a full card that is the host.
 	Sessions int
 
 	// tierConfig adjusts the tier after Sessions is set. Tests use it to put
@@ -421,8 +457,8 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 	}
 
 	opts := []model.Option{model.WithPageBudget(hostBudget), model.WithPreload(preloadDepth)}
-	if o.KVF16 != nil {
-		opts = append(opts, model.WithKVF16(*o.KVF16))
+	if kv := cmp.Or(o.KVF16, e.cfg.KVF16); kv != nil {
+		opts = append(opts, model.WithKVF16(*kv))
 	}
 	m, err := model.Open(path, opts...)
 	if err != nil {
@@ -613,6 +649,12 @@ type Session struct {
 	created  time.Time
 	// cached is a session with a prompt store: it prefills through it, alone.
 	cached bool
+	// spec is the session's speculation for generates that carry none, and
+	// specRan a generate that stopped inside a speculative round: the model
+	// ran rows past the last token the reply kept, so the session cannot be
+	// continued (under mu).
+	spec    Speculation
+	specRan bool
 
 	lastUsed  atomic.Int64
 	generated atomic.Int64
@@ -633,6 +675,10 @@ type Session struct {
 	// snapBatched is whether a generate here would decode as a row of the
 	// model's step loop (Engine.joins), as of the snapshot.
 	snapBatched atomic.Bool
+	// snapSeam and snapSeamSettled are State.SeamTuned as of the snapshot:
+	// the tuner is written by Forward, so TuneSeam reports these.
+	snapSeam        atomic.Int32
+	snapSeamSettled atomic.Bool
 
 	cancelMu sync.Mutex
 	cancel   context.CancelFunc
@@ -666,12 +712,54 @@ type SessionOptions struct {
 	// store prefills alone rather than as a row of the step loop.
 	KVStore  model.KVStore
 	CacheKey string
+	// Speculation is the default for generates that carry none.
+	Speculation Speculation
+	// PromptCache keeps the prompt prefixes in Config.PromptStore: the wire's
+	// form of KVStore, refused when the server has no store.
+	PromptCache bool
+}
+
+// Speculation is speculative decoding for a generate (model.Speculator):
+// drafts verified in one pass of the model, by the model's own prediction
+// block where it carries one and by prompt lookup otherwise. Greedy output is
+// plain greedy decode's token for token; with prompt lookup a sampled
+// generate drafts nothing. A generate that continues its session decodes
+// plainly, since a Speculator starts on an empty sequence, and so does one
+// whose prompt has spans; a speculative generate prefills alone, outside the
+// step loop and the session's prompt store.
+type Speculation struct {
+	Enabled bool
+	// Draft is the tokens drafted a round; zero is the engine's choice.
+	Draft int
+}
+
+// check refuses the options no session can be made from, as ErrInvalid.
+func (o *SessionOptions) check(store model.KVStore) error {
+	switch {
+	case o.MaxSeq < 0:
+		return fmt.Errorf("%w: max_seq %d is negative", ErrInvalid, o.MaxSeq)
+	case o.MaxDeviceBlocks < -1:
+		return fmt.Errorf("%w: max_device_blocks %d: want -1 (as many as fit) or more", ErrInvalid, o.MaxDeviceBlocks)
+	case o.Relocate && o.KeepOffHost:
+		return fmt.Errorf("%w: relocate_while_serving and keep_off_host contradict each other", ErrInvalid)
+	case o.PromptCache && o.KVStore == nil && store == nil:
+		return fmt.Errorf("%w: prompt_cache needs a prompt store, and this server has none (jitllmd serve -kv-cache DIR)", ErrInvalid)
+	case o.CacheKey != "" && !o.PromptCache && o.KVStore == nil:
+		return fmt.Errorf("%w: cache_key names what a prompt store shares; set prompt_cache", ErrInvalid)
+	}
+	return nil
 }
 
 // CreateSession builds a model.State and offers its blocks to the model's
 // tier. The tier's Attach gives this State its own device session, which is
 // what makes two sessions on one card correct -- see tier.GPU.Attach.
 func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
+	if err := o.check(e.cfg.PromptStore); err != nil {
+		return nil, err
+	}
+	if o.PromptCache && o.KVStore == nil {
+		o.KVStore = e.cfg.PromptStore
+	}
 	lm, err := e.Model(o.ModelID)
 	if err != nil {
 		return nil, err
@@ -735,6 +823,7 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 		sampling: o.Sampling,
 		created:  time.Now(),
 		cached:   o.KVStore != nil,
+		spec:     o.Speculation,
 	}
 	s.lastUsed.Store(time.Now().UnixMilli())
 	s.mu.Lock()
@@ -782,6 +871,9 @@ func (s *Session) refresh() {
 	s.snapDevBlocks.Store(int32(s.st.GPULayers()))
 	s.snapAt.Store(time.Now().UnixMilli())
 	s.snapBatched.Store(s.lm.loop != nil && s.st.Steppable())
+	blocks, settled := s.st.SeamTuned()
+	s.snapSeam.Store(int32(blocks))
+	s.snapSeamSettled.Store(settled)
 	s.snapPlacement.Store(&placementSnapshot{
 		runs:        s.st.DeviceBlocks(),
 		declines:    s.st.DeviceDeclines(),
@@ -924,6 +1016,28 @@ type GenerateOptions struct {
 	// MaxTokens: the token is emitted and fed like any other (vLLM's
 	// ignore_eos). Stop strings still end the generate.
 	IgnoreEOS bool
+	// Speculation overrides the session's; nil takes it.
+	Speculation *Speculation
+	// Grammar constrains the output to GBNF text (grammar.go): every
+	// sampled token keeps it inside the grammar, and the reply ends where the
+	// grammar does. A constrained generate decodes alone, plainly: not as a
+	// row of the step loop, and not speculatively.
+	Grammar string
+	// maskSkip, set by a gate, leaves the grammar's mask off at that step
+	// (counting from 1) and the output free after it: the break the
+	// structured-output gates must see.
+	maskSkip int
+	// Logprobs puts each sampled token's log-probability on its Token event,
+	// with the TopLogprobs (0..model.MaxTopLogprobs) most likely alternatives.
+	// They are the model's raw distribution, before temperature and penalties
+	// (model.Logprobs).
+	Logprobs    bool
+	TopLogprobs int
+	// Seeds, when it holds more than one, asks for that many continuations
+	// of one prompt (OpenAI's n): choice i samples with Seeds[i] and its
+	// events carry Event.Choice = i. The prompt is prefilled once; every
+	// other choice restores its pages and its logits (generateN).
+	Seeds []int64
 }
 
 // EventKind discriminates Event.
@@ -955,6 +1069,10 @@ type Started struct {
 	// Batched is set when the generate decodes as a row of its model's step
 	// loop (batch.go) rather than alone on its gates.
 	Batched bool
+	// Restored is how many of the prompt's positions came out of a prompt
+	// store rather than being computed: all of them for every choice of an
+	// n > 1 request but the first.
+	Restored int
 }
 
 // Token is one step of the output. Every sampled token is sent, its Text
@@ -964,6 +1082,51 @@ type Token struct {
 	ID    int32
 	Text  string
 	Index int
+	// Logprob is set on a sampled token when the request asked for logprobs.
+	Logprob *TokenLogprob
+}
+
+// TokenLogprob is a sampled token's log-probability and the most likely
+// alternatives at its step, most likely first. Text is the token alone,
+// decoded on its own: its bytes, which may be part of a rune.
+type TokenLogprob struct {
+	Text    string
+	Logprob float32
+	Top     []TopToken
+}
+
+// TopToken is one alternative at a step.
+type TopToken struct {
+	ID      int32
+	Text    string
+	Logprob float32
+}
+
+// newLogprobs is a generate's logprobs working set, nil when it asked for none.
+func newLogprobs(o GenerateOptions) *model.Logprobs {
+	if !o.Logprobs {
+		return nil
+	}
+	return &model.Logprobs{N: o.TopLogprobs}
+}
+
+// tokenDecoder is what takeLogprob reads a token's text through.
+type tokenDecoder interface {
+	Decode(ids []int32) string
+}
+
+// takeLogprob is the event's copy of one step's logprobs: the working set is
+// reused next step, so the event owns its own slice.
+func takeLogprob(l *model.Logprobs, v tokenDecoder, logits []float32, next int32) *TokenLogprob {
+	if l == nil {
+		return nil
+	}
+	out := &TokenLogprob{Text: v.Decode([]int32{next}), Logprob: l.Take(logits, next)}
+	out.Top = make([]TopToken, len(l.Top))
+	for i, t := range l.Top {
+		out.Top[i] = TopToken{ID: t.ID, Text: v.Decode([]int32{t.ID}), Logprob: t.Logprob}
+	}
+	return out
 }
 
 // FinishReason mirrors the proto enum.
@@ -998,6 +1161,9 @@ type Finished struct {
 // Event is one message of a generate's stream: Kind says which of Started,
 // Token and Finished is set.
 type Event struct {
+	// Choice is the continuation an event belongs to, 0 unless the request
+	// asked for several (GenerateOptions.Seeds).
+	Choice   int
 	Kind     EventKind
 	Started  *Started
 	Token    *Token
@@ -1021,6 +1187,17 @@ func tokenLimit(asked, room int) int {
 // request queued -- for a gate, or for a row of its model's step loop -- and
 // how many were ahead, so a caller does not mistake a queue for a slow model.
 func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Event) error) (err error) {
+	if len(o.Seeds) > 1 {
+		return e.generateN(ctx, o, emit)
+	}
+	if len(o.Seeds) == 1 {
+		if o.Sampling == nil {
+			return fmt.Errorf("%w: a seed with no sampler", ErrInvalid)
+		}
+		sm := *o.Sampling
+		sm.Seed = o.Seeds[0]
+		o.Sampling = &sm
+	}
 	s, ephemeral, err := e.resolveSession(o)
 	if err != nil {
 		return err
@@ -1079,7 +1256,34 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	if err := e.admit(s, len(ids)+tokenLimit(o.MaxTokens, s.st.MaxSeq()-s.st.Pos()-len(ids))); err != nil {
 		return err
 	}
-	if lp := e.joins(s); lp != nil && !spans && !s.cached {
+	spec := s.spec
+	if o.Speculation != nil {
+		spec = *o.Speculation
+	}
+	speculate := spec.Enabled && !spans && !o.Continue
+	if speculate && o.Logprobs {
+		return fmt.Errorf("%w: speculation with logprobs is not built: a round decides several tokens "+
+			"from one verification and reads back no distribution for each", ErrInvalid)
+	}
+	var con *constraint
+	if o.Grammar != "" {
+		if o.IgnoreEOS {
+			return fmt.Errorf("%w: a grammar ends its reply with an end-of-generation token, and ignore_eos "+
+				"would run past it", ErrInvalid)
+		}
+		m, err := lm.matcher(o.Grammar)
+		if err != nil {
+			return err
+		}
+		con = &constraint{m: m, st: m.Start()}
+		speculate = false
+	}
+	if o.Continue && s.specRan {
+		return fmt.Errorf("%w: session %q stopped inside a speculative round, and its model ran past the "+
+			"reply; it cannot be continued -- generate without continue_session", ErrInvalid, s.id)
+	}
+
+	if lp := e.joins(s); lp != nil && !spans && !s.cached && !speculate && con == nil {
 		return e.generateBatched(ctx, lp, s, o, ids, ephemeral, emit)
 	}
 
@@ -1096,11 +1300,28 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	// ---- prefill.
 	if !o.Continue {
 		s.st.Reset()
+		s.specRan = false
+	}
+	sampler := s.sampling
+	if o.Sampling != nil {
+		sampler = *o.Sampling
 	}
 	prefillStart := time.Now()
 	var logits []float32
+	var sp *model.Speculator
+	var first int32
 	prompted := len(ids)
 	switch {
+	case speculate:
+		opts := []model.SpecOption{model.WithSpecDraft(spec.Draft)}
+		if !o.IgnoreEOS {
+			opts = append(opts, model.WithSpecStop(lm.m.Vocab.IsEOG))
+		}
+		if sp, err = s.st.Speculate(opts...); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
+		defer sp.Close()
+		first, err = sp.Start(ids, &sampler)
 	case spans:
 		prompted = model.SpanPositions(o.Prompt.Spans, lm.m.Cfg.NEmbd)
 		logits, err = s.st.PrefillCachedMixed(o.Prompt.Spans...)
@@ -1111,6 +1332,10 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	}
 	if err != nil {
 		return err
+	}
+	restored := 0
+	if s.cached {
+		restored = s.st.KVRestored()
 	}
 	s.prefilled.Add(int64(prompted))
 	lm.tokensPrefilled.Add(int64(prompted))
@@ -1129,6 +1354,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		DeviceIDs:    lm.deviceIDs,
 		Prefill:      prefill,
 		Execution:    ExecutionParallel,
+		Restored:     restored,
 	}}); err != nil {
 		return err
 	}
@@ -1142,33 +1368,66 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	}
 
 	// ---- decode.
-	sampler := s.sampling
-	if o.Sampling != nil {
-		sampler = *o.Sampling
-	}
 	maxTokens := tokenLimit(o.MaxTokens, s.st.MaxSeq()-s.st.Pos())
 
-	st := newStreamText(lm.m.Vocab, o.Stop)
+	st := newStreamText(lm.m.Vocab.NewChatStream().Next, o.Stop)
 	reason := FinishMaxTokens
 	stopMatched := ""
 	out := make([]int32, 0, min(maxTokens, 4096))
 	decodeStart := time.Now()
 	n := 0
+	// pend is what a speculative round decided and the reply has not taken
+	// yet; the first is Start's.
+	var pend []int32
+	if sp != nil {
+		pend = []int32{first}
+	}
 
+	lpw := newLogprobs(o)
 	// pending is the token ForwardSample already drew, -1 when the next one
-	// is drawn from logits: no logit is wanted after the prompt, so a device
-	// holding the head selects the candidates and only they come home.
+	// is drawn from logits. Only a reply that wants no row after the prompt
+	// takes it -- no grammar mask and no logprobs, both of which read the
+	// host's logits -- so a device holding the head selects the candidates
+	// and only they come home.
 	pending := int32(-1)
 	for ; n < maxTokens; n++ {
 		if ctx.Err() != nil {
 			reason = FinishCancelled
 			break
 		}
-		next := pending
-		if next < 0 {
-			next = sampler.Sample(logits)
+		var next int32
+		var tlp *TokenLogprob
+		switch {
+		case sp == nil && pending >= 0:
+			next = pending
+			sampler.Observe(next)
+		case sp == nil:
+			lg := logits
+			if con != nil && n+1 != o.maskSkip {
+				lg = con.mask(logits)
+			}
+			next = sampler.Sample(lg)
+			sampler.Observe(next)
+			// The model's raw distribution, before the grammar's mask, as
+			// before temperature and penalties: vLLM's default
+			// (raw_logprobs).
+			tlp = takeLogprob(lpw, lm.m.Vocab, logits, next)
+			if con != nil && !con.accept(next) {
+				if n+1 != o.maskSkip {
+					return fmt.Errorf("server: token %d is outside the grammar its mask allowed", next)
+				}
+				con = nil // the gate's break: the reply leaves its grammar
+			}
+		case len(pend) == 0:
+			// Every token a round returns is observed into the sampler.
+			sp.Limit(maxTokens - n)
+			if pend, err = sp.Next(&sampler); err != nil {
+				return err
+			}
 		}
-		sampler.Observe(next)
+		if sp != nil {
+			next, pend = pend[0], pend[1:]
+		}
 		if !o.IgnoreEOS && lm.m.Vocab.IsEOG(next) {
 			reason = FinishEOS
 			break
@@ -1179,7 +1438,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		// or a possible stop string's start): a client counting ids must see
 		// all of them, as GenerateToken says.
 		chunk, hit, match := st.push(out)
-		if err := emit(Event{Kind: EventToken, Token: &Token{ID: next, Text: chunk, Index: n}}); err != nil {
+		if err := emit(Event{Kind: EventToken, Token: &Token{ID: next, Text: chunk, Index: n, Logprob: tlp}}); err != nil {
 			return err
 		}
 		if hit {
@@ -1187,10 +1446,24 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 			n++
 			break
 		}
-		if pending, err = s.st.ForwardSample(next, &sampler); err != nil {
+		if sp != nil {
+			continue
+		}
+		if con == nil && !o.Logprobs {
+			if pending, err = s.st.ForwardSample(next, &sampler); err != nil {
+				return err
+			}
+			continue
+		}
+		pending = -1
+		if logits, err = s.st.Forward(next); err != nil {
 			return err
 		}
 	}
+	// A round's last token is decided and not yet run, as plain decode's
+	// last sample is; a reply that ended before the round's end leaves rows
+	// in the model that it did not keep.
+	s.specRan = len(pend) > 0
 	if reason == FinishMaxTokens || reason == FinishEOS || reason == FinishCancelled {
 		// Flush whatever was being held back for a stop string that never came.
 		if tail := st.flush(); tail != "" {
@@ -1201,7 +1474,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	}
 	decode := time.Since(decodeStart)
 	s.generated.Add(int64(n))
-	lm.tokensGenerated.Add(int64(n))
+	lm.finished(n, prefill, decode)
 	s.lastUsed.Store(time.Now().UnixMilli())
 	s.refresh()
 	// The history grew by what this generate committed.
@@ -1223,6 +1496,70 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		BytesPerToken: lm.m.BytesPerToken(),
 		Position:      s.st.Pos(),
 	}})
+}
+
+// generateN is Generate for several continuations of one prompt (OpenAI's
+// n). The prompt is prefilled once: every choice runs on a fresh session of
+// the model sharing one request-scoped prompt store under one namespace, so
+// the first choice's prefill seals the prompt's pages and its final logits
+// into it and every later choice restores them (State.PrefillCached) and
+// computes no prompt position -- the prefix cache's own path, which is how
+// the engine forks a sequence. Started.Restored reports it per choice.
+//
+// The choices run one after another, each alone on the model's gates: a
+// State owns a pool, and n of them at once on the same cores is the worst
+// configuration the engine has. Each samples with its own seed and its events
+// carry its index.
+func (e *Engine) generateN(ctx context.Context, o GenerateOptions, emit func(Event) error) error {
+	if o.SessionID != "" || o.Continue {
+		return fmt.Errorf("%w: several choices run on fresh sessions of a model; "+
+			"a named session or continue_session takes one", ErrInvalid)
+	}
+	if o.Prompt.Kind == PromptSpans {
+		return fmt.Errorf("%w: several choices of a span prompt are not built", ErrInvalid)
+	}
+	if o.Speculation != nil && o.Speculation.Enabled {
+		return fmt.Errorf("%w: speculation with several choices is not built: the choices prefill "+
+			"through a shared prompt store, which a Speculator does not use", ErrInvalid)
+	}
+	lm, err := e.Model(o.ModelID)
+	if err != nil {
+		return err
+	}
+	store := model.NewMemStore()
+	ns := "n/" + lm.id + "/" + e.nextID("fork")
+	for i, seed := range o.Seeds {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		s, err := e.CreateSession(SessionOptions{ModelID: o.ModelID, KVStore: store, CacheKey: ns})
+		if err != nil {
+			return err
+		}
+		oi := o
+		oi.Seeds = nil
+		oi.ModelID, oi.SessionID = "", s.id
+		sm := s.sampling
+		if o.Sampling != nil {
+			sm = *o.Sampling
+		}
+		sm.Seed = seed
+		oi.Sampling = &sm
+		err = e.Generate(ctx, oi, func(ev Event) error {
+			ev.Choice = i
+			if ev.Started != nil {
+				st := *ev.Started
+				st.Ephemeral = true
+				ev.Started = &st
+			}
+			return emit(ev)
+		})
+		e.CloseSession(s.id)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // resolveSession returns the named session, or creates an ephemeral one for a
@@ -1282,28 +1619,27 @@ func (e *Engine) encode(lm *LoadedModel, p Prompt) ([]int32, error) {
 // streamText turns a growing token id list into incremental text, and applies
 // stop strings.
 //
-// Neither tokenizer decodes per token (a BPE token can split a rune, SPM's
-// leading space depends on position), so each step re-decodes the whole id
-// list and diffs the prefix. DecodeChat, not Decode, so a harmony vocabulary
+// Each new id is decoded once, through tok.ChatStream, whose pieces
+// concatenate to DecodeChat of the whole list at every prefix -- so the text
+// is what re-decoding the whole list would give, at a cost per token that does
+// not grow with the completion. DecodeChat, not Decode, so a harmony vocabulary
 // does not leave role and channel headers glued to the text.
 //
 // The tail is held back so the start of a stop string never reaches the
 // client before the match completes; the window is one byte short of the
 // longest stop string.
 type streamText struct {
-	vocab   vocabDecoder
+	next    func(id int32) string
 	stops   []string
 	hold    int
-	decoded string
+	n       int // ids decoded so far
+	decoded []byte
 	emitted int
 }
 
-type vocabDecoder interface {
-	DecodeChat(ids []int32) string
-	Decode(ids []int32) string
-}
-
-func newStreamText(v vocabDecoder, stops []string) *streamText {
+// newStreamText streams through next, one id's text at a time: a
+// tok.ChatStream's Next for a model's vocabulary.
+func newStreamText(next func(id int32) string, stops []string) *streamText {
 	hold := 0
 	for _, s := range stops {
 		if len(s) > hold {
@@ -1313,26 +1649,34 @@ func newStreamText(v vocabDecoder, stops []string) *streamText {
 	if hold > 0 {
 		hold--
 	}
-	return &streamText{vocab: v, stops: stops, hold: hold}
+	return &streamText{next: next, stops: stops, hold: hold}
 }
 
 // push takes the full id list so far and returns the text safe to emit now,
-// whether a stop string matched, and which one.
+// whether a stop string matched, and which one. Only the ids past the last
+// push are decoded.
 func (t *streamText) push(ids []int32) (chunk string, stopped bool, match string) {
-	t.decoded = t.vocab.DecodeChat(ids)
+	before := len(t.decoded)
+	for _, id := range ids[t.n:] {
+		t.decoded = append(t.decoded, t.next(id)...)
+	}
+	t.n = len(ids)
 
-	// A stop string is matched against the text generated SINCE the emit
-	// pointer started, i.e. the whole completion, because a stop may straddle
-	// any number of tokens.
+	// A stop string is matched against the whole completion, because a stop
+	// may straddle any number of tokens. The text before this push held no
+	// match, so a new one ends in the new bytes and starts no earlier than
+	// len(s)-1 before them: only that window is searched.
 	for _, s := range t.stops {
 		if s == "" {
 			continue
 		}
-		if i := strings.Index(t.decoded, s); i >= 0 {
+		from := max(0, before-len(s)+1)
+		if i := bytes.Index(t.decoded[from:], []byte(s)); i >= 0 {
+			i += from
 			// Emit up to the stop and no further. The stop string itself is
 			// never part of the completion.
 			if i > t.emitted {
-				chunk = t.decoded[t.emitted:i]
+				chunk = string(t.decoded[t.emitted:i])
 			}
 			t.emitted = len(t.decoded)
 			return truncPartialRune(chunk), true, s
@@ -1343,7 +1687,7 @@ func (t *streamText) push(ids []int32) (chunk string, stopped bool, match string
 	if safe <= t.emitted {
 		return "", false, ""
 	}
-	chunk = truncPartialRune(t.decoded[t.emitted:safe])
+	chunk = truncPartialRune(string(t.decoded[t.emitted:safe]))
 	t.emitted += len(chunk)
 	return chunk, false, ""
 }
@@ -1353,7 +1697,7 @@ func (t *streamText) flush() string {
 	if len(t.decoded) <= t.emitted {
 		return ""
 	}
-	chunk := t.decoded[t.emitted:]
+	chunk := string(t.decoded[t.emitted:])
 	t.emitted = len(t.decoded)
 	return chunk
 }

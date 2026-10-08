@@ -269,7 +269,17 @@ type GenerateRequest struct {
 	// does (llama-server's bans the token from sampling instead). Stop strings
 	// still end the generate. For a run whose length must be fixed, such as a
 	// benchmark.
-	IgnoreEos     bool `protobuf:"varint,10,opt,name=ignore_eos,json=ignoreEos,proto3" json:"ignore_eos,omitempty"`
+	IgnoreEos bool `protobuf:"varint,10,opt,name=ignore_eos,json=ignoreEos,proto3" json:"ignore_eos,omitempty"`
+	// Speculative decoding for this generate; unset takes the session's.
+	Speculation *SpeculationParams `protobuf:"bytes,30,opt,name=speculation,proto3" json:"speculation,omitempty"`
+	// Structured output: the reply is a sentence of this GBNF grammar
+	// (llama.cpp's format, root rule `root`), and ends where it does. A
+	// constrained generate runs alone and without speculation.
+	Grammar string `protobuf:"bytes,31,opt,name=grammar,proto3" json:"grammar,omitempty"`
+	// Structured output by JSON Schema, compiled to a grammar: the subset
+	// llama.cpp's json-schema-to-grammar builds, anything else refused by
+	// name. Not with `grammar`.
+	JsonSchema    string `protobuf:"bytes,32,opt,name=json_schema,json=jsonSchema,proto3" json:"json_schema,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -372,6 +382,27 @@ func (x *GenerateRequest) GetIgnoreEos() bool {
 		return x.IgnoreEos
 	}
 	return false
+}
+
+func (x *GenerateRequest) GetSpeculation() *SpeculationParams {
+	if x != nil {
+		return x.Speculation
+	}
+	return nil
+}
+
+func (x *GenerateRequest) GetGrammar() string {
+	if x != nil {
+		return x.Grammar
+	}
+	return ""
+}
+
+func (x *GenerateRequest) GetJsonSchema() string {
+	if x != nil {
+		return x.JsonSchema
+	}
+	return ""
 }
 
 // GenerateResponse is one event. The oneof is deliberate: a token stream that
@@ -1286,7 +1317,7 @@ const file_jitllm_v1_inference_proto_rawDesc = "" +
 	"\x06system\x18\x02 \x01(\tH\x00R\x06system\x88\x01\x01\x122\n" +
 	"\x15add_generation_prompt\x18\x03 \x01(\bR\x13addGenerationPrompt\x12#\n" +
 	"\rtemplate_name\x18\x04 \x01(\tR\ftemplateNameB\t\n" +
-	"\a_system\"\x82\x03\n" +
+	"\a_system\"\xfd\x03\n" +
 	"\x0fGenerateRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x19\n" +
@@ -1302,7 +1333,11 @@ const file_jitllm_v1_inference_proto_rawDesc = "" +
 	"\x14queue_timeout_millis\x18\t \x01(\x05R\x12queueTimeoutMillis\x12\x1d\n" +
 	"\n" +
 	"ignore_eos\x18\n" +
-	" \x01(\bR\tignoreEos\"\xc0\x01\n" +
+	" \x01(\bR\tignoreEos\x12>\n" +
+	"\vspeculation\x18\x1e \x01(\v2\x1c.jitllm.v1.SpeculationParamsR\vspeculation\x12\x18\n" +
+	"\agrammar\x18\x1f \x01(\tR\agrammar\x12\x1f\n" +
+	"\vjson_schema\x18  \x01(\tR\n" +
+	"jsonSchema\"\xc0\x01\n" +
 	"\x10GenerateResponse\x126\n" +
 	"\astarted\x18\x01 \x01(\v2\x1a.jitllm.v1.GenerateStartedH\x00R\astarted\x120\n" +
 	"\x05token\x18\x02 \x01(\v2\x18.jitllm.v1.GenerateTokenH\x00R\x05token\x129\n" +
@@ -1398,24 +1433,25 @@ func file_jitllm_v1_inference_proto_rawDescGZIP() []byte {
 
 var file_jitllm_v1_inference_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_jitllm_v1_inference_proto_goTypes = []any{
-	(*PromptInput)(nil),      // 0: jitllm.v1.PromptInput
-	(*TokenIDs)(nil),         // 1: jitllm.v1.TokenIDs
-	(*ChatPrompt)(nil),       // 2: jitllm.v1.ChatPrompt
-	(*GenerateRequest)(nil),  // 3: jitllm.v1.GenerateRequest
-	(*GenerateResponse)(nil), // 4: jitllm.v1.GenerateResponse
-	(*GenerateStarted)(nil),  // 5: jitllm.v1.GenerateStarted
-	(*GenerateToken)(nil),    // 6: jitllm.v1.GenerateToken
-	(*GenerateFinished)(nil), // 7: jitllm.v1.GenerateFinished
-	(*CompleteResponse)(nil), // 8: jitllm.v1.CompleteResponse
-	(*CancelRequest)(nil),    // 9: jitllm.v1.CancelRequest
-	(*CancelResponse)(nil),   // 10: jitllm.v1.CancelResponse
-	(*EmbedInput)(nil),       // 11: jitllm.v1.EmbedInput
-	(*EmbedRequest)(nil),     // 12: jitllm.v1.EmbedRequest
-	(*Embedding)(nil),        // 13: jitllm.v1.Embedding
-	(*EmbedResponse)(nil),    // 14: jitllm.v1.EmbedResponse
-	(*ChatMessage)(nil),      // 15: jitllm.v1.ChatMessage
-	(*SamplingParams)(nil),   // 16: jitllm.v1.SamplingParams
-	(FinishReason)(0),        // 17: jitllm.v1.FinishReason
+	(*PromptInput)(nil),       // 0: jitllm.v1.PromptInput
+	(*TokenIDs)(nil),          // 1: jitllm.v1.TokenIDs
+	(*ChatPrompt)(nil),        // 2: jitllm.v1.ChatPrompt
+	(*GenerateRequest)(nil),   // 3: jitllm.v1.GenerateRequest
+	(*GenerateResponse)(nil),  // 4: jitllm.v1.GenerateResponse
+	(*GenerateStarted)(nil),   // 5: jitllm.v1.GenerateStarted
+	(*GenerateToken)(nil),     // 6: jitllm.v1.GenerateToken
+	(*GenerateFinished)(nil),  // 7: jitllm.v1.GenerateFinished
+	(*CompleteResponse)(nil),  // 8: jitllm.v1.CompleteResponse
+	(*CancelRequest)(nil),     // 9: jitllm.v1.CancelRequest
+	(*CancelResponse)(nil),    // 10: jitllm.v1.CancelResponse
+	(*EmbedInput)(nil),        // 11: jitllm.v1.EmbedInput
+	(*EmbedRequest)(nil),      // 12: jitllm.v1.EmbedRequest
+	(*Embedding)(nil),         // 13: jitllm.v1.Embedding
+	(*EmbedResponse)(nil),     // 14: jitllm.v1.EmbedResponse
+	(*ChatMessage)(nil),       // 15: jitllm.v1.ChatMessage
+	(*SamplingParams)(nil),    // 16: jitllm.v1.SamplingParams
+	(*SpeculationParams)(nil), // 17: jitllm.v1.SpeculationParams
+	(FinishReason)(0),         // 18: jitllm.v1.FinishReason
 }
 var file_jitllm_v1_inference_proto_depIdxs = []int32{
 	1,  // 0: jitllm.v1.PromptInput.token_ids:type_name -> jitllm.v1.TokenIDs
@@ -1423,28 +1459,29 @@ var file_jitllm_v1_inference_proto_depIdxs = []int32{
 	15, // 2: jitllm.v1.ChatPrompt.messages:type_name -> jitllm.v1.ChatMessage
 	0,  // 3: jitllm.v1.GenerateRequest.prompt:type_name -> jitllm.v1.PromptInput
 	16, // 4: jitllm.v1.GenerateRequest.sampling:type_name -> jitllm.v1.SamplingParams
-	5,  // 5: jitllm.v1.GenerateResponse.started:type_name -> jitllm.v1.GenerateStarted
-	6,  // 6: jitllm.v1.GenerateResponse.token:type_name -> jitllm.v1.GenerateToken
-	7,  // 7: jitllm.v1.GenerateResponse.finished:type_name -> jitllm.v1.GenerateFinished
-	17, // 8: jitllm.v1.GenerateFinished.reason:type_name -> jitllm.v1.FinishReason
-	5,  // 9: jitllm.v1.CompleteResponse.started:type_name -> jitllm.v1.GenerateStarted
-	7,  // 10: jitllm.v1.CompleteResponse.finished:type_name -> jitllm.v1.GenerateFinished
-	1,  // 11: jitllm.v1.EmbedInput.token_ids:type_name -> jitllm.v1.TokenIDs
-	11, // 12: jitllm.v1.EmbedRequest.inputs:type_name -> jitllm.v1.EmbedInput
-	13, // 13: jitllm.v1.EmbedResponse.embeddings:type_name -> jitllm.v1.Embedding
-	3,  // 14: jitllm.v1.InferenceService.Generate:input_type -> jitllm.v1.GenerateRequest
-	3,  // 15: jitllm.v1.InferenceService.Complete:input_type -> jitllm.v1.GenerateRequest
-	9,  // 16: jitllm.v1.InferenceService.Cancel:input_type -> jitllm.v1.CancelRequest
-	12, // 17: jitllm.v1.InferenceService.Embed:input_type -> jitllm.v1.EmbedRequest
-	4,  // 18: jitllm.v1.InferenceService.Generate:output_type -> jitllm.v1.GenerateResponse
-	8,  // 19: jitllm.v1.InferenceService.Complete:output_type -> jitllm.v1.CompleteResponse
-	10, // 20: jitllm.v1.InferenceService.Cancel:output_type -> jitllm.v1.CancelResponse
-	14, // 21: jitllm.v1.InferenceService.Embed:output_type -> jitllm.v1.EmbedResponse
-	18, // [18:22] is the sub-list for method output_type
-	14, // [14:18] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	17, // 5: jitllm.v1.GenerateRequest.speculation:type_name -> jitllm.v1.SpeculationParams
+	5,  // 6: jitllm.v1.GenerateResponse.started:type_name -> jitllm.v1.GenerateStarted
+	6,  // 7: jitllm.v1.GenerateResponse.token:type_name -> jitllm.v1.GenerateToken
+	7,  // 8: jitllm.v1.GenerateResponse.finished:type_name -> jitllm.v1.GenerateFinished
+	18, // 9: jitllm.v1.GenerateFinished.reason:type_name -> jitllm.v1.FinishReason
+	5,  // 10: jitllm.v1.CompleteResponse.started:type_name -> jitllm.v1.GenerateStarted
+	7,  // 11: jitllm.v1.CompleteResponse.finished:type_name -> jitllm.v1.GenerateFinished
+	1,  // 12: jitllm.v1.EmbedInput.token_ids:type_name -> jitllm.v1.TokenIDs
+	11, // 13: jitllm.v1.EmbedRequest.inputs:type_name -> jitllm.v1.EmbedInput
+	13, // 14: jitllm.v1.EmbedResponse.embeddings:type_name -> jitllm.v1.Embedding
+	3,  // 15: jitllm.v1.InferenceService.Generate:input_type -> jitllm.v1.GenerateRequest
+	3,  // 16: jitllm.v1.InferenceService.Complete:input_type -> jitllm.v1.GenerateRequest
+	9,  // 17: jitllm.v1.InferenceService.Cancel:input_type -> jitllm.v1.CancelRequest
+	12, // 18: jitllm.v1.InferenceService.Embed:input_type -> jitllm.v1.EmbedRequest
+	4,  // 19: jitllm.v1.InferenceService.Generate:output_type -> jitllm.v1.GenerateResponse
+	8,  // 20: jitllm.v1.InferenceService.Complete:output_type -> jitllm.v1.CompleteResponse
+	10, // 21: jitllm.v1.InferenceService.Cancel:output_type -> jitllm.v1.CancelResponse
+	14, // 22: jitllm.v1.InferenceService.Embed:output_type -> jitllm.v1.EmbedResponse
+	19, // [19:23] is the sub-list for method output_type
+	15, // [15:19] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_jitllm_v1_inference_proto_init() }

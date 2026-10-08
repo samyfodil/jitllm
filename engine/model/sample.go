@@ -3,6 +3,7 @@ package model
 import (
 	"math"
 	"math/rand"
+	"slices"
 
 	"github.com/samyfodil/jitllm/engine/nn"
 )
@@ -131,8 +132,11 @@ func (s *Sampler) Sample(logits []float32) int32 {
 	}
 	have := 0
 	for {
-		s.ids = grow32i(s.ids, want)
-		s.p = grow32(s.p, want)
+		// The candidates already taken stay: a round grows the list, and a
+		// buffer reallocated here once lost them, so the first draw a Sampler
+		// made past its first round walked zeros.
+		s.ids = slices.Grow(s.ids[:have], want-have)[:want]
+		s.p = slices.Grow(s.p[:have], want-have)[:want]
 		for have < want {
 			v, id, ok := s.ord.Next()
 			if !ok {

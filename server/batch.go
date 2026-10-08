@@ -126,6 +126,7 @@ type row struct {
 	echo      bool
 	ephemeral bool
 	sampler   model.Sampler
+	logprobs  *model.Logprobs // nil unless the request asked for logprobs
 	maxTokens int
 	ignoreEOS bool
 	stream    *streamText
@@ -415,13 +416,14 @@ func (lp *stepLoop) decodeUnits() []unit {
 		}
 		next := r.sampler.Sample(r.logits)
 		r.sampler.Observe(next)
+		tlp := takeLogprob(r.logprobs, vocab, r.logits, next)
 		if !r.ignoreEOS && vocab.IsEOG(next) {
 			lp.finish(r, FinishEOS, "", nil)
 			continue
 		}
 		r.out = append(r.out, next)
 		chunk, hit, match := r.stream.push(r.out)
-		r.push(Event{Kind: EventToken, Token: &Token{ID: next, Text: chunk, Index: r.n}})
+		r.push(Event{Kind: EventToken, Token: &Token{ID: next, Text: chunk, Index: r.n, Logprob: tlp}})
 		if hit {
 			r.n++
 			lp.finish(r, FinishStop, match, nil)
@@ -636,9 +638,10 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 		echo:      o.Echo,
 		ephemeral: ephemeral,
 		sampler:   sampler,
+		logprobs:  newLogprobs(o),
 		maxTokens: maxTokens,
 		ignoreEOS: o.IgnoreEOS,
-		stream:    newStreamText(lm.m.Vocab, o.Stop),
+		stream:    newStreamText(lm.m.Vocab.NewChatStream().Next, o.Stop),
 		enqueued:  time.Now(),
 		admitted:  make(chan struct{}),
 		done:      make(chan struct{}),
@@ -704,7 +707,7 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 
 	res := r.result
 	s.generated.Add(int64(res.n))
-	lm.tokensGenerated.Add(int64(res.n))
+	lm.finished(res.n, r.prefill, res.decode)
 	s.lastUsed.Store(time.Now().UnixMilli())
 	s.refresh()
 	// The history grew by what this generate committed.

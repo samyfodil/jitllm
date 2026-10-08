@@ -63,10 +63,17 @@ func TestUnsupportedSamplingIsRefusedNotIgnored(t *testing.T) {
 	s := serve(t, &fakeBackend{tokens: []string{"x"}, reason: FinishEOS})
 	msgs := `"messages":[{"role":"user","content":"hi"}]`
 	for _, c := range []struct{ path, body, want string }{
-		{oaChat, `{"model":"m-1","n":2,` + msgs + `}`, "n=2"},
-		{oaChat, `{"model":"m-1","logprobs":true,` + msgs + `}`, "logprobs"},
+		// logprobs and n are supported (compat_choices.go); what stays refused
+		// is outside their range or their shape.
+		{oaChat, `{"model":"m-1","n":0,` + msgs + `}`, "n must be"},
+		{oaChat, `{"model":"m-1","n":129,` + msgs + `}`, "n must be"},
+		{oaChat, `{"model":"m-1","logprobs":5,` + msgs + `}`, "logprobs"},
 		{oaChat, `{"model":"m-1","top_logprobs":3,` + msgs + `}`, "top_logprobs"},
-		{oaText, `{"model":"m-1","logprobs":5,"prompt":"hi"}`, "logprobs"},
+		{oaChat, `{"model":"m-1","logprobs":true,"top_logprobs":21,` + msgs + `}`, "top_logprobs"},
+		{oaText, `{"model":"m-1","logprobs":21,"prompt":"hi"}`, "logprobs"},
+		{oaText, `{"model":"m-1","logprobs":true,"prompt":"hi"}`, "logprobs"},
+		{oaText, `{"model":"m-1","logprobs":2,"echo":true,"prompt":"hi"}`, "echo"},
+		{oaText, `{"model":"m-1","n":2,"prompt":["a","b"]}`, "list of prompts"},
 		{oaChat, `{"model":"m-1","presence_penalty":0.5,` + msgs + `}`, "presence_penalty"},
 		{oaText, `{"model":"m-1","frequency_penalty":0.5,"prompt":"hi"}`, "frequency_penalty"},
 		{oaChat, `{"model":"m-1","temperature":-1,` + msgs + `}`, "temperature"},
