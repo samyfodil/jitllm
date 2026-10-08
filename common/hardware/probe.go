@@ -278,10 +278,10 @@ func isa() string {
 		return s + " (probed: ABSENT -- the GGUF row-major kernels decline; the packed column is what a container runs)"
 	case "arm64":
 		s := "NEON + FEAT_DotProd SDOT"
-		if cpu.SupportedNative(quant.Q4_0) {
+		if cpu.HasDotProd() {
 			return s + " (probed: present)"
 		}
-		return s + " (probed: ABSENT -- quantized kernels declined)"
+		return s + " (probed: ABSENT -- SDOT widened to SMULL/SADDLP/ADDP)"
 	}
 	return "unknown"
 }

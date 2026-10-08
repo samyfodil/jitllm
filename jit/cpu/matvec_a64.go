@@ -106,8 +106,10 @@ func EmitA64(s Spec) ([]byte, error) {
 //	v29  0x0F nibble mask, v30 the zero point -- 8 for Q4_0, 16 for Q5_0
 //	                                      (Q4_0 and Q5_0, loop-invariant)
 //
-// v8-v15 are left alone (AAPCS64 reserves their low 64 bits; avoiding them
-// costs nothing). x18/x27/x28/x29/x30/sp are never written.
+// v8-v15 hold nothing but v8/v9, a widened SDOT's scratch on a chip without
+// FEAT_DotProd (sdotemu.go). Go's arm64 ABI saves no V register
+// (trampoline_arm64.s), so using them costs nothing. x18/x27/x28/x29/x30/sp are
+// never written.
 //
 // Three x86 mechanisms do not exist here:
 //
@@ -130,6 +132,8 @@ func EmitA64(s Spec) ([]byte, error) {
 func emitA64MatVec(t quant.Type) []byte {
 	bb := int32(t.BlockBytes()) // 18 for Q4_0, 22 for Q5_0, 34 for Q8_0
 	var a A64
+	// See the register map above.
+	a.DotScratch(V8, V9)
 
 	// Prologue. The single argument *Args arrives in x0 (AAPCS64's first
 	// integer argument, the analogue of amd64's RDI).

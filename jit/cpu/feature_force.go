@@ -11,6 +11,11 @@ var (
 	forceNoVNNI    bool
 	forceNoDotProd bool
 
+	// forceDotEncoding makes the A64 emitters encode SDOT whatever the chip,
+	// for a test that reads a kernel's instructions and never runs it (the
+	// golden shapes) on a host without FEAT_DotProd. Test-only, like the rest.
+	forceDotEncoding bool
+
 	// forceTier makes the amd64 probe report the capabilities of a lower tier
 	// (tier.go) when tierForced is set, so the SSE tier's kernels can be
 	// selected and run on an AVX2 machine. Also a test instrument: written only
