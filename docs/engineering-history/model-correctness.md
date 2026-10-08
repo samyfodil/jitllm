@@ -8904,6 +8904,127 @@ Greedy decoding through a Speculator is greedy decoding: every emitted token
 is the argmax of the trunk's logits at its position, computed over exactly
 the tokens plain decode would have fed.
 
+### engine/model/speclookup.go
+
+Prompt lookup: speculation with no prediction block, so on every
+architecture. It is a drafter of the one Speculator (`WithSpecDrafter`;
+`SpecDraftAuto` takes the prediction block where the model carries one and
+lookup otherwise), not a second speculator: the verification pass, the
+greedy acceptance, the rollback of attention by position and of a recurrence
+by `SpecRollback`, and the three breaks `specFault` names are the MTP path's,
+unchanged. What differs is the draft and what is not run: no draft State, no
+catch-up, and a round that finds no match drafts nothing, so it is a decode
+step of one row rather than a wasted verification.
+
+The draft: for n from `ngMax` down to `ngMin` (2..4 by default,
+`WithSpecNGram`), the latest earlier occurrence of the sequence's last n
+tokens (prompt and every decided token), and up to k of the tokens that
+followed it (k = 5 by default, `WithSpecDraft`). This is llama.cpp's prompt
+lookup and vLLM's ngram proposer; the latest occurrence, not the first, is
+chosen because a copy in progress continues where it last was. n = 1 is
+admitted by option and is not the default: one token matches nearly
+everywhere, and each wrong match is verification rows for nothing.
+
+RULE 8: the search compares token ids, integers already decided, and
+decides only which rows the next verification carries. No value of any row's
+arithmetic depends on it -- a wrong proposal changes how many tokens a pass
+yields, never which -- so it is control, as the acceptance comparison beside
+it is, and stays Go. It costs O(context x n) integer compares a round and
+allocates nothing (`TestLookupSearch` holds it to zero allocations).
+
+Sampling: a lookup draft is a point mass, and the rejection rule that keeps
+sampling exact would accept it with probability p(x) and draw the residual
+from p with x removed. That is not built: a sampled session through a lookup
+Speculator drafts nothing and is plain sampled decode. Greedy only, and the
+server and `-spec lookup` say so.
+
+`WithSpecStop` marks the end-of-generation tokens: a draft in the set is
+never accepted, so a round that reaches one returns it last, from the trunk's
+own logits, unrun -- where plain decode stands after sampling it. `Limit`
+caps a round's tokens at what the caller still wants, so the trunk runs no
+row past a reply's `max_tokens`. A reply cut by a stop string inside a round
+still leaves rows in the session; the server refuses `continue_session` on
+such a session (`Session.specRan`) rather than run on them.
+
+The gates (host, exact GEMM, every rollback arm on the hybrids):
+`TestSpecLookupMatchesDecode` holds the output token for token to plain
+greedy on stories15M, Llama-3.2-1B, the qwen35 hybrid fixture (lookup forced
+over its prediction block) and the mamba2 fixture, and demands drafts
+accepted; `TestSpecLookupGateDiscriminates` forces the drafts to plain
+decode's tokens with every fifth corrupted, so rounds both accept and
+reject, and each break -- accepting past the first mismatch, keeping the
+rejected KV rows, keeping the stepped recurrent state (rows and replay) --
+must part from plain decode; `TestSpecLookupOnDevice` runs the trunk on
+CUDA and Vulkan, judging a flip as `TestSpecGreedyOnDevice` does.
+
+### engine/grammar
+
+Structured output: a reply constrained to a context-free grammar, GBNF text
+(llama.cpp's format) or a JSON Schema compiled to it (`FromJSONSchema`, the
+keywords llama.cpp's json-schema-to-grammar writes, each as it writes them:
+type, properties, required, additionalProperties, items, prefixItems,
+min/maxItems, min/maxLength, enum, const, anyOf, oneOf, $ref into $defs or
+definitions). Every other validation keyword is refused by name
+(`ErrUnsupported`, a 400 at the server): pattern, format, minimum and the
+other numeric bounds, allOf, not, patternProperties and the rest. llama.cpp
+builds pattern, format, integer bounds and allOf; those are the gap, refused
+rather than ignored, since ignoring one lets through output the schema
+forbids. An object with properties takes no other keys (absent
+additionalProperties read as false, OpenAI's strict mode); every output stays
+valid under the schema either way.
+
+The automaton is llama.cpp's: a set of stacks of grammar positions, stepped
+one code point at a time, rules entered and finished rules popped, a
+right-recursive star run as a tail call so a long run does not deepen a
+stack. Left recursion is refused at compile time. Two departures:
+
+- Stacks are interned as a persistent list and a set of stacks is interned
+  too, so a state is one integer and a step from a state by a code point is
+  cached (`ascii` per set, `wide` beside it). JSON revisits its states every
+  field, so after the first fields a step is a lookup.
+- UTF-8 is checked to the byte: a code point begun by one token and finished
+  by the next is carried in the state, a lead byte is admitted only where some
+  stack can take a code point it could finish as, and overlong encodings,
+  surrogates and bytes past U+10FFFF are refused (llama.cpp's
+  partial-UTF-8 check admits some of these).
+
+The allowed set of a state is computed once per (grammar, tokenizer, state)
+and kept: the tokenizer's pieces are sorted once per tokenizer
+(`grammar.Tokens`, kept beside the model: a cache keyed by the tokenizer's address served a freed tokenizer's index to the next model allocated there), a trie is ranges of that list, and the walk prunes every
+piece sharing a prefix the grammar refuses. An end-of-generation token is
+allowed where the grammar may end; a state the vocabulary cannot continue
+allows them too, so the reply stops rather than leaves its grammar.
+
+RULE 8. The automaton stepping, the trie walk and the allowed set are control:
+they compare code points against ranges and decide which tokens may be
+sampled; no value a token's arithmetic computes depends on them. The mask's
+arithmetic on the logits row is generated: an additive bias of 0 and -inf
+over the row, applied by `nn.Add32JIT` (the elementwise Axpy kernel on every
+host tier: AVX2, SSE, NEON). What is Go is opening and closing the bias at
+the allowed ids, a write per allowed token, as the sampler's history is
+written for its penalty kernel. With a grammar the logits are always on the
+host -- the server's constrained path reads them back for the sampler, and
+never takes the device's argmax -- so the host kernel is the one tier that
+holds them; a device-IR mask is not built, and would be needed only by a
+constrained path that kept its logits on the card.
+
+At the server a constrained generate decodes alone (not as a row of the step
+loop) and without speculation; `ignore_eos` with a grammar is refused, since
+the grammar ends the reply with an end-of-generation token.
+
+The gates: `engine/grammar` holds the automaton to languages written by hand,
+refusals, the token boundaries (a token spanning two terminals, a code point
+split over byte tokens, a lead byte nothing can finish), the mask's -inf and
+its zero allocations on a visited state, and random walks over the allowed
+tokens validated by `internal/schemacheck`, a validator written apart from
+the grammar. At the server, on stories15M and Llama-3.2-1B:
+`TestStructuredOutputValidates` (24 seeds a schema at temperature 1, each
+parses, validates and ends on the grammar's end), `TestAnAllowingGrammarIsPlainGreedy`
+(`root ::= .*` leaves greedy token for token), `TestStructuredGateDiscriminates`
+(the mask left off step 3: an invalid output among the seeds) and
+`TestResponseFormatOverHTTP` (json_object, json_schema, and `pattern` refused
+with a 400 naming it).
+
 ### engine/model/msa.go
 
 MiniMax Sparse Attention: MiniMax-M3's block selection (transformers'

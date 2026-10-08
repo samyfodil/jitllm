@@ -65,6 +65,12 @@ type oaChatRequest struct {
 	// ---- jitllm extensions. Prefixed so they cannot collide with a future
 	// OpenAI field, and ignored by any client that does not know them.
 	JitllmSession string `json:"jitllm_session,omitempty"`
+	// JitllmSpeculate turns speculative decoding on or off for the request
+	// (Speculation); absent takes the session's.
+	JitllmSpeculate *bool `json:"jitllm_speculate,omitempty"`
+	// ResponseFormat is OpenAI's structured output: text, json_object or
+	// json_schema (grammar.go).
+	ResponseFormat json.RawMessage `json:"response_format"`
 }
 
 type oaCompletionRequest struct {
@@ -78,6 +84,12 @@ type oaCompletionRequest struct {
 	oaSampling
 
 	JitllmSession string `json:"jitllm_session,omitempty"`
+	// JitllmSpeculate turns speculative decoding on or off for the request
+	// (Speculation); absent takes the session's.
+	JitllmSpeculate *bool `json:"jitllm_speculate,omitempty"`
+	// ResponseFormat is OpenAI's structured output: text, json_object or
+	// json_schema (grammar.go).
+	ResponseFormat json.RawMessage `json:"response_format"`
 }
 
 type oaUsage struct {
@@ -269,12 +281,17 @@ func (e *compat) openAIChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	o := GenerateOptions{
-		Prompt:    Prompt{Kind: PromptChat, Chat: chat},
-		MaxTokens: maxTok,
-		Stop:      oaStop(req.Stop),
-		Sampling:  sampling,
-		IgnoreEOS: req.IgnoreEOS,
-		Seeds:     seeds,
+		Prompt:      Prompt{Kind: PromptChat, Chat: chat},
+		MaxTokens:   maxTok,
+		Stop:        oaStop(req.Stop),
+		Sampling:    sampling,
+		IgnoreEOS:   req.IgnoreEOS,
+		Seeds:       seeds,
+		Speculation: oaSpeculation(req.JitllmSpeculate),
+	}
+	if o.Grammar, err = oaResponseFormat(req.ResponseFormat); err != nil {
+		oaFailErr(w, err)
+		return
 	}
 	lpr.apply(&o)
 	if err := e.b.BindTarget(&o, req.JitllmSession, req.Model); err != nil {
@@ -354,13 +371,18 @@ func (e *compat) openAICompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	o := GenerateOptions{
-		Prompt:    ps[0],
-		MaxTokens: maxTok,
-		Stop:      oaStop(req.Stop),
-		Echo:      req.Echo,
-		Sampling:  sampling,
-		IgnoreEOS: req.IgnoreEOS,
-		Seeds:     seeds,
+		Prompt:      ps[0],
+		MaxTokens:   maxTok,
+		Stop:        oaStop(req.Stop),
+		Echo:        req.Echo,
+		Sampling:    sampling,
+		IgnoreEOS:   req.IgnoreEOS,
+		Seeds:       seeds,
+		Speculation: oaSpeculation(req.JitllmSpeculate),
+	}
+	if o.Grammar, err = oaResponseFormat(req.ResponseFormat); err != nil {
+		oaFailErr(w, err)
+		return
 	}
 	lpr.apply(&o)
 	if err := e.b.BindTarget(&o, req.JitllmSession, req.Model); err != nil {
@@ -768,6 +790,15 @@ func oaFinish(r FinishReason) string {
 // BindTarget resolves the `model` field, or the jitllm_session extension, onto
 // the engine's own ids. A session id wins: continuing a conversation is a
 // stronger statement than naming a model.
+// oaSpeculation is the jitllm_speculate extension as a request's
+// speculation; nil when absent.
+func oaSpeculation(on *bool) *Speculation {
+	if on == nil {
+		return nil
+	}
+	return &Speculation{Enabled: *on}
+}
+
 func (e *Engine) BindTarget(o *GenerateOptions, sessionID, modelName string) error {
 	if sessionID != "" {
 		if _, err := e.Session(sessionID); err != nil {

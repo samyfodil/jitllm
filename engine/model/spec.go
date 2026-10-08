@@ -66,6 +66,12 @@ type specOpts struct {
 	// their deferred catch-up) beside rounds that draft, whatever this host's
 	// timings would choose.
 	sched []int
+	// drafter is who proposes (SpecDrafter); ngMin and ngMax the n-gram
+	// lengths prompt lookup matches (WithSpecNGram).
+	drafter      SpecDrafter
+	ngMin, ngMax int
+	// stop is WithSpecStop's set.
+	stop func(int32) bool
 }
 
 // SpecOption configures a Speculator.
@@ -88,6 +94,48 @@ func WithSpecMinP(p float64) SpecOption { return func(o *specOpts) { o.minP = p 
 // SpecRollback.
 func WithSpecRollback(r SpecRollback) SpecOption { return func(o *specOpts) { o.rollback = r } }
 
+// SpecDrafter is who proposes a round's drafts.
+type SpecDrafter int
+
+const (
+	// SpecDraftAuto drafts with the model's prediction block where it carries
+	// one and by prompt lookup where it does not.
+	SpecDraftAuto SpecDrafter = iota
+	// SpecDraftMTP drafts with the prediction block (jlm.Config.NMTP); a
+	// model without one is refused.
+	SpecDraftMTP
+	// SpecDraftLookup drafts by prompt lookup: the tokens that followed the
+	// latest earlier occurrence of the sequence's last n-gram (speclookup.go).
+	// No model runs to draft, so it speculates on every architecture.
+	SpecDraftLookup
+)
+
+// String is the drafter's name: "auto", "mtp" or "lookup".
+func (d SpecDrafter) String() string {
+	switch d {
+	case SpecDraftMTP:
+		return "mtp"
+	case SpecDraftLookup:
+		return "lookup"
+	}
+	return "auto"
+}
+
+// WithSpecDrafter chooses who drafts; see SpecDrafter.
+func WithSpecDrafter(d SpecDrafter) SpecOption { return func(o *specOpts) { o.drafter = d } }
+
+// WithSpecNGram sets the n-gram lengths prompt lookup matches the sequence's
+// tail at, longest first; the defaults are specNGramMin and specNGramMax.
+func WithSpecNGram(lo, hi int) SpecOption {
+	return func(o *specOpts) { o.ngMin, o.ngMax = max(lo, 1), max(hi, lo, 1) }
+}
+
+// WithSpecStop names the tokens that end a generation (an end-of-generation
+// id): a draft in the set is never accepted, so a round that reaches one
+// returns it last, from the trunk's own logits, and the trunk has not run it
+// -- where plain decode would stand after sampling it.
+func WithSpecStop(stop func(int32) bool) SpecOption { return func(o *specOpts) { o.stop = stop } }
+
 // SpecStats is what a Speculator has done.
 type SpecStats struct {
 	// Rounds is the verification passes; Drafted and Accepted the tokens the
@@ -106,6 +154,8 @@ type SpecStats struct {
 	Retired bool
 	// Rollback is the mode the session runs, Auto resolved.
 	Rollback SpecRollback
+	// Drafter is who drafts, Auto resolved.
+	Drafter SpecDrafter
 }
 
 // TokensPerRound is how many tokens a verification pass yields.
@@ -123,9 +173,13 @@ type Speculator struct {
 	t, d *State
 	opt  specOpts
 	mode SpecRollback
-	// mtp is the prediction block's own weights; mli its block index.
+	// mtp is the prediction block's own weights; mli its block index. Both
+	// unset, and d nil, where prompt lookup drafts.
 	mtp *mtpWeights
 	mli int
+	// hist is every decided token, the prompt's first, where prompt lookup
+	// drafts: what its n-grams are matched against (speclookup.go).
+	hist []int32
 
 	// The round's starting point: replay is the decided tokens whose trunk
 	// rows a replay rollback still owes (at positions bpos[0]..), next the
@@ -198,6 +252,9 @@ type Speculator struct {
 	// block stops running, its catch-up with it, and rounds are decode.
 	retired bool
 
+	// limit caps the tokens a round returns (Limit); zero is no cap.
+	limit int
+
 	stats SpecStats
 	// fault is a gate's deliberate break of the contract (specFault); zero in
 	// every session a caller makes.
@@ -242,13 +299,26 @@ const (
 // prediction block runs where the trunk does when it fits.
 func (s *State) Speculate(opts ...SpecOption) (*Speculator, error) {
 	m, c := s.m, s.c
+	var o specOpts
+	for _, f := range opts {
+		f(&o)
+	}
+	if o.drafter == SpecDraftAuto {
+		o.drafter = SpecDraftMTP
+		if c.NMTP == 0 {
+			o.drafter = SpecDraftLookup
+		}
+	}
+	mtp := o.drafter == SpecDraftMTP
 	switch {
-	case c.NMTP == 0:
+	case mtp && c.NMTP == 0:
 		return nil, fmt.Errorf("model: %s carries no multi-token-prediction block to draft with", c.Arch)
 	case c.DSV4():
 		// Its prediction blocks are hyper-connected as its trunk is, and the
-		// draft path runs an ordinary block: not built, so refused by name.
-		return nil, fmt.Errorf("model: %s's multi-token-prediction blocks are not built", c.Arch)
+		// draft path runs an ordinary block; and its pooled history folds rows
+		// in as they arrive, which State.rewind does not take back. Not
+		// built, so refused by name, whoever drafts.
+		return nil, fmt.Errorf("model: speculation on %s is not built", c.Arch)
 	case s.batched || s.nseq != 1:
 		return nil, fmt.Errorf("model: speculation drives a single sequence, not a batch")
 	case s.pos != 0:
@@ -256,20 +326,21 @@ func (s *State) Speculate(opts ...SpecOption) (*Speculator, error) {
 	case s.lo != 0:
 		return nil, fmt.Errorf("model: speculation drives a trunk session")
 	}
-	sp := &Speculator{t: s, mli: c.NLayer, mtp: m.layers[c.NLayer].mtp}
-	for _, o := range opts {
-		o(&sp.opt)
-	}
-	// The draft's positions run one past the trunk's: a round drafts only
-	// where the trunk can verify, and the round's last token -- decided, not
-	// yet fed -- has its draft row at the position the trunk will feed it at,
-	// which on a full context is one past the trunk's last.
-	sp.d = m.newStateRange(1, s.maxSeq+1, c.NLayer, c.NLayer+1)
-	sp.d.relocate = false
-	if s.device != nil {
-		if err := sp.d.SetDevice(s.device); err != nil {
-			sp.d.Close()
-			return nil, err
+	sp := &Speculator{t: s, opt: o}
+	sp.stats.Drafter = o.drafter
+	if mtp {
+		sp.mli, sp.mtp = c.NLayer, m.layers[c.NLayer].mtp
+		// The draft's positions run one past the trunk's: a round drafts only
+		// where the trunk can verify, and the round's last token -- decided,
+		// not yet fed -- has its draft row at the position the trunk will feed
+		// it at, which on a full context is one past the trunk's last.
+		sp.d = m.newStateRange(1, s.maxSeq+1, c.NLayer, c.NLayer+1)
+		sp.d.relocate = false
+		if s.device != nil {
+			if err := sp.d.SetDevice(s.device); err != nil {
+				sp.d.Close()
+				return nil, err
+			}
 		}
 	}
 	sp.mode = sp.opt.rollback
@@ -280,7 +351,7 @@ func (s *State) Speculate(opts ...SpecOption) (*Speculator, error) {
 		}
 	}
 	if sp.mode == SpecRollbackRows && s.devLinear() {
-		sp.d.Close()
+		sp.Close()
 		return nil, fmt.Errorf("model: per-row recurrent snapshots need every linear block on the host; " +
 			"a device keeps its own state and rewinds it one step (SpecRollbackReplay)")
 	}
@@ -291,17 +362,31 @@ func (s *State) Speculate(opts ...SpecOption) (*Speculator, error) {
 	if s.recurrent() {
 		sp.pre = s.newRecSnap()
 	}
+	if !mtp {
+		sp.lookupInit()
+	}
 	return sp, nil
 }
 
+// Limit caps how many tokens each later round returns, at least one: a
+// caller that wants n more tokens says so, and the trunk runs no row past
+// them. Zero lifts the cap.
+func (sp *Speculator) Limit(n int) { sp.limit = max(n, 0) }
+
 // Draft is the draft session, for its placement and counters.
+// It is nil where prompt lookup drafts.
 func (sp *Speculator) Draft() *State { return sp.d }
 
 // Stats is what this Speculator has done so far.
 func (sp *Speculator) Stats() SpecStats { return sp.stats }
 
 // Close releases the draft session. The trunk session is the caller's.
-func (sp *Speculator) Close() error { return sp.d.Close() }
+func (sp *Speculator) Close() error {
+	if sp.d == nil {
+		return nil
+	}
+	return sp.d.Close()
+}
 
 // Start runs the prompt through the trunk and the prediction block and returns
 // the first generated token, chosen by sm (nil is greedy). It observes the
@@ -323,6 +408,13 @@ func (sp *Speculator) Start(prompt []int32, sm *Sampler) (int32, error) {
 	y := sm.Sample(logits)
 	sm.Observe(y)
 	sp.stats.Emitted++
+	if sp.d == nil {
+		sp.hist = append(append(sp.hist[:0], prompt...), y)
+		sp.next = y
+		copy(sp.h, hid[(n-1)*c.NEmbd:])
+		sp.started = true
+		return y, nil
+	}
 	// The draft over the prompt and the first token: row q is (x_q, h_{q-1}),
 	// and the last row, (y, h_{n-1}), proposes the first draft.
 	toks := append(append([]int32(nil), prompt...), y)
@@ -454,8 +546,14 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 	// The verification writes P..P+r+k: it must fit the trunk's context, and
 	// the draft writes up to P+r+k-1.
 	k := 0
-	if !sp.retired {
+	switch {
+	case sp.d == nil:
+		k = min(sp.lookupCount(greedy), t.maxSeq-1-(P+r))
+	case !sp.retired:
 		k = min(sp.choose(), t.maxSeq-1-(P+r))
+	}
+	if sp.limit > 0 {
+		k = min(k, sp.limit-1)
 	}
 	if k < 0 {
 		return nil, errFull{t.maxSeq, t.reqSeq}
@@ -477,6 +575,10 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 		if len(sp.qdists) < k {
 			sp.qdists = append(sp.qdists, make([]specDist, k-len(sp.qdists))...)
 		}
+	}
+	if sp.d == nil {
+		drafts = sp.propose(drafts, max(k, 0))
+		k = 0 // the loop below is the prediction block's
 	}
 	for i := 0; i < k; i++ {
 		if i > 0 {
@@ -575,7 +677,7 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 			}
 			return Greedy(lg(j))
 		}
-		for a < kd && tok(a) == drafts[a] {
+		for a < kd && tok(a) == drafts[a] && (sp.opt.stop == nil || !sp.opt.stop(drafts[a])) {
 			a++
 		}
 		if sp.fault == faultAcceptUnchecked && a < kd {
@@ -671,7 +773,7 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 	// states, its last row proposing the next round's first draft. A round
 	// that drafted nothing leaves them owed (Speculator.owedTok).
 	hid := func(j int) []float32 { return sp.tout.hidden[j*c.NEmbd : (j+1)*c.NEmbd] }
-	if !sp.retired {
+	if sp.d != nil && !sp.retired {
 		back := P + r + 1 - len(sp.owedTok)
 		if sp.fault == faultKeepRejectedKV {
 			back = min(back, d.bpos[0]) // the trunk ran ahead of what it emitted
@@ -686,7 +788,9 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 	out := append(append([]int32(nil), drafts[:a]...), y)
 	sp.replay = append(nextReplay[:0:0], nextReplay...)
 	sp.next = y
-	if !sp.retired && (k > 0 || len(sp.owedTok) >= d.chunkWidth()) {
+	if sp.d == nil {
+		sp.hist = append(sp.hist, out...)
+	} else if !sp.retired && (k > 0 || len(sp.owedTok) >= d.chunkWidth()) {
 		if err := sp.catchUp(k == 0); err != nil {
 			return nil, err
 		}

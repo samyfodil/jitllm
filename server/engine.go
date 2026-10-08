@@ -191,6 +191,10 @@ type LoadedModel struct {
 
 	// dev is the tier, shared by every session of this model: the tier owns
 	// the model, a session owns the sequence. nil for a host-only model.
+	// grammars are the structured-output grammars compiled over this
+	// model's tokenizer (grammar.go).
+	grammars grammars
+
 	dev       nn.Device
 	gpu       *tier.GPU
 	closeDev  func()
@@ -634,6 +638,12 @@ type Session struct {
 	created  time.Time
 	// cached is a session with a prompt store: it prefills through it, alone.
 	cached bool
+	// spec is the session's speculation for generates that carry none, and
+	// specRan a generate that stopped inside a speculative round: the model
+	// ran rows past the last token the reply kept, so the session cannot be
+	// continued (under mu).
+	spec    Speculation
+	specRan bool
 
 	lastUsed  atomic.Int64
 	generated atomic.Int64
@@ -684,9 +694,25 @@ type SessionOptions struct {
 	// store prefills alone rather than as a row of the step loop.
 	KVStore  model.KVStore
 	CacheKey string
+	// Speculation is the default for generates that carry none.
+	Speculation Speculation
 	// PromptCache keeps the prompt prefixes in Config.PromptStore: the wire's
 	// form of KVStore, refused when the server has no store.
 	PromptCache bool
+}
+
+// Speculation is speculative decoding for a generate (model.Speculator):
+// drafts verified in one pass of the model, by the model's own prediction
+// block where it carries one and by prompt lookup otherwise. Greedy output is
+// plain greedy decode's token for token; with prompt lookup a sampled
+// generate drafts nothing. A generate that continues its session decodes
+// plainly, since a Speculator starts on an empty sequence, and so does one
+// whose prompt has spans; a speculative generate prefills alone, outside the
+// step loop and the session's prompt store.
+type Speculation struct {
+	Enabled bool
+	// Draft is the tokens drafted a round; zero is the engine's choice.
+	Draft int
 }
 
 // check refuses the options no session can be made from, as ErrInvalid.
@@ -779,6 +805,7 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 		sampling: o.Sampling,
 		created:  time.Now(),
 		cached:   o.KVStore != nil,
+		spec:     o.Speculation,
 	}
 	s.lastUsed.Store(time.Now().UnixMilli())
 	s.mu.Lock()
@@ -970,6 +997,17 @@ type GenerateOptions struct {
 	// MaxTokens: the token is emitted and fed like any other (vLLM's
 	// ignore_eos). Stop strings still end the generate.
 	IgnoreEOS bool
+	// Speculation overrides the session's; nil takes it.
+	Speculation *Speculation
+	// Grammar constrains the output to GBNF text (grammar.go): every
+	// sampled token keeps it inside the grammar, and the reply ends where the
+	// grammar does. A constrained generate decodes alone, plainly: not as a
+	// row of the step loop, and not speculatively.
+	Grammar string
+	// maskSkip, set by a gate, leaves the grammar's mask off at that step
+	// (counting from 1) and the output free after it: the break the
+	// structured-output gates must see.
+	maskSkip int
 	// Logprobs puts each sampled token's log-probability on its Token event,
 	// with the TopLogprobs (0..model.MaxTopLogprobs) most likely alternatives.
 	// They are the model's raw distribution, before temperature and penalties
@@ -1193,7 +1231,34 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		return fmt.Errorf("%w: continue_session with no prompt has no token to run", ErrInvalid)
 	}
 
-	if lp := e.joins(s); lp != nil && !spans && !s.cached {
+	spec := s.spec
+	if o.Speculation != nil {
+		spec = *o.Speculation
+	}
+	speculate := spec.Enabled && !spans && !o.Continue
+	if speculate && o.Logprobs {
+		return fmt.Errorf("%w: speculation with logprobs is not built: a round decides several tokens "+
+			"from one verification and reads back no distribution for each", ErrInvalid)
+	}
+	var con *constraint
+	if o.Grammar != "" {
+		if o.IgnoreEOS {
+			return fmt.Errorf("%w: a grammar ends its reply with an end-of-generation token, and ignore_eos "+
+				"would run past it", ErrInvalid)
+		}
+		m, err := lm.matcher(o.Grammar)
+		if err != nil {
+			return err
+		}
+		con = &constraint{m: m, st: m.Start()}
+		speculate = false
+	}
+	if o.Continue && s.specRan {
+		return fmt.Errorf("%w: session %q stopped inside a speculative round, and its model ran past the "+
+			"reply; it cannot be continued -- generate without continue_session", ErrInvalid, s.id)
+	}
+
+	if lp := e.joins(s); lp != nil && !spans && !s.cached && !speculate && con == nil {
 		return e.generateBatched(ctx, lp, s, o, ids, ephemeral, emit)
 	}
 
@@ -1210,11 +1275,28 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	// ---- prefill.
 	if !o.Continue {
 		s.st.Reset()
+		s.specRan = false
+	}
+	sampler := s.sampling
+	if o.Sampling != nil {
+		sampler = *o.Sampling
 	}
 	prefillStart := time.Now()
 	var logits []float32
+	var sp *model.Speculator
+	var first int32
 	prompted := len(ids)
 	switch {
+	case speculate:
+		opts := []model.SpecOption{model.WithSpecDraft(spec.Draft)}
+		if !o.IgnoreEOS {
+			opts = append(opts, model.WithSpecStop(lm.m.Vocab.IsEOG))
+		}
+		if sp, err = s.st.Speculate(opts...); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
+		defer sp.Close()
+		first, err = sp.Start(ids, &sampler)
 	case spans:
 		prompted = model.SpanPositions(o.Prompt.Spans, lm.m.Cfg.NEmbd)
 		logits, err = s.st.PrefillCachedMixed(o.Prompt.Spans...)
@@ -1261,10 +1343,6 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	}
 
 	// ---- decode.
-	sampler := s.sampling
-	if o.Sampling != nil {
-		sampler = *o.Sampling
-	}
 	maxTokens := tokenLimit(o.MaxTokens, s.st.MaxSeq()-s.st.Pos())
 
 	st := newStreamText(lm.m.Vocab.NewChatStream().Next, o.Stop)
@@ -1273,6 +1351,12 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	out := make([]int32, 0, min(maxTokens, 4096))
 	decodeStart := time.Now()
 	n := 0
+	// pend is what a speculative round decided and the reply has not taken
+	// yet; the first is Start's.
+	var pend []int32
+	if sp != nil {
+		pend = []int32{first}
+	}
 
 	lpw := newLogprobs(o)
 	for ; n < maxTokens; n++ {
@@ -1280,9 +1364,36 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 			reason = FinishCancelled
 			break
 		}
-		next := sampler.Sample(logits)
-		sampler.Observe(next)
-		tlp := takeLogprob(lpw, lm.m.Vocab, logits, next)
+		var next int32
+		var tlp *TokenLogprob
+		switch {
+		case sp == nil:
+			lg := logits
+			if con != nil && n+1 != o.maskSkip {
+				lg = con.mask(logits)
+			}
+			next = sampler.Sample(lg)
+			sampler.Observe(next)
+			// The model's raw distribution, before the grammar's mask, as
+			// before temperature and penalties: vLLM's default
+			// (raw_logprobs).
+			tlp = takeLogprob(lpw, lm.m.Vocab, logits, next)
+			if con != nil && !con.accept(next) {
+				if n+1 != o.maskSkip {
+					return fmt.Errorf("server: token %d is outside the grammar its mask allowed", next)
+				}
+				con = nil // the gate's break: the reply leaves its grammar
+			}
+		case len(pend) == 0:
+			// Every token a round returns is observed into the sampler.
+			sp.Limit(maxTokens - n)
+			if pend, err = sp.Next(&sampler); err != nil {
+				return err
+			}
+		}
+		if sp != nil {
+			next, pend = pend[0], pend[1:]
+		}
 		if !o.IgnoreEOS && lm.m.Vocab.IsEOG(next) {
 			reason = FinishEOS
 			break
@@ -1301,10 +1412,17 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 			n++
 			break
 		}
+		if sp != nil {
+			continue
+		}
 		if logits, err = s.st.Forward(next); err != nil {
 			return err
 		}
 	}
+	// A round's last token is decided and not yet run, as plain decode's
+	// last sample is; a reply that ended before the round's end leaves rows
+	// in the model that it did not keep.
+	s.specRan = len(pend) > 0
 	if reason == FinishMaxTokens || reason == FinishEOS || reason == FinishCancelled {
 		// Flush whatever was being held back for a stop string that never came.
 		if tail := st.flush(); tail != "" {
@@ -1358,6 +1476,10 @@ func (e *Engine) generateN(ctx context.Context, o GenerateOptions, emit func(Eve
 	}
 	if o.Prompt.Kind == PromptSpans {
 		return fmt.Errorf("%w: several choices of a span prompt are not built", ErrInvalid)
+	}
+	if o.Speculation != nil && o.Speculation.Enabled {
+		return fmt.Errorf("%w: speculation with several choices is not built: the choices prefill "+
+			"through a shared prompt store, which a Speculator does not use", ErrInvalid)
 	}
 	lm, err := e.Model(o.ModelID)
 	if err != nil {

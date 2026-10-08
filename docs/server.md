@@ -54,6 +54,35 @@ Files and batch records are kept under `.jitllm-batch` in the model directory
 (`Config.BatchDir`), so they survive a restart; a batch the restart
 interrupted is reported failed.
 
+Structured output: OpenAI's `response_format` (`json_object`, or
+`json_schema` with its `schema`) on `/v1/chat/completions` and
+`/v1/completions`, and `grammar` (GBNF) or `json_schema` on the Connect
+`GenerateRequest`. Every sampled token keeps the reply inside the grammar and
+the reply ends where the grammar does. A schema keyword the converter does not
+build (`pattern`, `format`, numeric bounds, `allOf`, ...) is a 400 naming it;
+the supported subset is in
+[model-correctness.md](engineering-history/model-correctness.md),
+"engine/grammar". A constrained generate decodes alone and without
+speculation, and refuses `ignore_eos`.
+
+Speculative decoding is off by default and asked for per request
+(`speculation` on `GenerateRequest`, `jitllm_speculate` on the OpenAI
+endpoints) or per session (`speculation` on `CreateSessionRequest`). It
+drafts with the model's own prediction block where it carries one and by
+prompt lookup otherwise, and verifies the drafts in one pass. It is for
+greedy decoding: greedy output is plain greedy's token for token, while a
+sampled request with prompt lookup drafts nothing. A speculative generate
+prefills alone (not through the step loop or the session's prompt store), a
+`continue_session` generate decodes plainly, and a session whose speculative
+reply was cut by a stop string inside a round refuses `continue_session`.
+
+With each other: `logprobs` on a constrained reply are the raw distribution's,
+before the grammar's mask, as vLLM's default does; `n` with a grammar
+constrains every choice; speculation with `logprobs` or with `n` is refused
+by name (a round decides several tokens from one verification and reads back
+no per-token distribution, and the choices of `n` prefill through a shared
+prompt store a Speculator does not use).
+
 | `jitllmd` verb | What it does |
 |---|---|
 | `serve` | run the daemon (`-addr`, `-models`, `-load`, `-id`, `-devices`, `-maxmem`, `-max-batch`) |

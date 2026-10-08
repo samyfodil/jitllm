@@ -115,6 +115,10 @@ message CreateSessionRequest {
   // Names what the prompt store may share between sessions. Needs
   // prompt_cache.
   string cache_key = 10;
+
+  // Speculative decoding for generate calls that do not carry their own.
+  // Off by default.
+  SpeculationParams speculation = 30;
 }
 
 message CreateSessionResponse {
