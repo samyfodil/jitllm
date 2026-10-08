@@ -213,7 +213,7 @@ jobs:
           mkdir ../bin
           ext=; [ "$RUNNER_OS" = Windows ] && ext=.exe
           for prog in jitllm jitllmd jitllm-desktop jitllm-tui; do
-            archive=$(ls ./"$prog"_*_"${{ matrix.target }}".tar.gz ./"$prog"_*_"${{ matrix.target }}".zip 2>/dev/null)
+            archive=$(ls ./"$prog"_*_"${{ matrix.target }}".* | grep -E '\.(tar\.gz|zip)$')
             grep " ${archive#./}\$" checksums.txt > want.txt
             if command -v sha256sum >/dev/null; then sha256sum -c want.txt; else shasum -a 256 -c want.txt; fi
             case "$archive" in
