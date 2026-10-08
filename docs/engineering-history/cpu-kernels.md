@@ -1746,6 +1746,8 @@ ship**: the chips that lack them are ordinary, not exotic.
     Cortex-A76 and later           ARMv8.2, has it           -- a Pi 5 is fine
     pre-Alder-Lake x86             no AVX-VNNI
 
+(Superseded on arm64: see "arm64 without FEAT_DotProd: SDOT widened" below. The arm64 decline
+described next became a refusal once the reference tier was removed, and the widening replaced it.)
 `SupportedNative` now declines the quantized types when the feature is absent, so the engine
 degrades to the float64 reference -- which RULE 8 already makes a supported tier, so the fallback
 needed no new mechanism, only the honesty to use it. Verified on both architectures by forcing the
@@ -1774,6 +1776,50 @@ so the elementwise ops and the F32 matvec lost their parallelism too and everyth
 **★ WHAT IS NOT BUILT: the pre-VNNI fallback KERNEL.** `VPMADDUBSW` sits in the assembler documented
 as exactly that, and no emitter calls it. Building it would turn a ~100x degradation into a small
 one. Declining is merely the version that does not crash.
+
+## ★ arm64 without FEAT_DotProd: SDOT widened, the same bits
+
+Once the reference tier was removed, the decline above stopped being a slow path and became a
+refusal: a Cortex-A53/A57/A72/A73 (Raspberry Pi 3 and 4, many boards and older phones) opened no
+quantized container -- "no host kernel reads <tensor>" from `engine/model/forward.go`. RULE 8 makes
+that a missing basic kernel.
+
+**What was built** (`jit/cpu/sdotemu.go`): the assembler widens every `SDOT` and `SDOTelem` in
+place when the probe says the chip lacks the feature --
+
+    smull   t0.8h, vn.8b,  vm.8b        smull2  t1.8h, vn.16b, vm.16b
+    saddlp  t0.4s, t0.8h                saddlp  t1.4s, t1.8h
+    addp    t0.4s, t0.4s, t1.4s         add     vd.4s, vd.4s, t0.4s
+
+(`dup t1.4s, vm.s[i]` first for the by-element form). An int8 product fits int16 and every sum
+after it is int32, so the six instructions are SDOT's four lanes EXACTLY: a widened kernel gives
+the SDOT kernel's bits. Every emitter that issues SDOT names two scratch vectors it never holds
+live across one (`A64.DotScratch`): v8/v9 in the row-major matvecs (Go's arm64 ABI saves no V
+register), t3 and vDA in the packed matvec, v24/v25 in the row-major GEMM (its accumulators end
+at v23 by construction), r[0]/r[1] in the stationary GEMM, t1/t3 in the k-quant GEMM, and t3 plus
+the correction constant vK in the token-tiled matmul, which rebuilds vK before its epilogue when
+widened. The activation quantization, the layouts and the dispatch are unchanged; the probe is the
+switch, so `SupportedNative` and `SupportedPackedNative` no longer ask it.
+
+**The gates.** `jit/cpu.TestNoDotProdKernelsEmitNoSDOT` scans 101 kernel families (row-major at
+both windows, GEMM, packed, fused, fused-windowed, tiled at every tok, stationary) for SDOT
+encodings: present with the feature, absent without it, 19756 SDOTs widened.
+`TestNoDotProdMatchesDotBitForBit` runs the packed and fused decode kernels for every
+`quant.PackedTypes` entry at one to three outer steps of k and one to three tiles of rows, with a
+NaN guard after the output: the widened arm equals the SDOT arm bit for bit and stays within the
+oracle. The whole `jit/cpu` suite also runs widened, under `qemu-aarch64-static -cpu cortex-a72`
+(the probe reads no ASIMDDP in qemu's auxv, and a stray SDOT would SIGILL there) and with
+`JITLLM_FORCE_NO_DOTPROD=1` on a chip that has it. Violation runs: dropping SMULL2's high eight
+products (the tail) and doubling one sub-block's scale in the widened packed kernel both fail.
+
+**Model level** (`engine/model/nodot_test.go`, tag `jitllmtest`, arm64): `TestNoDotProdModelGates`
+runs `TestEveryModelRunsGenerated` and the golden `TestGreedyMatchesLlamaCpp` with the probe forced
+off, and `TestNoDotProdIsBitIdentical` holds every model under 2 GiB to the SDOT kernels' decode and
+prefill logits, bit for bit, in one process.
+
+**What is owed:** a faster ARMv8.0 kernel. The widening costs six instructions where SDOT was one;
+a layout regrouped for `SMLAL` chains (sixteen products per two instructions, reduced once per
+block rather than per SDOT) is the optimized kernel RULE 8 still asks for.
 
 ## ★ RULE 8: `nn.JIT[t] == nil` is a supported configuration.
 
