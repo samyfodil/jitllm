@@ -643,12 +643,14 @@ func TestCancelReportsWhetherAGenerateWasRunning(t *testing.T) {
 		t.Fatal("Cancel on an idle session reported a generate in flight")
 	}
 
-	var was bool
+	var was, batched bool
 	var fin *Finished
 	err = e.Generate(ctx, GenerateOptions{
 		SessionID: "c", Prompt: Prompt{Kind: PromptText, Text: story}, MaxTokens: 64,
 	}, func(ev Event) error {
 		switch ev.Kind {
+		case EventStarted:
+			batched = ev.Started.Batched
 		case EventToken:
 			if ev.Token.Index == 0 {
 				r, err := c.inference.Cancel(ctx, req(&v1.CancelRequest{SessionId: "c"}))
@@ -668,8 +670,14 @@ func TestCancelReportsWhetherAGenerateWasRunning(t *testing.T) {
 	if !was {
 		t.Fatal("Cancel during a generate reported nothing running")
 	}
-	if fin.Reason != FinishCancelled || fin.CompletionTokens != 1 {
-		t.Fatalf("finished %v after %d token(s), want CANCELLED after 1", fin.Reason, fin.CompletionTokens)
+	// Alone, the decode waits for each token's emit, so the cancel stops it
+	// at the next token. As a row of the step loop (a host model has one,
+	// batch.go) the loop does not wait for a client: its tokens go to an
+	// outbox, so the cancel reaches it some steps on, and the bound is that
+	// it ends there, cancelled, short of max_tokens.
+	if fin.Reason != FinishCancelled || (!batched && fin.CompletionTokens != 1) || fin.CompletionTokens >= 64 {
+		t.Fatalf("finished %v after %d token(s) (batched %v), want CANCELLED after 1 alone, short of 64 as a row",
+			fin.Reason, fin.CompletionTokens, batched)
 	}
 
 	// A client that goes away is a cancel too: its context ends the decode.

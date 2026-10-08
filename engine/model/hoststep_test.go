@@ -101,7 +101,12 @@ func hostStepAllocs(t *testing.T, m *Model, chunk bool) {
 		"The clerk counted barrels of salt on the upper floor, and"}
 	warm, n, k := 128, 64, 1
 	if chunk {
-		warm, n, k = 64, 32, 2
+		// The chunked State moves two positions a step: a windowed layer's
+		// ring of pages fills only past its window, and before that each
+		// page is a commit, growth paid once and not per step. 128 warm
+		// steps left eight such commits in the window on the windowed
+		// synths; 192 reach the ring.
+		warm, n, k = 192, 32, 2
 	}
 	var runs []Run
 	toks := make([][]int32, len(prompts))
