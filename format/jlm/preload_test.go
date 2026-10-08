@@ -3,13 +3,14 @@ package jlm
 import (
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestAShrinkDuringAPreloadIsHonoured: four pages are in flight -- claimed,
 // pinned, not yet read -- when the budget drops to two pages. SetBudget cannot
-// take a pinned frame, so for that moment the pages exceed the budget. Once
-// the reads land the preload must evict down to the budget and read nothing
-// more: a preload never keeps a page the current budget does not allow.
+// take a pinned frame, so it waits for those reads, evicts down to the budget
+// and only then returns: a caller reading residency after the shrink never
+// sees a preloaded page past it, and the preload reads nothing more.
 func TestAShrinkDuringAPreloadIsHonoured(t *testing.T) {
 	const page, n, depth = 4096, 8, 4
 	f := newFake(n, page, 0, Align)
@@ -40,16 +41,28 @@ func TestAShrinkDuringAPreloadIsHonoured(t *testing.T) {
 	for range depth {
 		<-arrived
 	}
-	f.SetBudget(2 * page)
+	shrunk := make(chan struct{})
+	go func() {
+		f.SetBudget(2 * page)
+		close(shrunk)
+	}()
+	// The shrink waits for the reads in flight: the gate holds them.
+	select {
+	case <-shrunk:
+		t.Fatal("SetBudget returned with four pinned pages resident past its budget")
+	case <-time.After(100 * time.Millisecond):
+	}
 	if r := f.ResidentBytes(); r <= 2*page {
-		t.Fatalf("with %d pages pinned the shrink left %d bytes: the gate holds nothing in flight", depth, r)
+		t.Fatalf("with %d pages pinned %d bytes are resident: the gate holds nothing in flight", depth, r)
 	}
 	close(release)
+	<-shrunk
+	// What a caller reads the moment SetBudget returns.
+	if r := f.ResidentBytes(); r > 2*page {
+		t.Fatalf("SetBudget returned with %d bytes resident, over its %d-byte budget", r, 2*page)
+	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
-	}
-	if r := f.ResidentBytes(); r > 2*page {
-		t.Fatalf("after the preload's reads landed %d bytes are resident, over the %d-byte budget", r, 2*page)
 	}
 	if len(read) != depth {
 		t.Fatalf("the preload read %d pages; after the shrink it must stop at the %d in flight", len(read), depth)

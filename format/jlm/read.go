@@ -58,6 +58,11 @@ type File struct {
 	// preloadRead stands in for EnsurePage in Preload, for a gate that holds
 	// a page mid-read; nil is EnsurePage.
 	preloadRead func(i int) error
+	// preN counts running Preloads, for SetBudget to wait out
+	// (settlePreload), under preMu; preCond is signalled as each ends.
+	preMu   sync.Mutex
+	preCond sync.Cond
+	preN    int
 	// waitNs is wall time a caller spent blocked in EnsureRanges waiting for
 	// its runs to land: serial time on the decode path, which is what a
 	// prefetch would have to hide. It is the only exposed-I/O number on the
@@ -586,6 +591,9 @@ func (f *File) makeRoom(li int, size uint64) {
 // widening is free and narrowing evicts exactly the excess; nilling every
 // page here once meant loading the model twice.
 func (f *File) SetBudget(bytes uint64) {
+	// After everything, unlocked: a preload's in-flight pages are pinned and
+	// only leave once their reads land.
+	defer f.settlePreload()
 	// Deferred first, so it runs after the unlock: see flushRecycled.
 	defer f.flushRecycled()
 	f.mu.Lock()

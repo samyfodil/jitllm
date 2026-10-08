@@ -29,6 +29,8 @@ func (f *File) Preload(depth int, stop <-chan struct{}) error {
 	if f == nil || depth < 1 || f.CanEvict() {
 		return nil
 	}
+	f.preloadStart()
+	defer f.preloadEnd()
 	n := f.NPages()
 	var (
 		next  atomic.Int64
@@ -81,6 +83,41 @@ func (f *File) Preload(depth int, stop <-chan struct{}) error {
 	}
 	wg.Wait()
 	return first
+}
+
+// settlePreload is SetBudget's half for a budget that no longer holds the
+// model: a running preload stops at its next page (its CanEvict check), and
+// the pages it has in flight are pinned, which the shrink could not take. So
+// the shrink waits for those reads and then evicts down to the budget, and a
+// caller reading residency after SetBudget sees the budget it set. The wait
+// is at most the preload's depth of page reads. Called without f.mu.
+func (f *File) settlePreload() {
+	if !f.CanEvict() {
+		return
+	}
+	f.preMu.Lock()
+	for f.preN > 0 {
+		f.preCond.Wait()
+	}
+	f.preMu.Unlock()
+	f.fitBudget()
+}
+
+// preloadStart and preloadEnd count running Preloads for settlePreload.
+func (f *File) preloadStart() {
+	f.preMu.Lock()
+	if f.preCond.L == nil {
+		f.preCond.L = &f.preMu
+	}
+	f.preN++
+	f.preMu.Unlock()
+}
+
+func (f *File) preloadEnd() {
+	f.preMu.Lock()
+	f.preN--
+	f.preCond.Broadcast()
+	f.preMu.Unlock()
 }
 
 // fitBudget evicts until what is resident is inside the budget: what SetBudget
