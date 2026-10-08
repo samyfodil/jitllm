@@ -32,6 +32,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/samyfodil/jitllm/internal/goheap"
 	"github.com/samyfodil/jitllm/jit/gpu/tier"
 	"github.com/samyfodil/jitllm/server"
 )
@@ -166,6 +167,13 @@ func serve(args []string) {
 	}
 	if err := misplacedFlag(fs); err != nil {
 		fatal("%v", err)
+	}
+
+	// Before anything is loaded: the daemon holds page frames for as long as
+	// it lives, and a collector that cannot see the cgroup plans a heap goal
+	// past it (AGENTS.md RULE 2f).
+	if lim := goheap.Cap(); lim > 0 {
+		fmt.Fprintf(os.Stderr, "go memory limit %.2f GiB\n", float64(lim)/(1<<30))
 	}
 
 	var budget uint64
