@@ -194,18 +194,13 @@ func (e *compat) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		MaxTokens: req.MaxTokens,
 		Stop:      req.StopSequences,
 	}
-	if req.Temperature != nil || req.TopP != nil || req.TopK != nil {
-		s := &model.Sampler{}
-		if req.Temperature != nil {
-			s.Temp = *req.Temperature
-		}
-		if req.TopP != nil {
-			s.TopP = *req.TopP
-		}
-		if req.TopK != nil {
-			s.TopK = *req.TopK
-		}
-		o.Sampling = s
+	// Anthropic's default temperature is 1, as OpenAI's is (oaSampling).
+	q := oaSampling{Temperature: req.Temperature, TopP: req.TopP, TopK: req.TopK}
+	if sm, err := q.sampler(req.JitllmSession); err != nil {
+		anFail(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	} else {
+		o.Sampling = sm
 	}
 	if err := e.b.BindTarget(&o, req.JitllmSession, req.Model); err != nil {
 		anFail(w, http.StatusNotFound, "not_found_error", err.Error())

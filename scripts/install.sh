@@ -1,8 +1,8 @@
 #!/bin/sh
 # Installs jitllm from a GitHub release on Linux or macOS.
 #
-#   curl -fsSL https://raw.githubusercontent.com/samyfodil/jitllm/main/scripts/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/samyfodil/jitllm/main/scripts/install.sh | sh -s -- all
+#   curl -fsSL https://jitllm.org/install.sh | sh
+#   curl -fsSL https://jitllm.org/install.sh | sh -s -- all
 #
 # Arguments name the programs to install: jitllm (the CLI), jitllmd (the
 # server), desktop (jitllm-desktop), tui (jitllm-tui), or all. With none it
@@ -37,7 +37,7 @@ fi
 case $(uname -s) in
 Linux) os=linux ;;
 Darwin) os=darwin ;;
-*) die "$(uname -s) is not supported by this script; on Windows use scripts/install.ps1" ;;
+*) die "$(uname -s) is not supported by this script; on Windows use https://jitllm.org/install.ps1" ;;
 esac
 case $(uname -m) in
 x86_64 | amd64) arch=amd64 ;;

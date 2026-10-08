@@ -35,13 +35,13 @@ are [desktop](#desktop-app) and [terminal](#terminal-app) apps too.
 Linux and macOS:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/samyfodil/jitllm/main/scripts/install.sh | sh
+curl -fsSL https://jitllm.org/install.sh | sh
 ```
 
 Windows (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/samyfodil/jitllm/main/scripts/install.ps1 | iex
+irm https://jitllm.org/install.ps1 | iex
 ```
 
 This installs the CLI, `jitllm`, and the server, `jitllmd`, from the latest

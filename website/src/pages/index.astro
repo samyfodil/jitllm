@@ -304,10 +304,10 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '')
         <div class="two">
           <div class="panel step">
             <div class="step-head"><span class="pix sm" data-pixel="probe" aria-hidden="true"></span><h3>Install and fetch a model</h3></div>
-            <p>Install the CLI and the server from the latest release, then convert Qwen3-30B-A3B, a 30B mixture of experts that uses 3B per token (18.6 GB to download). On Windows: <code>irm https://raw.githubusercontent.com/samyfodil/jitllm/main/scripts/install.ps1 | iex</code>.</p>
+            <p>Install the CLI and the server from the latest release, then convert Qwen3-30B-A3B, a 30B mixture of experts that uses 3B per token (18.6 GB to download). On Windows: <code>irm https://jitllm.org/install.ps1 | iex</code>.</p>
             <div class="cmd">
               <div class="cmd-head"><span>shell</span><button class="copy" type="button" data-copy>Copy</button></div>
-<pre><code><span class="p">$</span> curl -fsSL https://raw.githubusercontent.com/samyfodil/jitllm/main/scripts/install.sh | sh
+<pre><code><span class="p">$</span> curl -fsSL https://jitllm.org/install.sh | sh
 <span class="p">$</span> mkdir -p models
 <span class="p">$</span> jitllm convert -o models qwen3-30b-a3b models/qwen3.jlm</code></pre>
             </div>

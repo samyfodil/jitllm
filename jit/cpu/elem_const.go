@@ -81,6 +81,10 @@ func actConsts() []float32 {
 		kernels.TanhP[0], kernels.TanhP[1], kernels.TanhP[2], kernels.TanhP[3], // 128..140
 		kernels.TanhP[4], kernels.TanhP[5], kernels.TanhP[6], // 144..152
 		kernels.TanhQ[0], kernels.TanhQ[1], kernels.TanhQ[2], kernels.TanhQ[3], // 156..168
+		// 172..176: the log-softmax's ln of its sum (emitLnSum): the f32
+		// mantissa mask, as bits, and ln 2.
+		math.Float32frombits(0x007FFFFF), // 172
+		float32(math.Ln2),                // 176
 	)
 }
 

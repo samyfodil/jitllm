@@ -37,8 +37,11 @@ type Emitters struct {
 	Scale   func() ([]byte, error)
 	Softcap func() ([]byte, error)
 	// Clamp is x = min(max(x, lo), hi) with Scr = {lo, hi}: DBRX's clip_qkv.
-	Clamp      func() ([]byte, error)
-	Softmax    func() ([]byte, error)
+	Clamp   func() ([]byte, error)
+	Softmax func() ([]byte, error)
+	// LogSoftmax is Softmax's log form, the same Args and Scr = ActConsts():
+	// x - max - ln(sum exp(x - max)), in place (EmitLogSoftmax).
+	LogSoftmax func() ([]byte, error)
 	ActMul     func(k ActKind) ([]byte, error) // every kind in Gated
 	Act        func(k ActKind) ([]byte, error) // every kind in Ungated
 	SigmoidMul func() ([]byte, error)
@@ -285,6 +288,7 @@ var primaryEmitters = Emitters{
 	LerpGrid:   func() ([]byte, error) { return must("lerpgrid", EmitLerpGrid()) },
 	SinCosTab:  func() ([]byte, error) { return must("sincostab", EmitSinCosTab()) },
 	Softmax:    func() ([]byte, error) { return must("softmax", EmitSoftmax()) },
+	LogSoftmax: func() ([]byte, error) { return must("logsoftmax", EmitLogSoftmax()) },
 	ActMul:     func(k ActKind) ([]byte, error) { return must("actmul", EmitActMul(k)) },
 	Act:        func(k ActKind) ([]byte, error) { return must("act", EmitAct(k)) },
 	SigmoidMul: func() ([]byte, error) { return must("sigmoidmul", EmitSigmoidMul()) },
@@ -380,6 +384,7 @@ var sseEmitters = Emitters{
 	LerpGrid:   EmitLerpGridSSE,
 	SinCosTab:  EmitSinCosTabSSE,
 	Softmax:    EmitSoftmaxSSE,
+	LogSoftmax: EmitLogSoftmaxSSE,
 	ActMul:     EmitActMulSSE,
 	Act:        EmitActSSE,
 	SigmoidMul: EmitSigmoidMulSSE,

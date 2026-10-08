@@ -76,7 +76,7 @@ func (f *fakeBackend) Generate(ctx context.Context, o GenerateOptions, emit func
 }
 
 func (f *fakeBackend) ListLoaded() []ModelSummary {
-	return []ModelSummary{{ID: "m-1", Name: "tinyllama", LoadedAt: time.Unix(1700000000, 0)}}
+	return []ModelSummary{{ID: "m-1", Name: "tinyllama", LoadedAt: time.Unix(1700000000, 0), MaxModelLen: 2048}}
 }
 
 func (f *fakeBackend) BindTarget(o *GenerateOptions, sessionID, modelName string) error {
