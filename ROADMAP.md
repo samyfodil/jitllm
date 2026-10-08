@@ -215,6 +215,11 @@ decode on an RTX 5070 (not measured here). Our streamed Qwen3-Next-80B on a
    pays; the next layer's experts streamed over PCIe during this layer's
    attention in prefill; long-context KV keeping only its most-read part on
    the device; a multi-GPU layer split from a fitted cost model.
+6. Reach beyond today's inputs and hardware: converting the AWQ, GPTQ and
+   EXL3 safetensors checkpoints a large share of quantized releases ship as;
+   an Intel AMX emitter for int8 and bf16 matrix units on recent Xeons;
+   a native ROCm backend for AMD cards beside Vulkan; and audio (Whisper
+   speech-to-text, then TTS) as the next modality after vision.
 
 Not applicable: per-model kernel specialisation, the ggml kernels, a
 single-user server, and its "speed projection" (a refusal-removing control
