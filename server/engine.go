@@ -52,6 +52,13 @@ type Config struct {
 	// anyway; a step never carries more than model.MaxStepRows rows in all.
 	PromptChunk int
 
+	// StepPromptTokens bounds the prompt tokens one step carries beside
+	// decoding rows, so admitting a prompt holds each of their tokens up by
+	// about one decode step rather than a prompt chunk. Zero measures it
+	// (stepBudget): the prompt tokens that cost one decode step's time. A
+	// step with no decoding row takes PromptChunk whole.
+	StepPromptTokens int
+
 	// JointSteps is how a decode step whose rows could run as one joint step
 	// does run: measured per row count (the default), always joint, or never.
 	JointSteps JointSteps

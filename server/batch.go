@@ -80,6 +80,10 @@ type stepLoop struct {
 	// session after another (batchchoose.go).
 	choice *jointChoice
 
+	// budget is how many prompt tokens a step carries beside decoding rows
+	// (stepBudget).
+	budget *stepBudget
+
 	// post is the helper that turns the tokens a step feeds into text and
 	// events while the step runs.
 	post *stepPost
@@ -116,7 +120,10 @@ type batchCounters struct {
 	// postedTokens is tokens whose text and event the helper produced while
 	// their step ran.
 	postedTokens atomic.Int64
-	lastRefusal  atomic.Pointer[string]
+	// maxPromptBeside is the most prompt tokens one step carried beside a
+	// decoding row: the bound stepBudget keeps.
+	maxPromptBeside atomic.Int64
+	lastRefusal     atomic.Pointer[string]
 }
 
 // errUnloaded ends a request still waiting for a row when its model goes.
@@ -144,6 +151,7 @@ func newStepLoop(e *Engine, lm *LoadedModel) *stepLoop {
 		width:       batchWidth(e.cfg.MaxBatchRows),
 		promptChunk: e.cfg.PromptChunk,
 		choice:      newJointChoice(e.cfg.JointSteps),
+		budget:      newStepBudget(e.cfg.StepPromptTokens, e.cfg.PromptChunk),
 		ctx:         ctx,
 		quit:        quit,
 		done:        make(chan struct{}),
@@ -431,7 +439,11 @@ type unit struct {
 func (lp *stepLoop) iterate() {
 	units := lp.decodeUnits()
 	decoding := len(units)
-	units = lp.promptUnits(units, min(lp.promptChunk, model.MaxStepRows-decoding))
+	budget := lp.promptChunk
+	if decoding > 0 {
+		budget = lp.budget.tokens()
+	}
+	units = lp.promptUnits(units, min(budget, model.MaxStepRows-decoding))
 	lp.units = units
 	if len(units) == 0 {
 		return
@@ -454,9 +466,20 @@ func (lp *stepLoop) iterate() {
 		}
 		units[decoding-1].tokens[0] = first
 	}
+	prompt := 0
+	for _, u := range units[decoding:] {
+		if !u.alone {
+			prompt += len(u.tokens)
+		}
+	}
+	if decoding > 0 {
+		lp.stats.maxPromptBeside.Store(max(lp.stats.maxPromptBeside.Load(), int64(prompt)))
+	}
 	// The tokens this step feeds become text and events while it runs.
 	lp.post.start()
+	t0 := time.Now()
 	lp.step(units)
+	lp.budget.observe(decoding, prompt, time.Since(t0))
 	lp.post.wait()
 }
 
