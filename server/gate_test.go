@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -84,12 +85,13 @@ func twoAtOnce(t *testing.T, e *Engine, modelID string) {
 	// Inside the device model's 128-position context with either prompt.
 	const n = 100
 	type run struct {
-		ids   []int32
-		times []time.Time
-		err   error
-		fin   *Finished
+		ids []int32
+		err error
+		fin *Finished
 	}
-	gen := func(sid, prompt string) run {
+	// first, when set, runs at a session's first token: beside the other it
+	// holds the reply until the other session has produced a token.
+	gen := func(sid, prompt string, first func() error) run {
 		var r run
 		r.err = e.Generate(context.Background(), GenerateOptions{
 			SessionID: sid, Prompt: Prompt{Kind: PromptText, Text: prompt}, MaxTokens: n, IgnoreEOS: true,
@@ -99,7 +101,9 @@ func twoAtOnce(t *testing.T, e *Engine, modelID string) {
 			}
 			if ev.Kind == EventToken && ev.Token.ID >= 0 {
 				r.ids = append(r.ids, ev.Token.ID)
-				r.times = append(r.times, time.Now())
+				if len(r.ids) == 1 && first != nil {
+					return first()
+				}
 			}
 			return nil
 		})
@@ -112,8 +116,29 @@ func twoAtOnce(t *testing.T, e *Engine, modelID string) {
 	}
 	var solo [2]run
 	for i := range 2 {
-		if solo[i] = gen(string(rune('a'+i)), prompts[i]); solo[i].err != nil || len(solo[i].ids) != n {
+		if solo[i] = gen(string(rune('a'+i)), prompts[i], nil); solo[i].err != nil || len(solo[i].ids) != n {
 			t.Fatalf("solo %d: %d tokens, %v, finished %+v", i, len(solo[i].ids), solo[i].err, solo[i].fin)
+		}
+	}
+
+	// Each session, at its first token, says so and then waits for the other's
+	// first token. Interleaved, both pass at once. Were a session held for a
+	// whole generate, the other could not produce a token until it ended, and
+	// the wait below would expire: a property of the order, not of how fast
+	// the box is, so a slow runner cannot fail it and a lock cannot pass it.
+	var said [2]chan struct{}
+	for i := range said {
+		said[i] = make(chan struct{})
+	}
+	first := func(i int) func() error {
+		return func() error {
+			close(said[i])
+			select {
+			case <-said[1-i]:
+				return nil
+			case <-time.After(2 * time.Minute):
+				return fmt.Errorf("session %d waited mid-reply and the other produced no token: the two generates did not interleave", i)
+			}
 		}
 	}
 
@@ -125,7 +150,7 @@ func twoAtOnce(t *testing.T, e *Engine, modelID string) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			both[i] = gen(string(rune('a'+i)), prompts[i])
+			both[i] = gen(string(rune('a'+i)), prompts[i], first(i))
 		}(i)
 	}
 	finished := make(chan struct{})
@@ -150,21 +175,5 @@ func twoAtOnce(t *testing.T, e *Engine, modelID string) {
 					i, k, both[i].ids[k], solo[i].ids[k])
 			}
 		}
-	}
-	// Interleaved: each session produced a token strictly inside the other's
-	// reply. Held for a whole generate, one reply would end before the other's
-	// first token.
-	inside := func(x, y run) bool {
-		for _, at := range x.times {
-			if at.After(y.times[0]) && at.Before(y.times[n-1]) {
-				return true
-			}
-		}
-		return false
-	}
-	if !inside(both[0], both[1]) || !inside(both[1], both[0]) {
-		t.Fatalf("the two generates did not interleave: a [%v..%v], b [%v..%v]",
-			both[0].times[0].Format(time.StampMicro), both[0].times[n-1].Format(time.StampMicro),
-			both[1].times[0].Format(time.StampMicro), both[1].times[n-1].Format(time.StampMicro))
 	}
 }
