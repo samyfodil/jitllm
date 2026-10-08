@@ -172,46 +172,112 @@ func TestSessionsStepAtOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	prompts := atOncePrompts(m)
-	const seq = 256
 	for _, spec := range []string{"cuda:0", "vulkan:0", "vulkan:1", "metal"} {
 		t.Run(spec, func(t *testing.T) {
-			g := atOnceTier(t, spec, nil)
-			var alone [2]atOnceRun
-			for k := range prompts {
-				st, next := atOnceState(t, m, g, seq, prompts[k])
-				if err := alone[k].decode(st, next, atOnceGen); err != nil {
-					t.Fatal(err)
-				}
-				st.Close()
-			}
-			before := g.Stats()
-			var sts []*State
-			var next []int32
-			for k := range prompts {
-				st, n := atOnceState(t, m, g, seq, prompts[k])
-				sts, next = append(sts, st), append(next, n)
-			}
-			runs := atOnce(t, sts, next, atOnceGen)
-			after := g.Stats()
-			for k := range runs {
-				sameRun(t, []string{"session 0", "session 1"}[k], runs[k], alone[k])
-			}
-			beside := after.RanBeside - before.RanBeside
-			ov := overlaps(runs[0], runs[1])
-			t.Logf("%s: %d steps each, ids and logits identical to each alone; %d of session 0's steps "+
-				"overlapped session 1's, %d submissions ran on the device beside another's; the second "+
-				"session's lane is %d bytes of scratch (%d with it, %d without)",
-				g.Name(), atOnceGen, ov, beside, int64(after.ScratchBytes)-int64(before.ScratchBytes),
-				after.ScratchBytes, before.ScratchBytes)
-			if ov == 0 {
-				t.Fatal("no step of one session overlapped the other's: they ran one after another")
-			}
-			if beside == 0 {
-				t.Fatal("no submission started while another was in flight: the sessions' device calls " +
-					"were serialised")
-			}
+			stepAtOnce(t, m, atOncePrompts(m), spec, m.Cfg.NLayer, true)
 		})
+	}
+}
+
+// TestSessionsStepAtOnceHybrid is TestSessionsStepAtOnce on hybrids -- the
+// gated delta rule beside attention, with and without the routed mixture --
+// placed wholly and with a seam that leaves half the blocks on the host, so
+// two sessions' recurrent states (each its own seat in the device's pools)
+// and the host blocks' single matvecs (each session's own crossing verdict)
+// are held to the answers each gives alone. A submission holding a linear
+// block runs alone by design (tier exclusiveRange), so the device is not
+// asked to run two side by side; the steps still overlap on the wall clock.
+func TestSessionsStepAtOnceHybrid(t *testing.T) {
+	for _, o := range hybridAtOnce {
+		m := hybridModelOpt(t, o.opt)
+		defer m.Close()
+		nl := m.Cfg.NLayer
+		for _, blocks := range []int{nl, nl / 2} {
+			for _, spec := range []string{"cuda:0", "vulkan:0", "vulkan:1", "metal"} {
+				t.Run(fmt.Sprintf("%s/%d-of-%d/%s", o.name, blocks, nl, spec), func(t *testing.T) {
+					stepAtOnce(t, m, hybridPrompts, spec, blocks, false)
+				})
+			}
+		}
+	}
+}
+
+// hybridAtOnce are the hybrids the session gates run: the gated delta rule
+// beside attention, and the same with qwen3next's routed mixture and shared
+// expert.
+var hybridAtOnce = []struct {
+	name string
+	opt  hyOpt
+}{{"delta", hyOpt{}}, {"delta+moe", hyOpt{moe: true}}}
+
+// hybridPrompts are the sessions' prompts on the synthetic hybrid, whose
+// vocabulary is hyVocab ids with no text behind them.
+var hybridPrompts = [2][]int32{{1, 2, 3, 4, 5, 6, 7, 8}, {9, 3, 14, 1, 5, 9, 2, 6}}
+
+// atOncePlace places a State's first blocks on g -- every block and the head
+// through atOnceState -- and prefills prompt, returning the first greedy
+// token.
+func atOncePlace(t *testing.T, m *Model, g *tier.GPU, seq int, prompt []int32, blocks int) (*State, int32) {
+	t.Helper()
+	if blocks == m.Cfg.NLayer {
+		return atOnceState(t, m, g, seq, prompt)
+	}
+	st := m.NewState(seq)
+	t.Cleanup(func() { st.Close() })
+	if err := st.SetDeviceLayers(g, blocks); err != nil {
+		t.Fatal(err)
+	}
+	if st.devCount() != blocks {
+		t.Fatalf("%d of %d blocks on the device, asked %d: %s", st.devCount(), m.Cfg.NLayer, blocks, g.Err())
+	}
+	lg, err := st.Prefill(prompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st, Greedy(lg)
+}
+
+// stepAtOnce runs two sessions of m on blocks of a fresh tier over spec, each
+// alone and then both at once from two goroutines, and holds the run at once
+// to the runs alone. beside also demands that the device ran a submission
+// beside another's.
+func stepAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, blocks int, beside bool) {
+	t.Helper()
+	const seq = 256
+	g := atOnceTier(t, spec, nil)
+	var alone [2]atOnceRun
+	for k := range prompts {
+		st, next := atOncePlace(t, m, g, seq, prompts[k], blocks)
+		if err := alone[k].decode(st, next, atOnceGen); err != nil {
+			t.Fatal(err)
+		}
+		st.Close()
+	}
+	before := g.Stats()
+	var sts []*State
+	var next []int32
+	for k := range prompts {
+		st, n := atOncePlace(t, m, g, seq, prompts[k], blocks)
+		sts, next = append(sts, st), append(next, n)
+	}
+	runs := atOnce(t, sts, next, atOnceGen)
+	after := g.Stats()
+	for k := range runs {
+		sameRun(t, []string{"session 0", "session 1"}[k], runs[k], alone[k])
+	}
+	ran := after.RanBeside - before.RanBeside
+	ov := overlaps(runs[0], runs[1])
+	t.Logf("%s, %d of %d blocks: %d steps each, ids and logits identical to each alone; %d of session 0's "+
+		"steps overlapped session 1's, %d submissions ran on the device beside another's; the second "+
+		"session's lane is %d bytes of scratch (%d with it, %d without)",
+		g.Name(), blocks, m.Cfg.NLayer, atOnceGen, ov, ran, int64(after.ScratchBytes)-int64(before.ScratchBytes),
+		after.ScratchBytes, before.ScratchBytes)
+	if ov == 0 {
+		t.Fatal("no step of one session overlapped the other's: they ran one after another")
+	}
+	if beside && ran == 0 {
+		t.Fatal("no submission started while another was in flight: the sessions' device calls " +
+			"were serialised")
 	}
 }
 
@@ -481,9 +547,6 @@ func TestSessionsRelocateAtOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	prompts := atOncePrompts(m)
-	const seq = 256
-	nl := m.Cfg.NLayer
 	// half puts the session beside the relocating one on the first half of
 	// the blocks only, so the relocating session's seam move frees the second
 	// half outright and its way back prepares them again -- allocations and
@@ -491,100 +554,118 @@ func TestSessionsRelocateAtOnce(t *testing.T) {
 	for _, half := range []bool{false, true} {
 		for _, spec := range []string{"cuda:0", "vulkan:0", "metal"} {
 			t.Run(fmt.Sprintf("%s/half=%v", spec, half), func(t *testing.T) {
-				g := atOnceTier(t, spec, nil)
-				g2 := atOnceTier(t, spec, nil)
-				place := func(prompt []int32, blocks int) (*State, int32) {
-					if blocks == nl {
-						return atOnceState(t, m, g, seq, prompt)
-					}
-					st := m.NewState(seq)
-					t.Cleanup(func() { st.Close() })
-					if err := st.SetDeviceLayers(g, blocks); err != nil {
-						t.Fatal(err)
-					}
-					lg, err := st.Prefill(prompt)
-					if err != nil {
-						t.Fatal(err)
-					}
-					return st, Greedy(lg)
-				}
-				bBlocks := nl
-				if half {
-					bBlocks = nl / 2
-				}
-				// moves is the relocating session's run: at step 8 half its blocks
-				// go home, at 16 they come back, at 24 it hops to g2.
-				moves := func(st *State, next int32, r *atOnceRun) error {
-					for i := range atOnceGen {
-						switch i {
-						case 8:
-							if got := st.SetGPULayers(nl / 2); got != nl/2 {
-								return fmt.Errorf("the seam moved to %d blocks, asked %d", got, nl/2)
-							}
-						case 16:
-							if got := st.SetGPULayers(nl); got != nl {
-								return fmt.Errorf("the seam came back to %d blocks, asked %d", got, nl)
-							}
-						case 24:
-							if err := st.SetDevice(g2); err != nil {
-								return err
-							}
-							if st.GPULayers() != nl {
-								return fmt.Errorf("%d of %d blocks on the second tier: %s", st.GPULayers(), nl, g2.Err())
-							}
-						}
-						if err := r.decode(st, next, 1); err != nil {
-							return err
-						}
-						next = r.ids[len(r.ids)-1]
-					}
-					return nil
-				}
-				var alone [2]atOnceRun
-				st, next := atOnceState(t, m, g, seq, prompts[0])
-				if err := moves(st, next, &alone[0]); err != nil {
-					t.Fatal(err)
-				}
-				st.Close()
-				st, next = place(prompts[1], bBlocks)
-				if err := alone[1].decode(st, next, atOnceGen); err != nil {
-					t.Fatal(err)
-				}
-				st.Close()
-
-				before := g.Stats()
-				a, na := atOnceState(t, m, g, seq, prompts[0])
-				b, nb := place(prompts[1], bBlocks)
-				var runs [2]atOnceRun
-				var errs [2]error
-				var wg sync.WaitGroup
-				start := make(chan struct{})
-				wg.Add(2)
-				go func() { defer wg.Done(); <-start; errs[0] = moves(a, na, &runs[0]) }()
-				go func() { defer wg.Done(); <-start; errs[1] = runs[1].decode(b, nb, atOnceGen) }()
-				close(start)
-				wg.Wait()
-				for k, err := range errs {
-					if err != nil {
-						t.Fatalf("session %d: %v", k, err)
-					}
-				}
-				after := g.Stats()
-				sameRun(t, "the relocating session", runs[0], alone[0])
-				sameRun(t, "the session beside it", runs[1], alone[1])
-				beside := after.RanBeside - before.RanBeside
-				t.Logf("%s, the other session on %d of %d blocks: %d steps each with the seam moved twice and a "+
-					"hop to a second tier mid-run, ids and logits identical to each alone; %d submissions started "+
-					"beside another in flight", g.Name(), bBlocks, nl, atOnceGen, beside)
-				// With the other session on half the blocks, the two have only
-				// the relocating one's device steps on the first tier to overlap,
-				// and sometimes do not: that arm is held to the answers, the full
-				// one to running beside each other as well.
-				if beside == 0 && !half {
-					t.Fatal("no submission ran on the device while another's did: the sessions ran one after another")
-				}
+				relocateAtOnce(t, m, atOncePrompts(m), spec, half, !half)
 			})
 		}
+	}
+}
+
+// TestSessionsRelocateAtOnceHybrid is TestSessionsRelocateAtOnce on the
+// hybrids of TestSessionsStepAtOnceHybrid: the relocating session's seam
+// move carries its recurrent state home and back and its hop carries it to
+// a second tier, while the other session's state stays in its own seat
+// beside it, with the other session on every block and on half of them. A
+// submission holding a linear block runs alone by design, so RanBeside is
+// logged and not held.
+func TestSessionsRelocateAtOnceHybrid(t *testing.T) {
+	for _, o := range hybridAtOnce {
+		m := hybridModelOpt(t, o.opt)
+		defer m.Close()
+		for _, half := range []bool{false, true} {
+			for _, spec := range []string{"cuda:0", "vulkan:0", "metal"} {
+				t.Run(fmt.Sprintf("%s/%s/half=%v", o.name, spec, half), func(t *testing.T) {
+					relocateAtOnce(t, m, hybridPrompts, spec, half, false)
+				})
+			}
+		}
+	}
+}
+
+// relocateAtOnce is TestSessionsRelocateAtOnce's arm for m on spec. beside
+// demands that the device ran a submission beside another's.
+func relocateAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, half, beside bool) {
+	t.Helper()
+	const seq = 256
+	nl := m.Cfg.NLayer
+	g := atOnceTier(t, spec, nil)
+	g2 := atOnceTier(t, spec, nil)
+	place := func(prompt []int32, blocks int) (*State, int32) {
+		return atOncePlace(t, m, g, seq, prompt, blocks)
+	}
+	bBlocks := nl
+	if half {
+		bBlocks = nl / 2
+	}
+	// moves is the relocating session's run: at step 8 half its blocks
+	// go home, at 16 they come back, at 24 it hops to g2.
+	moves := func(st *State, next int32, r *atOnceRun) error {
+		for i := range atOnceGen {
+			switch i {
+			case 8:
+				if got := st.SetGPULayers(nl / 2); got != nl/2 {
+					return fmt.Errorf("the seam moved to %d blocks, asked %d", got, nl/2)
+				}
+			case 16:
+				if got := st.SetGPULayers(nl); got != nl {
+					return fmt.Errorf("the seam came back to %d blocks, asked %d", got, nl)
+				}
+			case 24:
+				if err := st.SetDevice(g2); err != nil {
+					return err
+				}
+				if st.GPULayers() != nl {
+					return fmt.Errorf("%d of %d blocks on the second tier: %s", st.GPULayers(), nl, g2.Err())
+				}
+			}
+			if err := r.decode(st, next, 1); err != nil {
+				return err
+			}
+			next = r.ids[len(r.ids)-1]
+		}
+		return nil
+	}
+	var alone [2]atOnceRun
+	st, next := atOnceState(t, m, g, seq, prompts[0])
+	if err := moves(st, next, &alone[0]); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	st, next = place(prompts[1], bBlocks)
+	if err := alone[1].decode(st, next, atOnceGen); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	before := g.Stats()
+	a, na := atOnceState(t, m, g, seq, prompts[0])
+	b, nb := place(prompts[1], bBlocks)
+	var runs [2]atOnceRun
+	var errs [2]error
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	wg.Add(2)
+	go func() { defer wg.Done(); <-start; errs[0] = moves(a, na, &runs[0]) }()
+	go func() { defer wg.Done(); <-start; errs[1] = runs[1].decode(b, nb, atOnceGen) }()
+	close(start)
+	wg.Wait()
+	for k, err := range errs {
+		if err != nil {
+			t.Fatalf("session %d: %v", k, err)
+		}
+	}
+	after := g.Stats()
+	sameRun(t, "the relocating session", runs[0], alone[0])
+	sameRun(t, "the session beside it", runs[1], alone[1])
+	ran := after.RanBeside - before.RanBeside
+	t.Logf("%s, the other session on %d of %d blocks: %d steps each with the seam moved twice and a "+
+		"hop to a second tier mid-run, ids and logits identical to each alone; %d submissions started "+
+		"beside another in flight", g.Name(), bBlocks, nl, atOnceGen, ran)
+	// With the other session on half the blocks, the two have only
+	// the relocating one's device steps on the first tier to overlap,
+	// and sometimes do not: that arm is held to the answers, the full
+	// one to running beside each other as well.
+	if beside && ran == 0 {
+		t.Fatal("no submission ran on the device while another's did: the sessions ran one after another")
 	}
 }
 

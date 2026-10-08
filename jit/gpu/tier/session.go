@@ -240,11 +240,21 @@ func (s *gpuSession) PrepHead(h *nn.Head) bool {
 	return s.g.PrepHead(h)
 }
 
-// The rest is the tier's, not the session's: capability and accounting queries
-// carry no per-sequence state and must not queue behind another session's token.
+// MatVec is a single matvec for this session: the crossing verdict it is
+// held to is sampled per session (devTier.mvPays). It does not enter: it
+// takes the device's own lock and must not queue behind another session's
+// token.
 func (s *gpuSession) MatVec(out []float32, t quant.Type, w []byte, x []float32, nrows, k int) bool {
 	return s.g.matVec(s.sid, out, t, w, x, nrows, k)
 }
+
+// SetActWindow forwards the activation window (nn.ActWindower): a JIT that
+// offers its matvecs to the session sets it here, and the window is the
+// tier's, as GPU.SetActWindow keeps it.
+func (s *gpuSession) SetActWindow(w int) { s.g.SetActWindow(w) }
+
+// The rest is the tier's, not the session's: capability and accounting queries
+// carry no per-sequence state and must not queue behind another session's token.
 
 // Reserve sizes the shared scratch: a model property, not a sequence's.
 func (s *gpuSession) Reserve(maxRows, maxK int) bool {

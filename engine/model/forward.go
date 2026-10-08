@@ -1029,6 +1029,15 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 	// docs/design/device-sessions.md); two States must not share one cache.
 	if a, ok := ld.(nn.Attacher); ok {
 		ld = a.Attach()
+		// The single matvecs are the session's too: the tier's crossing
+		// verdict is sampled per session, and offered through the tier itself
+		// they land on its zero session, which outlives every State, so a
+		// second State would inherit the first's sample and run the same
+		// token with different kernels
+		// (TestHybridSecondSessionMatchesTheFirst).
+		if s.vis == nil || !s.vis.borrowed {
+			s.jit.SetDevice(ld)
+		}
 	}
 	// Size the scratch before offering anything: the largest matvec is known
 	// from the header, and reserving first never competes with weights for the
