@@ -39,6 +39,8 @@ func (e *Engine) Handler() http.Handler {
 
 	mux.Handle("/", CompatHandler(e))
 
+	mux.HandleFunc("/metrics", e.serveMetrics)
+
 	health := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write([]byte("ok\n"))

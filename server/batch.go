@@ -641,7 +641,7 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 		logprobs:  newLogprobs(o),
 		maxTokens: maxTokens,
 		ignoreEOS: o.IgnoreEOS,
-		stream:    newStreamText(lm.m.Vocab, o.Stop),
+		stream:    newStreamText(lm.m.Vocab.NewChatStream().Next, o.Stop),
 		enqueued:  time.Now(),
 		admitted:  make(chan struct{}),
 		done:      make(chan struct{}),
@@ -707,7 +707,7 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 
 	res := r.result
 	s.generated.Add(int64(res.n))
-	lm.tokensGenerated.Add(int64(res.n))
+	lm.finished(res.n, r.prefill, res.decode)
 	s.lastUsed.Store(time.Now().UnixMilli())
 	s.refresh()
 	// The history grew by what this generate committed.

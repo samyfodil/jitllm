@@ -284,7 +284,19 @@ type CreateSessionRequest struct {
 	// device's share as memory frees. This is the `-gpu-grow` behaviour.
 	RelocateWhileServing bool `protobuf:"varint,6,opt,name=relocate_while_serving,json=relocateWhileServing,proto3" json:"relocate_while_serving,omitempty"`
 	// Sampler defaults for generate calls that do not carry their own.
-	Sampling      *SamplingParams `protobuf:"bytes,7,opt,name=sampling,proto3" json:"sampling,omitempty"`
+	Sampling *SamplingParams `protobuf:"bytes,7,opt,name=sampling,proto3" json:"sampling,omitempty"`
+	// Keep the session's blocks off the host when its context outgrows the
+	// device: the token takes the device's refusal rather than a block coming
+	// home. Contradicts relocate_while_serving; both set is refused.
+	KeepOffHost bool `protobuf:"varint,8,opt,name=keep_off_host,json=keepOffHost,proto3" json:"keep_off_host,omitempty"`
+	// Keep this session's prompt prefixes in the server's prompt store
+	// (`jitllmd serve -kv-cache DIR`), so a prompt that starts as an earlier one
+	// resumes from its cached keys and values. Refused when the server has no
+	// store. Such a session prefills alone, not as a row of a batched step.
+	PromptCache bool `protobuf:"varint,9,opt,name=prompt_cache,json=promptCache,proto3" json:"prompt_cache,omitempty"`
+	// Names what the prompt store may share between sessions. Needs
+	// prompt_cache.
+	CacheKey      string `protobuf:"bytes,10,opt,name=cache_key,json=cacheKey,proto3" json:"cache_key,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -366,6 +378,27 @@ func (x *CreateSessionRequest) GetSampling() *SamplingParams {
 		return x.Sampling
 	}
 	return nil
+}
+
+func (x *CreateSessionRequest) GetKeepOffHost() bool {
+	if x != nil {
+		return x.KeepOffHost
+	}
+	return false
+}
+
+func (x *CreateSessionRequest) GetPromptCache() bool {
+	if x != nil {
+		return x.PromptCache
+	}
+	return false
+}
+
+func (x *CreateSessionRequest) GetCacheKey() string {
+	if x != nil {
+		return x.CacheKey
+	}
+	return ""
 }
 
 type CreateSessionResponse struct {
@@ -943,7 +976,7 @@ const file_jitllm_v1_session_proto_rawDesc = "" +
 	"\x0fkv_bytes_in_use\x18\x02 \x01(\v2\x13.jitllm.v1.ByteSizeR\fkvBytesInUse\x12#\n" +
 	"\rsessions_open\x18\x03 \x01(\x05R\fsessionsOpen\x12?\n" +
 	"\x1csessions_per_device_measured\x18\x04 \x01(\bR\x19sessionsPerDeviceMeasured\x12'\n" +
-	"\x0funmeasured_note\x18\x05 \x01(\tR\x0eunmeasuredNote\"\xbc\x02\n" +
+	"\x0funmeasured_note\x18\x05 \x01(\tR\x0eunmeasuredNote\"\xa0\x03\n" +
 	"\x14CreateSessionRequest\x12\x19\n" +
 	"\bmodel_id\x18\x01 \x01(\tR\amodelId\x12\x1d\n" +
 	"\n" +
@@ -953,7 +986,11 @@ const file_jitllm_v1_session_proto_rawDesc = "" +
 	"device_ids\x18\x04 \x03(\tR\tdeviceIds\x12/\n" +
 	"\x11max_device_blocks\x18\x05 \x01(\x05H\x00R\x0fmaxDeviceBlocks\x88\x01\x01\x124\n" +
 	"\x16relocate_while_serving\x18\x06 \x01(\bR\x14relocateWhileServing\x125\n" +
-	"\bsampling\x18\a \x01(\v2\x19.jitllm.v1.SamplingParamsR\bsamplingB\x14\n" +
+	"\bsampling\x18\a \x01(\v2\x19.jitllm.v1.SamplingParamsR\bsampling\x12\"\n" +
+	"\rkeep_off_host\x18\b \x01(\bR\vkeepOffHost\x12!\n" +
+	"\fprompt_cache\x18\t \x01(\bR\vpromptCache\x12\x1b\n" +
+	"\tcache_key\x18\n" +
+	" \x01(\tR\bcacheKeyB\x14\n" +
 	"\x12_max_device_blocks\"w\n" +
 	"\x15CreateSessionResponse\x12,\n" +
 	"\asession\x18\x01 \x01(\v2\x12.jitllm.v1.SessionR\asession\x120\n" +

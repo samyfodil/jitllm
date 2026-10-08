@@ -10,6 +10,8 @@
 package server
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -57,6 +59,15 @@ type Config struct {
 	// DefaultMaxSeq is the KV capacity a session gets when it asks for none.
 	// Zero takes the model's own context length.
 	DefaultMaxSeq int
+
+	// KVF16 is the KV cache width a load that names none gets: true binary16,
+	// false f32, nil the engine's own per-host choice (model.WithKVF16).
+	KVF16 *bool
+
+	// PromptStore is where a session created with PromptCache keeps its
+	// prompt prefixes; nil refuses such a session. jitllmd's -kv-cache is a
+	// model.FileStore.
+	PromptStore model.KVStore
 
 	// Version is reported by GetServerInfo.
 	Version string
@@ -215,6 +226,22 @@ type LoadedModel struct {
 
 	tokensGenerated atomic.Int64
 	tokensPrefilled atomic.Int64
+
+	// generates, prefillNanos and decodeNanos are every finished generate's
+	// count and the time it spent in its prefill (the time to its first
+	// token, queueing aside) and its decode: /metrics' summaries.
+	generates    atomic.Int64
+	prefillNanos atomic.Int64
+	decodeNanos  atomic.Int64
+}
+
+// finished records one generate: n tokens decoded, after a prefill of prefill,
+// in decode.
+func (lm *LoadedModel) finished(n int, prefill, decode time.Duration) {
+	lm.tokensGenerated.Add(int64(n))
+	lm.generates.Add(1)
+	lm.prefillNanos.Add(int64(prefill))
+	lm.decodeNanos.Add(int64(decode))
 }
 
 // gateIDs is what a session of this model must hold to run: one gate per
@@ -291,9 +318,10 @@ type LoadOptions struct {
 	DeviceIDs       []string
 	MaxDeviceBlocks int // -1 means "as many as fit"
 	KVF16           *bool
-	// Sessions is how many concurrent sessions every placed block reserves a
-	// history for (tier.Config.Sessions). 0 and 1 are one: a second session
-	// then gets what the first left over, and on a full card that is the host.
+	// Sessions is how many concurrent sessions every placed linear block
+	// reserves a recurrent pair for (tier.Config.Sessions); attention history
+	// is paged and reserves nothing. 0 and 1 are one: a second session then
+	// gets what the first left over, and on a full card that is the host.
 	Sessions int
 
 	// tierConfig adjusts the tier after Sessions is set. Tests use it to put
@@ -414,8 +442,8 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 	}
 
 	opts := []model.Option{model.WithPageBudget(hostBudget)}
-	if o.KVF16 != nil {
-		opts = append(opts, model.WithKVF16(*o.KVF16))
+	if kv := cmp.Or(o.KVF16, e.cfg.KVF16); kv != nil {
+		opts = append(opts, model.WithKVF16(*kv))
 	}
 	m, err := model.Open(path, opts...)
 	if err != nil {
@@ -626,6 +654,10 @@ type Session struct {
 	// snapBatched is whether a generate here would decode as a row of the
 	// model's step loop (Engine.joins), as of the snapshot.
 	snapBatched atomic.Bool
+	// snapSeam and snapSeamSettled are State.SeamTuned as of the snapshot:
+	// the tuner is written by Forward, so TuneSeam reports these.
+	snapSeam        atomic.Int32
+	snapSeamSettled atomic.Bool
 
 	cancelMu sync.Mutex
 	cancel   context.CancelFunc
@@ -652,12 +684,38 @@ type SessionOptions struct {
 	// store prefills alone rather than as a row of the step loop.
 	KVStore  model.KVStore
 	CacheKey string
+	// PromptCache keeps the prompt prefixes in Config.PromptStore: the wire's
+	// form of KVStore, refused when the server has no store.
+	PromptCache bool
+}
+
+// check refuses the options no session can be made from, as ErrInvalid.
+func (o *SessionOptions) check(store model.KVStore) error {
+	switch {
+	case o.MaxSeq < 0:
+		return fmt.Errorf("%w: max_seq %d is negative", ErrInvalid, o.MaxSeq)
+	case o.MaxDeviceBlocks < -1:
+		return fmt.Errorf("%w: max_device_blocks %d: want -1 (as many as fit) or more", ErrInvalid, o.MaxDeviceBlocks)
+	case o.Relocate && o.KeepOffHost:
+		return fmt.Errorf("%w: relocate_while_serving and keep_off_host contradict each other", ErrInvalid)
+	case o.PromptCache && o.KVStore == nil && store == nil:
+		return fmt.Errorf("%w: prompt_cache needs a prompt store, and this server has none (jitllmd serve -kv-cache DIR)", ErrInvalid)
+	case o.CacheKey != "" && !o.PromptCache && o.KVStore == nil:
+		return fmt.Errorf("%w: cache_key names what a prompt store shares; set prompt_cache", ErrInvalid)
+	}
+	return nil
 }
 
 // CreateSession builds a model.State and offers its blocks to the model's
 // tier. The tier's Attach gives this State its own device session, which is
 // what makes two sessions on one card correct -- see tier.GPU.Attach.
 func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
+	if err := o.check(e.cfg.PromptStore); err != nil {
+		return nil, err
+	}
+	if o.PromptCache && o.KVStore == nil {
+		o.KVStore = e.cfg.PromptStore
+	}
 	lm, err := e.Model(o.ModelID)
 	if err != nil {
 		return nil, err
@@ -767,6 +825,9 @@ func (s *Session) refresh() {
 	s.snapDevBlocks.Store(int32(s.st.GPULayers()))
 	s.snapAt.Store(time.Now().UnixMilli())
 	s.snapBatched.Store(s.lm.loop != nil && s.st.Steppable())
+	blocks, settled := s.st.SeamTuned()
+	s.snapSeam.Store(int32(blocks))
+	s.snapSeamSettled.Store(settled)
 	s.snapPlacement.Store(&placementSnapshot{
 		runs:        s.st.DeviceBlocks(),
 		declines:    s.st.DeviceDeclines(),
@@ -992,9 +1053,14 @@ func newLogprobs(o GenerateOptions) *model.Logprobs {
 	return &model.Logprobs{N: o.TopLogprobs}
 }
 
+// tokenDecoder is what takeLogprob reads a token's text through.
+type tokenDecoder interface {
+	Decode(ids []int32) string
+}
+
 // takeLogprob is the event's copy of one step's logprobs: the working set is
 // reused next step, so the event owns its own slice.
-func takeLogprob(l *model.Logprobs, v vocabDecoder, logits []float32, next int32) *TokenLogprob {
+func takeLogprob(l *model.Logprobs, v tokenDecoder, logits []float32, next int32) *TokenLogprob {
 	if l == nil {
 		return nil
 	}
@@ -1201,7 +1267,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	}
 	maxTokens := tokenLimit(o.MaxTokens, s.st.MaxSeq()-s.st.Pos())
 
-	st := newStreamText(lm.m.Vocab, o.Stop)
+	st := newStreamText(lm.m.Vocab.NewChatStream().Next, o.Stop)
 	reason := FinishMaxTokens
 	stopMatched := ""
 	out := make([]int32, 0, min(maxTokens, 4096))
@@ -1249,7 +1315,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	}
 	decode := time.Since(decodeStart)
 	s.generated.Add(int64(n))
-	lm.tokensGenerated.Add(int64(n))
+	lm.finished(n, prefill, decode)
 	s.lastUsed.Store(time.Now().UnixMilli())
 	s.refresh()
 	// The history grew by what this generate committed.
@@ -1390,28 +1456,27 @@ func (e *Engine) encode(lm *LoadedModel, p Prompt) ([]int32, error) {
 // streamText turns a growing token id list into incremental text, and applies
 // stop strings.
 //
-// Neither tokenizer decodes per token (a BPE token can split a rune, SPM's
-// leading space depends on position), so each step re-decodes the whole id
-// list and diffs the prefix. DecodeChat, not Decode, so a harmony vocabulary
+// Each new id is decoded once, through tok.ChatStream, whose pieces
+// concatenate to DecodeChat of the whole list at every prefix -- so the text
+// is what re-decoding the whole list would give, at a cost per token that does
+// not grow with the completion. DecodeChat, not Decode, so a harmony vocabulary
 // does not leave role and channel headers glued to the text.
 //
 // The tail is held back so the start of a stop string never reaches the
 // client before the match completes; the window is one byte short of the
 // longest stop string.
 type streamText struct {
-	vocab   vocabDecoder
+	next    func(id int32) string
 	stops   []string
 	hold    int
-	decoded string
+	n       int // ids decoded so far
+	decoded []byte
 	emitted int
 }
 
-type vocabDecoder interface {
-	DecodeChat(ids []int32) string
-	Decode(ids []int32) string
-}
-
-func newStreamText(v vocabDecoder, stops []string) *streamText {
+// newStreamText streams through next, one id's text at a time: a
+// tok.ChatStream's Next for a model's vocabulary.
+func newStreamText(next func(id int32) string, stops []string) *streamText {
 	hold := 0
 	for _, s := range stops {
 		if len(s) > hold {
@@ -1421,26 +1486,34 @@ func newStreamText(v vocabDecoder, stops []string) *streamText {
 	if hold > 0 {
 		hold--
 	}
-	return &streamText{vocab: v, stops: stops, hold: hold}
+	return &streamText{next: next, stops: stops, hold: hold}
 }
 
 // push takes the full id list so far and returns the text safe to emit now,
-// whether a stop string matched, and which one.
+// whether a stop string matched, and which one. Only the ids past the last
+// push are decoded.
 func (t *streamText) push(ids []int32) (chunk string, stopped bool, match string) {
-	t.decoded = t.vocab.DecodeChat(ids)
+	before := len(t.decoded)
+	for _, id := range ids[t.n:] {
+		t.decoded = append(t.decoded, t.next(id)...)
+	}
+	t.n = len(ids)
 
-	// A stop string is matched against the text generated SINCE the emit
-	// pointer started, i.e. the whole completion, because a stop may straddle
-	// any number of tokens.
+	// A stop string is matched against the whole completion, because a stop
+	// may straddle any number of tokens. The text before this push held no
+	// match, so a new one ends in the new bytes and starts no earlier than
+	// len(s)-1 before them: only that window is searched.
 	for _, s := range t.stops {
 		if s == "" {
 			continue
 		}
-		if i := strings.Index(t.decoded, s); i >= 0 {
+		from := max(0, before-len(s)+1)
+		if i := bytes.Index(t.decoded[from:], []byte(s)); i >= 0 {
+			i += from
 			// Emit up to the stop and no further. The stop string itself is
 			// never part of the completion.
 			if i > t.emitted {
-				chunk = t.decoded[t.emitted:i]
+				chunk = string(t.decoded[t.emitted:i])
 			}
 			t.emitted = len(t.decoded)
 			return truncPartialRune(chunk), true, s
@@ -1451,7 +1524,7 @@ func (t *streamText) push(ids []int32) (chunk string, stopped bool, match string
 	if safe <= t.emitted {
 		return "", false, ""
 	}
-	chunk = truncPartialRune(t.decoded[t.emitted:safe])
+	chunk = truncPartialRune(string(t.decoded[t.emitted:safe]))
 	t.emitted += len(chunk)
 	return chunk, false, ""
 }
@@ -1461,7 +1534,7 @@ func (t *streamText) flush() string {
 	if len(t.decoded) <= t.emitted {
 		return ""
 	}
-	chunk := t.decoded[t.emitted:]
+	chunk := string(t.decoded[t.emitted:])
 	t.emitted = len(t.decoded)
 	return chunk
 }
