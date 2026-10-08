@@ -10,6 +10,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -53,6 +54,15 @@ type Config struct {
 	// DefaultMaxSeq is the KV capacity a session gets when it asks for none.
 	// Zero takes the model's own context length.
 	DefaultMaxSeq int
+
+	// KVF16 is the KV cache width a load that names none gets: true binary16,
+	// false f32, nil the engine's own per-host choice (model.WithKVF16).
+	KVF16 *bool
+
+	// PromptStore is where a session created with PromptCache keeps its
+	// prompt prefixes; nil refuses such a session. jitllmd's -kv-cache is a
+	// model.FileStore.
+	PromptStore model.KVStore
 
 	// Version is reported by GetServerInfo.
 	Version string
@@ -287,9 +297,10 @@ type LoadOptions struct {
 	DeviceIDs       []string
 	MaxDeviceBlocks int // -1 means "as many as fit"
 	KVF16           *bool
-	// Sessions is how many concurrent sessions every placed block reserves a
-	// history for (tier.Config.Sessions). 0 and 1 are one: a second session
-	// then gets what the first left over, and on a full card that is the host.
+	// Sessions is how many concurrent sessions every placed linear block
+	// reserves a recurrent pair for (tier.Config.Sessions); attention history
+	// is paged and reserves nothing. 0 and 1 are one: a second session then
+	// gets what the first left over, and on a full card that is the host.
 	Sessions int
 
 	// tierConfig adjusts the tier after Sessions is set. Tests use it to put
@@ -410,8 +421,8 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 	}
 
 	opts := []model.Option{model.WithPageBudget(hostBudget)}
-	if o.KVF16 != nil {
-		opts = append(opts, model.WithKVF16(*o.KVF16))
+	if kv := cmp.Or(o.KVF16, e.cfg.KVF16); kv != nil {
+		opts = append(opts, model.WithKVF16(*kv))
 	}
 	m, err := model.Open(path, opts...)
 	if err != nil {
@@ -652,12 +663,38 @@ type SessionOptions struct {
 	// store prefills alone rather than as a row of the step loop.
 	KVStore  model.KVStore
 	CacheKey string
+	// PromptCache keeps the prompt prefixes in Config.PromptStore: the wire's
+	// form of KVStore, refused when the server has no store.
+	PromptCache bool
+}
+
+// check refuses the options no session can be made from, as ErrInvalid.
+func (o *SessionOptions) check(store model.KVStore) error {
+	switch {
+	case o.MaxSeq < 0:
+		return fmt.Errorf("%w: max_seq %d is negative", ErrInvalid, o.MaxSeq)
+	case o.MaxDeviceBlocks < -1:
+		return fmt.Errorf("%w: max_device_blocks %d: want -1 (as many as fit) or more", ErrInvalid, o.MaxDeviceBlocks)
+	case o.Relocate && o.KeepOffHost:
+		return fmt.Errorf("%w: relocate_while_serving and keep_off_host contradict each other", ErrInvalid)
+	case o.PromptCache && o.KVStore == nil && store == nil:
+		return fmt.Errorf("%w: prompt_cache needs a prompt store, and this server has none (jitllmd serve -kv-cache DIR)", ErrInvalid)
+	case o.CacheKey != "" && !o.PromptCache && o.KVStore == nil:
+		return fmt.Errorf("%w: cache_key names what a prompt store shares; set prompt_cache", ErrInvalid)
+	}
+	return nil
 }
 
 // CreateSession builds a model.State and offers its blocks to the model's
 // tier. The tier's Attach gives this State its own device session, which is
 // what makes two sessions on one card correct -- see tier.GPU.Attach.
 func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
+	if err := o.check(e.cfg.PromptStore); err != nil {
+		return nil, err
+	}
+	if o.PromptCache && o.KVStore == nil {
+		o.KVStore = e.cfg.PromptStore
+	}
 	lm, err := e.Model(o.ModelID)
 	if err != nil {
 		return nil, err

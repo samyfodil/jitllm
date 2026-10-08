@@ -1164,31 +1164,24 @@ func recHist(p *nn.LayerPlan) uint64 {
 func (g *devTier) sessions() uint64 { return uint64(max(1, g.Sessions)) }
 
 // reserved is what the device holds back for sessions that have not attached
-// yet: for every placed text block, one history per seat of Config.Sessions
-// that no live session occupies. room() counts it, so neither a block nor a
-// KV growth can spend it; a session taking a seat (addSessionKV/Rec) spends
-// its own share. It is computed rather than kept, because the capacity it is
-// priced at moves (regrowKV) and a running total would go stale with it.
+// yet: for every placed linear block, one recurrent pair per seat of
+// Config.Sessions that no live session occupies. room() counts it, so neither
+// a block nor a page can spend it; a session taking a seat (addSessionRec)
+// spends its own share. An attention history holds no seat: every causal
+// block's history is paged (initKVCap sets g.paged with the first text plan),
+// and a page is taken as a sequence writes its rows, not when it attaches.
 // Callers hold g.mu.
 func (g *devTier) reserved() uint64 {
 	if g.Sessions <= 1 {
 		return 0
 	}
-	var kvHist uint64
 	var n uint64
 	for _, l := range g.layers {
-		if l == nil || !l.ok || l.nonCausal {
+		if l == nil || !l.ok || l.nonCausal || !l.linear {
 			continue
 		}
-		if !l.linear || l.withAttn {
-			if free := g.Sessions - len(l.kv); free > 0 {
-				n += uint64(free) * kvHist
-			}
-		}
-		if l.linear {
-			if free := g.Sessions - len(l.rec); free > 0 {
-				n += uint64(free) * l.recHist
-			}
+		if free := g.Sessions - len(l.rec); free > 0 {
+			n += uint64(free) * l.recHist
 		}
 	}
 	return n
