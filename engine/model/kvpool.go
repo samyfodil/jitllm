@@ -43,6 +43,8 @@ func (p *kvPagePool) put(kc *kvCache) {
 	if p == nil || kc == nil {
 		return
 	}
+	// A shared page is the store's: its reference goes, never the memory.
+	kc.unshareAll()
 	var n uint64
 	for li := kc.lo; li < len(kc.layers); li++ {
 		s := &kc.layers[li]
@@ -81,6 +83,20 @@ func (p *kvPagePool) put(kc *kvCache) {
 		}
 		s.spare = s.spare[:0]
 	}
+}
+
+// give takes one page back from a live session: the one a SharedStore
+// replaced with its own copy of the same bytes (kvCache.publishSealed).
+func (p *kvPagePool) give(b []float32) {
+	if p == nil || b == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.free == nil {
+		p.free = map[int][][]float32{}
+	}
+	p.keep(b, len(b))
 }
 
 // keep adds one page while the pool is under its limit. Callers hold p.mu.

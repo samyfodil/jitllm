@@ -78,11 +78,11 @@ type modelOpts struct {
 
 	// kvHeadMajor selects the head-major KV layout for States built afterwards.
 	kvHeadMajor bool
-	// kvF16Forced and kvF16Set force the cache width, overriding what
+	// kvType and kvTypeSet force the cache's format, overriding what
 	// nn.KVWidthPaysOff decides. Two fields because "not forced" and "forced
-	// off" are different states.
-	kvF16Forced bool
-	kvF16Set    bool
+	// to f32" are different states.
+	kvType    KVType
+	kvTypeSet bool
 }
 
 // defaultOpts is what the environment variable's absence used to mean.
@@ -228,9 +228,20 @@ func WithPlacement(p Placement) Option {
 // A/B charges the scattered write (see kvLayout).
 func WithKVHeadMajor(on bool) Option { return func(l *loadOpts) { l.opt.kvHeadMajor = on } }
 
-// WithKVF16 forces the cache width, overriding what nn.KVWidthPaysOff decides.
+// WithKVF16 forces the cache width, overriding what nn.KVWidthPaysOff decides:
+// WithKVType(KVF16) or WithKVType(KVF32).
 func WithKVF16(on bool) Option {
-	return func(l *loadOpts) { l.opt.kvF16Forced, l.opt.kvF16Set = on, true }
+	t := KVF32
+	if on {
+		t = KVF16
+	}
+	return WithKVType(t)
+}
+
+// WithKVType forces the KV cache's format for States this model creates
+// afterwards (kvtype.go has the formats and what each refuses).
+func WithKVType(t KVType) Option {
+	return func(l *loadOpts) { l.opt.kvType, l.opt.kvTypeSet = t, true }
 }
 
 // WithAttnPair selects the attention pairing schedule: 0 off, 3 (the default)

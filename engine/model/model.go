@@ -1502,6 +1502,12 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	// on the host's memory attached afterwards comes off it (hostheld.go).
 	m.pages.bytes = budget
 	m.jit, m.opt = lo.jit, lo.opt
+	if lo.opt.kvTypeSet {
+		if err := m.Cfg.KVTypeRefusal(lo.opt.kvType); err != nil {
+			c.Close()
+			return nil, err
+		}
+	}
 	m.id = modelIDs.Add(1)
 	c.OnRecycle(m.forgetCopies)
 	for i := range m.layers {

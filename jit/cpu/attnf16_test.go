@@ -49,7 +49,7 @@ func TestAttnF16MatchesF32OnExactHalves(t *testing.T) {
 			}
 
 			scores := func(useF16 bool, cache []float32) []float32 {
-				c := onHost(t)(hostTable().AttnScores(hd, stride, useF16))
+				c := onHost(t)(hostTable().AttnScores(hd, stride, cpu.KVOf(useF16)))
 				defer c.Close()
 				out := make([]float32, npos)
 				args := cpu.Args{Out: &out[0], W: (*byte)(unsafe.Pointer(&cache[0])),
@@ -66,7 +66,7 @@ func TestAttnF16MatchesF32OnExactHalves(t *testing.T) {
 			}
 
 			acc := func(useF16 bool, cache []float32) []float32 {
-				c := onHost(t)(hostTable().AttnAcc(hd, stride, useF16))
+				c := onHost(t)(hostTable().AttnAcc(hd, stride, cpu.KVOf(useF16)))
 				defer c.Close()
 				out := make([]float32, hd)
 				args := cpu.Args{Out: &out[0], W: (*byte)(unsafe.Pointer(&cache[0])),

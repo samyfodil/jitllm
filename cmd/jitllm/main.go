@@ -1552,6 +1552,15 @@ func modelOptions() []model.Option {
 	if v := os.Getenv("JITLLM_KV_F16"); v != "" {
 		o = append(o, model.WithKVF16(v == "1"))
 	}
+	// The cache's format by name (f32, f16, q8_0); it overrides JITLLM_KV_F16.
+	if v := os.Getenv("JITLLM_KV_TYPE"); v != "" {
+		t, err := model.ParseKVType(v)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "jitllm: JITLLM_KV_TYPE: %v\n", err)
+			os.Exit(2)
+		}
+		o = append(o, model.WithKVType(t))
+	}
 	if v := os.Getenv("JITLLM_ATTN_PAIR"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			o = append(o, model.WithAttnPair(n))

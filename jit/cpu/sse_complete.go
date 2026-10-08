@@ -113,16 +113,17 @@ var sseProbes = []sseProbe{
 		return err
 	}},
 	{"Widen", func(em *Emitters) error { _, err := em.Widen(false); return err }},
-	{"AttnScores", func(em *Emitters) error { _, err := em.AttnScores(64, 256, false); return err }},
-	{"AttnAcc", func(em *Emitters) error { _, err := em.AttnAcc(64, 256, false); return err }},
-	{"AttnAccInto", func(em *Emitters) error { _, err := em.AttnAccInto(64, 256, false); return err }},
-	{"AttnScores2", func(em *Emitters) error { _, err := em.AttnScores2(64, 256, false); return err }},
-	{"AttnAcc2", func(em *Emitters) error { _, err := em.AttnAcc2(64, 256, false); return err }},
-	{"AttnAcc2Into", func(em *Emitters) error { _, err := em.AttnAcc2Into(64, 256, false); return err }},
+	{"AttnScores", func(em *Emitters) error { _, err := em.AttnScores(64, 256, KVF32); return err }},
+	{"AttnAcc", func(em *Emitters) error { _, err := em.AttnAcc(64, 256, KVF32); return err }},
+	{"AttnAccInto", func(em *Emitters) error { _, err := em.AttnAccInto(64, 256, KVF32); return err }},
+	{"AttnScores2", func(em *Emitters) error { _, err := em.AttnScores2(64, 256, KVF32); return err }},
+	{"AttnAcc2", func(em *Emitters) error { _, err := em.AttnAcc2(64, 256, KVF32); return err }},
+	{"AttnAcc2Into", func(em *Emitters) error { _, err := em.AttnAcc2Into(64, 256, KVF32); return err }},
 	{"AttnScoresTiled", func(em *Emitters) error {
-		_, err := em.AttnScoresTiled(64, 64, 64, 1024, 8, false)
+		_, err := em.AttnScoresTiled(64, 64, 64, 1024, 8, KVF32)
 		return err
 	}},
+	{"KVWiden", func(em *Emitters) error { _, err := em.KVWiden(64); return err }},
 	{"SampleSegMax", func(em *Emitters) error {
 		for _, f := range []bool{false, true} {
 			for _, m := range []bool{false, true} {

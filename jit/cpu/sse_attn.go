@@ -36,55 +36,60 @@ import "fmt"
 // RBP and RSP are never written.
 
 // attnKVSSE is how an SSE attention kernel reads its KV cache: four elements
-// into a vector, or one element into lane 0 with lanes 1..3 zero. An f32 cache
-// is MOVUPS and MOVSS; an f16 cache is PMOVZXWD (or PINSRW for one element) and
-// halfToFloatSSE, whose four registers this carries. For an f32 cache those
-// four are unused and may be anything.
+// into a vector, or one element into lane 0. An f32 cache is MOVUPS and MOVSS;
+// an f16 cache is PMOVZXWD (or PINSRW for one element) and halfToFloatSSE,
+// whose four registers this carries; a q8 cache is PMOVSXBD, CVTDQ2PS and a
+// multiply by the block's scale, broadcast into t0. For an f32 cache the four
+// are unused and may be anything; a q8 cache uses t0 alone.
 type attnKVSSE struct {
-	f16                bool
+	a                  kvAddr
 	src, t0, t1, magic Reg
 }
 
-// elem is the size of one cache element in bytes.
-func (k attnKVSSE) elem() int32 {
-	if k.f16 {
-		return 2
-	}
-	return 4
-}
-
 // setup loads the widening constant into k.magic, once, clobbering gp. It
-// emits nothing for an f32 cache.
+// emits nothing for an f32 or q8 cache.
 func (k attnKVSSE) setup(a *Buf, gp Reg) {
-	if k.f16 {
+	if k.a.f == KVF16 {
 		loadHalfMagicSSE(a, k.magic, gp)
 	}
 }
 
-// load4 brings four cache elements at base+off into dst as float32. For f16,
-// PMOVZXWD from memory reads exactly eight bytes and zero-extends four u16 into
-// the dwords halfToFloatSSE takes.
-func (k attnKVSSE) load4(a *Buf, dst, base Reg, off int32) {
-	if !k.f16 {
-		a.MOVUPSLoad(dst, At(base, off))
-		return
+// load4 brings four cache elements from element e into dst as float32. For
+// f16, PMOVZXWD from memory reads exactly eight bytes and zero-extends four
+// u16 into the dwords halfToFloatSSE takes. For q8, PMOVSXBD reads four bytes;
+// e is a multiple of four, so the four share one 32-element block's scale.
+func (k attnKVSSE) load4(a *Buf, dst, base Reg, e int) {
+	switch k.a.f {
+	case KVF16:
+		a.PMOVZXWDLoad(k.src, At(base, k.a.off(e)))
+		halfToFloatSSE(a, dst, k.src, k.t0, k.t1, k.magic)
+	case KVQ8:
+		a.PMOVSXBDLoad(dst, At(base, k.a.off(e)))
+		a.CVTDQ2PS(dst, dst)
+		bcastSS(a, k.t0, At(base, k.a.scale(e)))
+		a.MULPS(dst, dst, k.t0)
+	default:
+		a.MOVUPSLoad(dst, At(base, k.a.off(e)))
 	}
-	a.PMOVZXWDLoad(k.src, At(base, off))
-	halfToFloatSSE(a, dst, k.src, k.t0, k.t1, k.magic)
 }
 
-// load1 brings ONE cache element at base+off into lane 0 of dst and zeroes
-// lanes 1..3 -- the tail of a head that is not a whole vector. It reads exactly
-// the element's bytes: MOVSS reads four, PINSRW two, so the last element of
-// the last row is never read past.
-func (k attnKVSSE) load1(a *Buf, dst, base Reg, off int32) {
-	if !k.f16 {
-		a.MOVSSLoad(dst, At(base, off))
-		return
+// load1 brings element e into lane 0 of dst -- the tail of a head that is not
+// a whole vector. f32 and f16 read exactly the element's bytes (MOVSS four,
+// PINSRW two, so the last element of the last row is never read past) and
+// zero lanes 1..3. q8 is load4 from e: lanes 1..3 hold the next elements,
+// which every tail ignores (it runs MULSS and ADDSS on lane 0 alone), and the
+// four-byte read stays inside the row, whose scale pairs follow its int8 run.
+func (k attnKVSSE) load1(a *Buf, dst, base Reg, e int) {
+	switch k.a.f {
+	case KVF16:
+		a.PXOR(k.src, k.src, k.src)
+		a.PINSRWLoad(k.src, k.src, At(base, k.a.off(e)), 0)
+		halfToFloatSSE(a, dst, k.src, k.t0, k.t1, k.magic) // a zero half widens to +0
+	case KVQ8:
+		k.load4(a, dst, base, e)
+	default:
+		a.MOVSSLoad(dst, At(base, k.a.off(e)))
 	}
-	a.PXOR(k.src, k.src, k.src)
-	a.PINSRWLoad(k.src, k.src, At(base, off), 0)
-	halfToFloatSSE(a, dst, k.src, k.t0, k.t1, k.magic) // a zero half widens to +0
 }
 
 // attnScoreHeadSSE is one query of a score kernel: its accumulator chains
@@ -120,7 +125,7 @@ func attnScoreRowSSE(a *Buf, kv attnKVSSE, hd, chains int, hs []attnScoreHeadSSE
 	}
 	nv := hd / 4
 	for i := 0; i < nv; i++ {
-		kv.load4(a, k, RDX, int32(i)*4*kv.elem())
+		kv.load4(a, k, RDX, i*4)
 		for _, h := range hs {
 			// The query is L1-hot (every position re-reads it) and possibly
 			// misaligned, so it is MOVUPS'd rather than used as an m128 operand.
@@ -131,7 +136,7 @@ func attnScoreRowSSE(a *Buf, kv attnKVSSE, hd, chains int, hs []attnScoreHeadSSE
 		}
 	}
 	for d := nv * 4; d < hd; d++ {
-		kv.load1(a, k, RDX, int32(d)*kv.elem())
+		kv.load1(a, k, RDX, d)
 		for _, h := range hs {
 			a.MOVSSLoad(t, At(h.q, h.qOff+int32(4*d)))
 			a.MULSS(t, t, k)
@@ -155,11 +160,15 @@ func attnScoreRowSSE(a *Buf, kv attnKVSSE, hd, chains int, hs []attnScoreHeadSSE
 //
 // Registers: XMM0-3 the four chains, XMM4 the K vector, XMM5 the product, and
 // for an f16 cache XMM6-9 the widening.
-func EmitAttnScoresSSE(hd, kvStride int, f16 bool) ([]byte, error) {
+func EmitAttnScoresSSE(hd, kvStride int, fm KVFmt) ([]byte, error) {
 	if hd <= 0 {
 		return nil, fmt.Errorf("jit: EmitAttnScoresSSE: hd=%d must be positive", hd)
 	}
-	kv := attnKVSSE{f16: f16, src: XMM6, t0: XMM7, t1: XMM8, magic: XMM9}
+	ka, err := newKVAddr(fm, hd, kvStride)
+	if err != nil {
+		return nil, err
+	}
+	kv := attnKVSSE{a: ka, src: XMM6, t0: XMM7, t1: XMM8, magic: XMM9}
 	var a Buf
 	a.DeclareISA(ISATierSSE)
 	kv.setup(&a, RAX)
@@ -174,7 +183,7 @@ func EmitAttnScoresSSE(hd, kvStride int, f16 bool) ([]byte, error) {
 	a.Bind(row)
 	attnScoreRowSSE(&a, kv, hd, 4, []attnScoreHeadSSE{{acc: XMM0, q: RSI, out: RCX}}, XMM4, XMM5)
 	a.ADDimm(RCX, 4)
-	a.ADDimm(RDX, int32(kvStride)*kv.elem())
+	a.ADDimm(RDX, kv.a.stride(kvStride))
 	a.DEC(RAX)
 	a.JNZ(row)
 	a.Bind(done)
@@ -189,11 +198,15 @@ func EmitAttnScoresSSE(hd, kvStride int, f16 bool) ([]byte, error) {
 // Registers: XMM0-3 head 0's chains, XMM4-7 head 1's, XMM8 the shared K
 // vector, XMM9 the product, and for an f16 cache XMM10-13 the widening --
 // fourteen of sixteen.
-func EmitAttnScores2SSE(hd, kvStride int, f16 bool) ([]byte, error) {
+func EmitAttnScores2SSE(hd, kvStride int, fm KVFmt) ([]byte, error) {
 	if hd <= 0 {
 		return nil, fmt.Errorf("jit: EmitAttnScores2SSE: hd=%d must be positive", hd)
 	}
-	kv := attnKVSSE{f16: f16, src: XMM10, t0: XMM11, t1: XMM12, magic: XMM13}
+	ka, err := newKVAddr(fm, hd, kvStride)
+	if err != nil {
+		return nil, err
+	}
+	kv := attnKVSSE{a: ka, src: XMM10, t0: XMM11, t1: XMM12, magic: XMM13}
 	var a Buf
 	a.DeclareISA(ISATierSSE)
 	kv.setup(&a, RAX)
@@ -215,7 +228,7 @@ func EmitAttnScores2SSE(hd, kvStride int, f16 bool) ([]byte, error) {
 	}, XMM8, XMM9)
 	a.ADDimm(RCX, 4)
 	a.ADDimm(R8, 4)
-	a.ADDimm(RDX, int32(kvStride)*kv.elem())
+	a.ADDimm(RDX, kv.a.stride(kvStride))
 	a.DEC(RAX)
 	a.JNZ(row)
 	a.Bind(done)
@@ -235,25 +248,29 @@ func EmitAttnScores2SSE(hd, kvStride int, f16 bool) ([]byte, error) {
 // Registers: XMM0..qt-1 the chains, then K and the product (f32: qt+2 <= 16,
 // so qt <= 14 as on AVX2), and for an f16 cache three more for the widening
 // with the product doubling as its first temporary (qt+5 <= 16, qt <= 11).
-func EmitAttnScoresTiledSSE(hd, kvStride, qStride, scoreStride, qt int, f16 bool) ([]byte, error) {
+func EmitAttnScoresTiledSSE(hd, kvStride, qStride, scoreStride, qt int, fm KVFmt) ([]byte, error) {
 	if hd <= 0 {
 		return nil, fmt.Errorf("jit: EmitAttnScoresTiledSSE: hd=%d must be positive", hd)
 	}
+	ka, err := newKVAddr(fm, hd, kvStride)
+	if err != nil {
+		return nil, err
+	}
 	maxQt := 14
-	if f16 {
+	if fm != KVF32 {
 		maxQt = 11
 	}
 	if qt < 1 || qt > maxQt {
 		need := "qt chains, K and a product"
-		if f16 {
+		if fm != KVF32 {
 			need += ", and three registers for the f16 widening"
 		}
-		return nil, fmt.Errorf("jit: EmitAttnScoresTiledSSE: qt=%d (f16=%v) does not fit the "+
-			"16 XMM registers (%s): at most %d", qt, f16, need, maxQt)
+		return nil, fmt.Errorf("jit: EmitAttnScoresTiledSSE: qt=%d (%v) does not fit the "+
+			"16 XMM registers (%s): at most %d", qt, fm, need, maxQt)
 	}
 	k, t := Reg(qt), Reg(qt+1)
-	kv := attnKVSSE{f16: f16}
-	if f16 {
+	kv := attnKVSSE{a: ka}
+	if fm != KVF32 {
 		kv.t0, kv.src, kv.t1, kv.magic = t, Reg(qt+2), Reg(qt+3), Reg(qt+4)
 	}
 	hs := make([]attnScoreHeadSSE, qt)
@@ -276,7 +293,7 @@ func EmitAttnScoresTiledSSE(hd, kvStride, qStride, scoreStride, qt int, f16 bool
 	a.Bind(row)
 	attnScoreRowSSE(&a, kv, hd, 1, hs, k, t)
 	a.ADDimm(RCX, 4)
-	a.ADDimm(RDX, int32(kvStride)*kv.elem())
+	a.ADDimm(RDX, kv.a.stride(kvStride))
 	a.DEC(RAX)
 	a.JNZ(row)
 	a.Bind(done)
@@ -312,15 +329,15 @@ func attnWalkSSE(a *Buf, stride int32, w [][2]Reg, body func()) {
 
 // EmitAttnAccSSE is EmitAttnAcc on the SSE tier: out[i] = sum over t of
 // att[t] * V[t][i]. It reads Out, W, AScale and Rows.
-func EmitAttnAccSSE(hd, kvStride int, f16 bool) ([]byte, error) {
-	return emitAttnAccSSE(hd, kvStride, f16, false)
+func EmitAttnAccSSE(hd, kvStride int, fm KVFmt) ([]byte, error) {
+	return emitAttnAccSSE(hd, kvStride, fm, false)
 }
 
 // EmitAttnAccIntoSSE is EmitAttnAccInto on the SSE tier: it ADDS INTO Out, so
 // a window split across KV pages sums to exactly what one call gives (the
 // file comment's second bit-identity).
-func EmitAttnAccIntoSSE(hd, kvStride int, f16 bool) ([]byte, error) {
-	return emitAttnAccSSE(hd, kvStride, f16, true)
+func EmitAttnAccIntoSSE(hd, kvStride int, fm KVFmt) ([]byte, error) {
+	return emitAttnAccSSE(hd, kvStride, fm, true)
 }
 
 // emitAttnAccSSE holds the output in registers across the position walk, in
@@ -334,19 +351,23 @@ func EmitAttnAccIntoSSE(hd, kvStride int, f16 bool) ([]byte, error) {
 //
 // For every output dimension the per-position step is out = out + (V * w),
 // MULPS then ADDPS -- oracle.AxpyF32's arithmetic, in its order.
-func emitAttnAccSSE(hd, kvStride int, f16, into bool) ([]byte, error) {
+func emitAttnAccSSE(hd, kvStride int, fm KVFmt, into bool) ([]byte, error) {
 	if hd <= 0 {
 		return nil, fmt.Errorf("jit: EmitAttnAccSSE: hd=%d must be positive", hd)
 	}
+	ka, err := newKVAddr(fm, hd, kvStride)
+	if err != nil {
+		return nil, err
+	}
 	perBlock := 14
 	vreg, wreg := XMM14, XMM15
-	kv := attnKVSSE{f16: f16}
-	if f16 {
+	kv := attnKVSSE{a: ka}
+	if fm != KVF32 {
 		perBlock = 10
 		wreg, vreg = XMM10, XMM11
 		kv.src, kv.t0, kv.t1, kv.magic = XMM12, XMM13, XMM14, XMM15
 	}
-	stride := int32(kvStride) * kv.elem()
+	stride := kv.a.stride(kvStride)
 	cursors := [][2]Reg{{R9, R8}}
 
 	var a Buf
@@ -371,7 +392,7 @@ func emitAttnAccSSE(hd, kvStride int, f16, into bool) ([]byte, error) {
 		attnWalkSSE(&a, stride, cursors, func() {
 			bcastSS(&a, wreg, At(R9, 0))
 			for v := 0; v < n; v++ {
-				kv.load4(&a, vreg, RSI, int32(base+v)*4*kv.elem())
+				kv.load4(&a, vreg, RSI, (base+v)*4)
 				a.MULPS(vreg, vreg, wreg)
 				a.ADDPS(Reg(v), Reg(v), vreg)
 			}
@@ -396,7 +417,7 @@ func emitAttnAccSSE(hd, kvStride int, f16, into bool) ([]byte, error) {
 		attnWalkSSE(&a, stride, cursors, func() {
 			a.MOVSSLoad(wreg, At(R9, 0))
 			for j := 0; j < tail; j++ {
-				kv.load1(&a, vreg, RSI, (d0+int32(j))*kv.elem())
+				kv.load1(&a, vreg, RSI, int(d0)+j)
 				a.MULSS(vreg, vreg, wreg)
 				a.ADDSS(Reg(j), Reg(j), vreg)
 			}
@@ -413,14 +434,14 @@ func emitAttnAccSSE(hd, kvStride int, f16, into bool) ([]byte, error) {
 // head, each V vector loaded once and weighted into both outputs,
 // bit-identical to two EmitAttnAccSSE calls. It reads Out, Out2, W, AScale,
 // AScale2 and Rows.
-func EmitAttnAcc2SSE(hd, kvStride int, f16 bool) ([]byte, error) {
-	return emitAttnAcc2SSE(hd, kvStride, f16, false)
+func EmitAttnAcc2SSE(hd, kvStride int, fm KVFmt) ([]byte, error) {
+	return emitAttnAcc2SSE(hd, kvStride, fm, false)
 }
 
 // EmitAttnAcc2IntoSSE is EmitAttnAcc2SSE that ADDS INTO both outputs, so a
 // paired window split across KV pages sums to what one call would have given.
-func EmitAttnAcc2IntoSSE(hd, kvStride int, f16 bool) ([]byte, error) {
-	return emitAttnAcc2SSE(hd, kvStride, f16, true)
+func EmitAttnAcc2IntoSSE(hd, kvStride int, fm KVFmt) ([]byte, error) {
+	return emitAttnAcc2SSE(hd, kvStride, fm, true)
 }
 
 // emitAttnAcc2SSE is emitAttnAccSSE for two heads.
@@ -431,21 +452,25 @@ func EmitAttnAcc2IntoSSE(hd, kvStride int, f16 bool) ([]byte, error) {
 //
 // Head 0's product is (V copied) * w0 and head 1's is V * w1, the single
 // kernel's V * w for each, so the two outputs are two single calls' bits.
-func emitAttnAcc2SSE(hd, kvStride int, f16, into bool) ([]byte, error) {
+func emitAttnAcc2SSE(hd, kvStride int, fm KVFmt, into bool) ([]byte, error) {
 	if hd <= 0 {
 		return nil, fmt.Errorf("jit: EmitAttnAcc2SSE: hd=%d must be positive", hd)
 	}
+	ka, err := newKVAddr(fm, hd, kvStride)
+	if err != nil {
+		return nil, err
+	}
 	per := 6
 	w0, w1, vreg, prod := XMM12, XMM13, XMM14, XMM15
-	kv := attnKVSSE{f16: f16}
-	if f16 {
+	kv := attnKVSSE{a: ka}
+	if fm != KVF32 {
 		per = 4
 		w0, w1, vreg, prod = XMM8, XMM9, XMM10, XMM15
 		kv.src, kv.t0, kv.t1, kv.magic = XMM11, XMM12, XMM13, XMM14
 	}
 	h0 := func(i int) Reg { return Reg(i) }       // head 0: XMM0..per-1
 	h1 := func(i int) Reg { return Reg(per + i) } // head 1: XMMper..2per-1
-	stride := int32(kvStride) * kv.elem()
+	stride := kv.a.stride(kvStride)
 	cursors := [][2]Reg{{R9, R8}, {R13, R12}}
 
 	var a Buf
@@ -476,7 +501,7 @@ func emitAttnAcc2SSE(hd, kvStride int, f16, into bool) ([]byte, error) {
 			bcastSS(&a, w1, At(R13, 0))
 			for v := 0; v < n; v++ {
 				// One load, two products, as in the paired scores.
-				kv.load4(&a, vreg, RSI, int32(base+v)*4*kv.elem())
+				kv.load4(&a, vreg, RSI, (base+v)*4)
 				a.MULPS(prod, vreg, w0)
 				a.ADDPS(h0(v), h0(v), prod)
 				a.MULPS(vreg, vreg, w1)
@@ -507,7 +532,7 @@ func emitAttnAcc2SSE(hd, kvStride int, f16, into bool) ([]byte, error) {
 			a.MOVSSLoad(w0, At(R9, 0))
 			a.MOVSSLoad(w1, At(R13, 0))
 			for j := 0; j < tail; j++ {
-				kv.load1(&a, vreg, RSI, (d0+int32(j))*kv.elem())
+				kv.load1(&a, vreg, RSI, int(d0)+j)
 				a.MULSS(prod, vreg, w0)
 				a.ADDSS(h0(j), h0(j), prod)
 				a.MULSS(vreg, vreg, w1)
@@ -520,6 +545,40 @@ func emitAttnAcc2SSE(hd, kvStride int, f16, into bool) ([]byte, error) {
 			a.MOVSSStore(At(R10, off), h1(j))
 		}
 	}
+	a.RET()
+	return a.Bytes(), nil
+}
+
+// EmitKVWidenSSE is EmitKVWiden on the SSE tier: Rows q8_0 head rows widened
+// to float32 through attnKVSSE's own load. It reads Out, W and Rows.
+func EmitKVWidenSSE(hd int) ([]byte, error) {
+	ka, err := newKVAddr(KVQ8, hd, hd)
+	if err != nil {
+		return nil, err
+	}
+	kv := attnKVSSE{a: ka, t0: XMM1}
+	var a Buf
+	a.DeclareISA(ISATierSSE)
+	a.MOVLoad(RCX, At(RDI, 0))  // Out: f32 rows
+	a.MOVLoad(RDX, At(RDI, 8))  // W:   q8 rows
+	a.MOVLoad(RAX, At(RDI, 32)) // Rows
+	done, row := a.Label(), a.Label()
+	a.TESTQ(RAX, RAX)
+	a.JZ(done)
+	a.Bind(row)
+	for i := 0; i < hd/4; i++ {
+		kv.load4(&a, XMM0, RDX, i*4)
+		a.MOVUPSStore(At(RCX, int32(i*16)), XMM0)
+	}
+	for d := hd / 4 * 4; d < hd; d++ {
+		kv.load1(&a, XMM0, RDX, d)
+		a.MOVSSStore(At(RCX, int32(4*d)), XMM0)
+	}
+	a.ADDimm(RCX, int32(4*hd))
+	a.ADDimm(RDX, ka.stride(hd))
+	a.DEC(RAX)
+	a.JNZ(row)
+	a.Bind(done)
 	a.RET()
 	return a.Bytes(), nil
 }
