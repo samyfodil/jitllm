@@ -185,6 +185,41 @@ func emitA64Packed(t quant.Type, rows int, fused bool, ahead int, intFold bool, 
 	// spare GPR for more. Q5_K and Q6_K are both hw == 1; a future format with
 	// hw > 1 keeps the two-pass path below.
 	combine := hi != 0 && hw == 1 && bits == 4
+	// Without FEAT_DotProd the payload loop chains its dots (DotChain): the two
+	// a row group takes per word -- the low and the high nibble, or the two
+	// halves of a merged plane -- share one ADDP and one SADALP, and each
+	// element's broadcast is taken once a word, before the row-group loop,
+	// rather than once a dot. The broadcasts live in bA and bB: t1 and t2 when
+	// the merged plane does not hold them, else the two registers past the
+	// kernel's last, when there are two. A kernel with no room for them keeps
+	// the per-SDOT widening, and the secondary plane's two-pass loop always
+	// does. The chain is two links, inside DotChainCap for every weight here:
+	// a nibble (15), a code (MXFP4's are at most 12), a merged plane (31 or 63).
+	bA, bB := t1, t2
+	chain := a.DotEmulating()
+	if chain && combine {
+		bA, bB = last+1, last+2
+		chain = int(bB) <= 31
+	}
+	pair := false // the two nibbles' dots in one chain
+	if chain && bits == 4 {
+		wmax := 15
+		if combine {
+			wmax = 1<<(bits+hi) - 1
+		} else if codes {
+			wmax = 0
+			for _, c := range kernels.Codes(q) {
+				if v := int(int8(c)); v > wmax {
+					wmax = v
+				} else if -v > wmax {
+					wmax = -v
+				}
+			}
+		}
+		pair = DotChainCap(wmax) >= 2
+	}
+	// bcast takes element e of the activation into r for the row-group loop.
+	bcast := func(r VReg, e int) { a.DUPs4lane(r, vAct(e/4), uint8(e%4)) }
 	if bits == 4 {
 		a.MOVI16b(vMask, 0x0F)
 	}
@@ -399,6 +434,21 @@ func emitA64Packed(t quant.Type, rows int, fused bool, ahead int, intFold bool, 
 			}
 		}
 		for w := 0; w < pw; w++ {
+			if chain {
+				bcast(bA, w)
+				if bits == 4 {
+					bcast(bB, pw+w)
+				}
+			}
+			// dot is the payload loop's SDOTelem of element e into row group
+			// g, or the chained link through e's broadcast b.
+			dot := func(g int, src VReg, e int, b VReg, lastLink bool) {
+				if chain {
+					a.DotChain(VReg(g), src, b, lastLink || !pair)
+					return
+				}
+				a.SDOTelem(VReg(g), src, vAct(e/4), uint8(e%4))
+			}
 			for g := 0; g < grp; g++ {
 				a.LDRq(vPay, X12, int32(g*16))
 				if pf > 0 && g%8 == 0 {
@@ -442,7 +492,7 @@ func emitA64Packed(t quant.Type, rows int, fused bool, ahead int, intFold bool, 
 							a.USHR16b(vSecSh, vSec, byte(s-bits))
 							a.BIT16b(t0, vSecSh, vHi)
 						}
-						a.SDOTelem(VReg(g), t0, vAct(e/4), uint8(e%4))
+						dot(g, t0, e, []VReg{bA, bB}[half], half == 1)
 					}
 				case bits == 4:
 					// The quants are 0..15, which is inside int8's positive
@@ -452,17 +502,19 @@ func emitA64Packed(t quant.Type, rows int, fused bool, ahead int, intFold bool, 
 					if codes {
 						a.TBL(t0, vLut, t0)
 					}
-					lo := w
-					a.SDOTelem(VReg(g), t0, vAct(lo/4), uint8(lo%4))
+					dot(g, t0, w, bA, false)
 					a.USHR16b(t0, vPay, 4)
-					a.AND16b(t0, t0, vMask)
+					if !chain {
+						// Dead (USHR16b is a per-byte shift), kept so the
+						// SDOT kernel's bytes do not move.
+						a.AND16b(t0, t0, vMask)
+					}
 					if codes {
 						a.TBL(t0, vLut, t0)
 					}
-					hiE := pw + w
-					a.SDOTelem(VReg(g), t0, vAct(hiE/4), uint8(hiE%4))
+					dot(g, t0, pw+w, bB, true)
 				default:
-					a.SDOTelem(VReg(g), vPay, vAct(w/4), uint8(w%4))
+					dot(g, vPay, w, bA, true)
 				}
 			}
 			step12()
