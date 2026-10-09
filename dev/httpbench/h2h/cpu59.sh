@@ -46,11 +46,15 @@ engine_up() {
 			--alias "$name" -np "$SLOTS" -c "$KVPOOL" --kv-unified -t 12 -tb 12 \
 			--no-cache-prompt --cache-reuse 0 --cache-ram 0 --no-webui ;;
 	mistralrs)
-		# mistral.rs wants a directory and a file name; the GGUF's own tokenizer is used
-		mkdir -p "$M/mrs/$f" && ln -sf "$G/$f.gguf" "$M/mrs/$f/"
+		# mistral.rs answers to the -m it was given (a directory holding the GGUF;
+		# its own tokenizer is used), so the directory is named after the model
+		# and the server starts from its parent.
+		mkdir -p "$M/mrs/$name" && ln -sf "$G/$f.gguf" "$M/mrs/$name/"
+		cd "$M/mrs"
 		launch engine "mistralrs-$name" $SRV_PIN "$MRS" serve --cpu --host 127.0.0.1 -p "$port" \
 			--max-seqs "$SLOTS" --max-seq-len "$CTX" --prefix-cache-n 0 --no-ui \
-			-m "$M/mrs/$f" -f "$f.gguf" ;;
+			-m "$name" -f "$f.gguf"
+		cd - >/dev/null ;;
 	*) log "unknown engine $ENGINE"; exit 2 ;;
 	esac
 	up "$port" 1800

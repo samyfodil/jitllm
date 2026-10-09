@@ -85,7 +85,19 @@ Qwen3-30B-A3B, all Q4_K_M); `.jlm` containers reconverted into
 `/dev/shm/h2h/models` with this branch's `jitllm convert` (the ones in
 `~/cpu-models` are container v26 and stale). Model names: `l1b`, `l8b`, `q30`.
 
-SMOKE59
+| engine | version | path | serve command (as `cpu59.sh` runs it) | model name | smoke |
+|---|---|---|---|---|---|
+| jitllmd | origin/main bd662f68 | `/dev/shm/h2h/bin/jitllmd` | `numactl --membind=0 taskset -c 0-11 jitllmd serve -addr 127.0.0.1:8080 -models /dev/shm/h2h/models -load <.jlm> -id l1b -max-batch 64 -max-seq 4096 -no-mem-cache -devices cpu` (others added with `jitllmd models -load ... -id ...`) | `l1b`/`l8b`/`q30` | OK on l1b and q30: both routes, usage, at max 2/2 |
+| llama.cpp (CPU) | b11222, commit a97cce86a | `~/cpu-bench/llama/llama-b11222/llama-server` | `numactl --membind=0 taskset -c 0-11 llama-server -m /dev/shm/cpu-gguf/<f>.gguf --host 127.0.0.1 --port 8081 --alias l1b -np 64 -c 65536 --kv-unified -t 12 -tb 12 --no-cache-prompt --cache-reuse 0 --cache-ram 0 --no-webui` | as aliased | OK on l1b and q30: both routes, usage, at max 2/2, prompt tokens equal to jitllm's |
+| mistral.rs (CPU) | 0.9.4 | `~/tools/mrs-bin/mistralrs` | from `/dev/shm/h2h/models/mrs`: `numactl --membind=0 taskset -c 0-11 mistralrs serve --cpu --host 127.0.0.1 -p 8081 --max-seqs 64 --max-seq-len 4096 --prefix-cache-n 0 --no-ui -m l1b -f <f>.gguf` (`l1b/` holds a symlink to the GGUF; the GGUF's own tokenizer and template) | the `-m` directory name (`l1b`) | l1b: chat OK (usage, at max 2/2); completions **FAIL the usage check**: the streamed `/v1/completions` carries no usage object, so httpbench falls back to counting chunks (prompt_tokens reads 0; at max 2/2 by chunk count). Its chat prompt is 101 tokens where jitllm's and llama-server's are 99 (a different render of the GGUF template). q30 (Qwen3-30B-A3B): the server came up but the warm-up request (64-word prompt, 32 tokens) did not finish inside httpbench's 10-minute timeout: `warm-up request failed: context deadline exceeded` |
+| ZML | commit 74c590b (2026-09-28) | `~/tools/zml` | -- | -- | NOT AN ARM: it has no OpenAI-compatible HTTP server (`examples/llm` is a CLI, `bazel-bin/examples/llm/llm --model=... --prompt=...`; no `/v1/completions` anywhere in the tree), and it runs bf16 safetensors, not the GGUF. It stays on `~/xboard.sh`'s CLI board only |
+
+What this means for a row:
+- mistral.rs on `/v1/completions` is counted by chunks, not usage; read its
+  token column with that in mind or take its rows with `-api chat` and accept
+  the 2-token template difference (name it in the row).
+- mistral.rs on the MoE is not runnable inside the default timeout; the multi
+  row with mistral.rs either drops q30 or raises `-timeout`, and says which.
 
 ## Scripts
 
