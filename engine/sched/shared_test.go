@@ -157,6 +157,11 @@ func alternate(t *testing.T, procs int) {
 			}
 			// Counted on the first chunk only: the region is one turn.
 			a.Do(64, 1, func(_, lo, hi int) {
+				if lo == 0 {
+					// a gives its P up mid-region, so on one P b runs and
+					// queues behind it.
+					runtime.Gosched()
+				}
 				if lo == 0 && bQueued.Load() {
 					if n := cur.Add(1); n > worst.Load() {
 						worst.Store(n)
