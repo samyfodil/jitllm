@@ -24,6 +24,20 @@ func (e *Engine) serveMetrics(w http.ResponseWriter, r *http.Request) {
 
 	family(&b, "jitllm_models_loaded", "gauge", "Models loaded.")
 	fmt.Fprintf(&b, "jitllm_models_loaded %d\n", len(models))
+	// Preemption (preempt.go) counts across the engine.
+	parks, resumes, out, in := e.PreemptCounts()
+	for _, m := range []struct {
+		name, help string
+		v          int64
+	}{
+		{"jitllm_preempt_parks_total", "Sessions parked to fit a model's KV budget.", parks},
+		{"jitllm_preempt_resumes_total", "Parked sessions resumed.", resumes},
+		{"jitllm_preempt_pages_out_total", "KV pages a park sent to a store.", out},
+		{"jitllm_preempt_pages_in_total", "KV pages a resume brought back.", in},
+	} {
+		family(&b, m.name, "counter", m.help)
+		fmt.Fprintf(&b, "%s %d\n", m.name, m.v)
+	}
 	family(&b, "jitllm_sessions", "gauge", "Open sessions, per model.")
 	perModel := map[string]int{}
 	for _, s := range sessions {
@@ -79,6 +93,8 @@ func (e *Engine) serveMetrics(w http.ResponseWriter, r *http.Request) {
 			func(lm *LoadedModel) float64 { return float64(lm.ttft.inflight.Load()) }},
 		{"jitllm_requests_refused_total", "counter", "Requests refused with 429 for a full queue.",
 			func(lm *LoadedModel) float64 { return float64(lm.ttft.refused.Load()) }},
+		{"jitllm_mem_cache_pinned_pages", "gauge", "Pages the memory cache holds for parked sessions, out of eviction.",
+			func(lm *LoadedModel) float64 { return float64(e.MemCacheStats(lm).Store.Pinned) }},
 	} {
 		family(&b, m.name, m.kind, m.help)
 		for _, lm := range models {

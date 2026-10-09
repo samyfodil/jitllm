@@ -3,6 +3,7 @@ package model
 import (
 	"bytes"
 	"errors"
+	"io"
 	"testing"
 
 	"github.com/samyfodil/jitllm/internal/testmodels"
@@ -187,5 +188,42 @@ func TestAnInterruptedPrefillStopsBetweenChunks(t *testing.T) {
 	}
 	if argmax(got) != argmax(want) {
 		t.Fatalf("after an interrupt and a reset the prefill picks %d, a clean one %d", argmax(got), argmax(want))
+	}
+}
+
+// TestPinnedPagesOutliveTheBound: pages set through a Pinned view stay through
+// any limit until the view releases them, a page two views pin stays until
+// both have released it, and a released page is evicted like any other.
+func TestPinnedPagesOutliveTheBound(t *testing.T) {
+	page := bytes.Repeat([]byte{5}, 4096)
+	m := NewBoundedMemStore(4096)
+	defer m.Close()
+	a, b := m.Pinned(), m.Pinned()
+	for _, v := range []*PinnedStore{a, b} {
+		if err := v.Set("p", 0, 0, bytes.NewReader(page)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := a.Set("p", 0, 1, bytes.NewReader(page)); err != nil {
+		t.Fatal(err)
+	}
+	for i := 2; i < 5; i++ {
+		if err := m.Set("q", 0, i, bytes.NewReader(page)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if st := m.Stats(); st.Pinned != 2 {
+		t.Fatalf("%+v: want both pinned pages held past the limit", st)
+	}
+	a.Release()
+	if err := m.Get("p", 0, 0, io.Discard); err != nil {
+		t.Fatalf("a page the second view still pins went with the first's release: %v", err)
+	}
+	if err := m.Get("p", 0, 1, io.Discard); !errors.Is(err, ErrNoPage) {
+		t.Fatalf("a released page outlived the limit (%v)", err)
+	}
+	b.Release()
+	if st := m.Stats(); st.Pinned != 0 || st.Bytes > 4096 {
+		t.Fatalf("after both releases: %+v", st)
 	}
 }

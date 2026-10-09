@@ -98,9 +98,11 @@ type State struct {
 	// parked and parkedSeam are Park's: the session is preempted, and the
 	// seam it held on the device. ParkedOut and ParkedIn count the KV pages
 	// Park sent to the store and Resume brought back (park.go).
-	parked              bool
-	parkedSeam          int
-	parkStore           *MemStore
+	parked     bool
+	parkedSeam int
+	parkStore  *MemStore
+	// parkPrev is the store ParkInto swapped out, given back by Resume.
+	parkPrev            KVStore
 	ParkedOut, ParkedIn int64
 	// outNorm and outW are the head this State projects through: the model's
 	// output norm and projection for a trunk, a prediction block's own head

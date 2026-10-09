@@ -745,6 +745,9 @@ type Session struct {
 	priority atomic.Int32
 	parked   atomic.Bool
 	snapHist atomic.Uint64
+	// parkView is the memory cache view a parked session's pages are pinned
+	// in (park), released when it resumes. Guarded by mu.
+	parkView *model.PinnedStore
 }
 
 // SessionOptions is CreateSession's input.
@@ -1018,6 +1021,12 @@ func (s *Session) close() {
 	s.cancelGeneration()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.parkView != nil {
+		// A session closed while parked never faults its pages back: they
+		// stop being pinned, and the memory cache evicts them in turn.
+		s.parkView.Release()
+		s.parkView = nil
+	}
 	s.st.Close()
 }
 
@@ -1272,9 +1281,12 @@ func tokenLimit(asked, room int) int {
 // request queued -- for a gate, or for a row of its model's step loop -- and
 // how many were ahead, so a caller does not mistake a queue for a slow model.
 func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Event) error) (err error) {
-	// Admission comes first, so a refused request builds nothing.
+	// Two admissions, in this order: the model's request queue here, first,
+	// so a request it refuses builds nothing and parks nobody; then, once the
+	// prompt is known, the KV budget (admitKV), which may park idle sessions
+	// to make room for this one.
 	if lm := e.modelOf(o); lm != nil {
-		done, err := e.admit(lm)
+		done, err := e.admitQueue(lm)
 		if err != nil {
 			return err
 		}
@@ -1351,7 +1363,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	// Room for this generate's history, parking idle sessions of the model
 	// if its KV budget is short (preempt.go), and this session back if it
 	// was the one parked.
-	if err := e.admit(s, len(ids)+tokenLimit(o.MaxTokens, s.st.MaxSeq()-s.st.Pos()-len(ids))); err != nil {
+	if err := e.admitKV(s, len(ids)+tokenLimit(o.MaxTokens, s.st.MaxSeq()-s.st.Pos()-len(ids))); err != nil {
 		return err
 	}
 	spec := s.spec

@@ -16,6 +16,29 @@ import (
 // with no budget. Parks, resumes and pages out and in are counted, the pages
 // in equal the pages out, and no goroutine outlives the engine.
 func TestPreemptionKeepsEveryAnswer(t *testing.T) {
+	preemptionKeepsEveryAnswer(t, Config{}, nil)
+}
+
+// TestAParkedSessionResumesFromTheMemCache is the same three sessions with the
+// model's memory cache bounded to one byte, so every page it holds unpinned
+// goes as soon as another arrives: a parked session's pages survive only
+// because the view it parked into pins them (model.MemStore.Pinned), and every
+// answer is still its solo run's, token for token. The cache is seen holding
+// pinned pages for the sessions still parked and evicting everything else.
+func TestAParkedSessionResumesFromTheMemCache(t *testing.T) {
+	preemptionKeepsEveryAnswer(t, Config{MemCacheBytes: 1}, func(e *Engine, lm *LoadedModel, parked int) {
+		st := e.MemCacheStats(lm).Store
+		if st.Evicted == 0 {
+			t.Fatalf("the one-byte memory cache evicted nothing (%+v): the bound never bit", st)
+		}
+		if parked > 0 && st.Pinned == 0 {
+			t.Fatalf("%d session(s) parked and the memory cache pins nothing (%+v): they did not park into it", parked, st)
+		}
+		t.Logf("memory cache: %+v", st)
+	})
+}
+
+func preemptionKeepsEveryAnswer(t *testing.T, cfg Config, check func(e *Engine, lm *LoadedModel, parked int)) {
 	base := runtime.NumGoroutine()
 	const rounds, perTurn, maxSeq = 5, 70, 512
 	prompts := map[string]string{
@@ -49,9 +72,12 @@ func TestPreemptionKeepsEveryAnswer(t *testing.T) {
 
 	run := func(budgeted bool, only string) map[string][]int32 {
 		path := modelPath(t, smallModel)
-		e := New(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test"})
+		c := cfg
+		c.ModelDir, c.Probe, c.Version = filepath.Dir(path), oneCardProbe, "test"
+		e := New(c)
 		defer e.Close()
-		if _, err := e.LoadModel(LoadOptions{Path: path, ModelID: "small"}); err != nil {
+		lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "small"})
+		if err != nil {
 			t.Fatal(err)
 		}
 		got := map[string][]int32{}
@@ -97,6 +123,15 @@ func TestPreemptionKeepsEveryAnswer(t *testing.T) {
 			}
 			if in+held != out {
 				t.Fatalf("%d pages out, %d in and %d still parked", out, in, held)
+			}
+			if check != nil {
+				parked := 0
+				for _, id := range ids {
+					if e.sessions[id].Parked() {
+						parked++
+					}
+				}
+				check(e, lm, parked)
 			}
 		}
 		return got

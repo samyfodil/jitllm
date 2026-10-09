@@ -206,9 +206,9 @@ func (e *Engine) storeLimit(share uint64) uint64 {
 	return max(share/storeShare, 1)
 }
 
-// admit counts a request against its model's bound, or refuses it. The
+// admitQueue counts a request against its model's bound, or refuses it. The
 // returned func gives the slot back.
-func (e *Engine) admit(lm *LoadedModel) (func(), error) {
+func (e *Engine) admitQueue(lm *LoadedModel) (func(), error) {
 	t := &lm.ttft
 	n := t.inflight.Add(1)
 	if t.queueCap > 0 && int(n) > t.queueCap {
@@ -268,6 +268,10 @@ func (e *Engine) releaseEphemeral(s *Session) {
 	}
 	s.cancelGeneration()
 	s.mu.Lock()
+	if s.parkView != nil {
+		s.parkView.Release()
+		s.parkView = nil
+	}
 	ok := e.pool(s.lm, s.st)
 	s.mu.Unlock()
 	if !ok {
@@ -282,7 +286,8 @@ func (e *Engine) releaseEphemeral(s *Session) {
 // whose blocks a placement call moved is not kept: the next request must get
 // the model's default placement, as a fresh State would.
 func (e *Engine) pool(lm *LoadedModel, st *model.State) bool {
-	if lm.ttft.poolCap == 0 || !st.Steppable() && lm.loop != nil {
+	// A parked State is not pooled: its history is in a store, not reset.
+	if lm.ttft.poolCap == 0 || st.Parked() || !st.Steppable() && lm.loop != nil {
 		return false
 	}
 	st.SetPrefillInterrupt(nil)

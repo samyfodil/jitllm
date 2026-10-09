@@ -27,6 +27,32 @@ type ParkStats struct {
 
 // Park preempts the session. Parking a parked State does nothing.
 func (s *State) Park() (ParkStats, error) {
+	return s.park()
+}
+
+// ParkInto is Park into st rather than the session's own store: every sealed
+// page the session holds is offered to st -- the ones its own store already
+// had too, since that store may drop them (a bounded one does) while the
+// session is parked -- and Resume faults them back from st and gives the
+// session its own store back. A server parks into a view of its model's
+// memory cache that holds what it is given until Resume (MemStore.Pinned).
+func (s *State) ParkInto(st KVStore) (ParkStats, error) {
+	if s.parked {
+		return ParkStats{}, nil
+	}
+	s.parkPrev = s.kv.store
+	s.kv.store = st
+	for li := s.kv.lo; li < len(s.kv.layers); li++ {
+		s.kv.layers[li].lastSealed = 0
+	}
+	ps, err := s.park()
+	if err != nil {
+		s.kv.store, s.parkPrev = s.parkPrev, nil
+	}
+	return ps, err
+}
+
+func (s *State) park() (ParkStats, error) {
 	var st ParkStats
 	if s.parked {
 		return st, nil
@@ -87,6 +113,14 @@ func (s *State) Resume() (int, error) {
 		// sealed into it before Park, so the next park starts the mark over.
 		s.parkStore = nil
 		s.kv.store = NoStore{}
+		for li := s.kv.lo; li < len(s.kv.layers); li++ {
+			s.kv.layers[li].lastSealed = 0
+		}
+	}
+	if s.parkPrev != nil {
+		// ParkInto's store held the pages while parked; the session's own
+		// store takes them again from here, so the mark starts over.
+		s.kv.store, s.parkPrev = s.parkPrev, nil
 		for li := s.kv.lo; li < len(s.kv.layers); li++ {
 			s.kv.layers[li].lastSealed = 0
 		}
