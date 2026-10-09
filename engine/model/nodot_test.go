@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/samyfodil/jitllm/internal/testmodels"
 	"github.com/samyfodil/jitllm/jit/cpu"
 )
 
@@ -111,6 +112,54 @@ func TestNoDotProdIsBitIdentical(t *testing.T) {
 			if i := same(dotP, wideP); i >= 0 {
 				t.Fatalf("prefill logit %d: SDOT %v, widened %v", i, dotP[i], wideP[i])
 			}
+		})
+	}
+}
+
+// BenchmarkNoDotProdDecode decodes JITLLM_BENCH_MODEL (a GGUF or container
+// path, or a name under JITLLM_MODELS) greedily with the probe forced to "no
+// FEAT_DotProd" ("widened") and as the chip reports it ("sdot"), one sub-
+// benchmark each, so a run on a chip with the feature gives the widened kernels
+// and the SDOT ceiling in one process. It is a harness for the A/B, not a gate:
+// it asserts nothing about time (RULE 4).
+func BenchmarkNoDotProdDecode(b *testing.B) {
+	p := os.Getenv("JITLLM_BENCH_MODEL")
+	if p == "" {
+		b.Skip("JITLLM_BENCH_MODEL names no model")
+	}
+	path := jlmOf(b, testmodels.Resolve(p))
+	for _, arm := range []string{"widened", "sdot"} {
+		b.Run(arm, func(b *testing.B) {
+			old := cpu.ForceNoDotProdForTest(arm == "widened")
+			defer cpu.ForceNoDotProdForTest(old)
+			if arm == "sdot" && !cpu.HasDotProd() {
+				b.Skip("no FEAT_DotProd on this chip: the widened arm alone")
+			}
+			before := cpu.DotEmulated()
+			m, err := Open(path)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer m.Close()
+			if widened := cpu.DotEmulated() != before; widened != (arm == "widened") {
+				b.Fatalf("arm %s: widened=%v -- the arm ran the other kernels", arm, widened)
+			}
+			ids := m.Vocab.Encode("The capital of France is", true)
+			st := m.NewState(len(ids) + b.N + 2)
+			defer st.Close()
+			var lg []float32
+			for _, id := range ids {
+				if lg, err = st.Forward(id); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if lg, err = st.Forward(Greedy(lg)); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "tok/s")
 		})
 	}
 }
