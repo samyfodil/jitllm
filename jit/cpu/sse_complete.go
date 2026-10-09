@@ -113,6 +113,7 @@ var sseProbes = []sseProbe{
 		return err
 	}},
 	{"Widen", func(em *Emitters) error { _, err := em.Widen(false); return err }},
+	{"NarrowF16", func(em *Emitters) error { _, err := em.NarrowF16(); return err }},
 	{"AttnScores", func(em *Emitters) error { _, err := em.AttnScores(64, 256, KVF32); return err }},
 	{"AttnAcc", func(em *Emitters) error { _, err := em.AttnAcc(64, 256, KVF32); return err }},
 	{"AttnAccInto", func(em *Emitters) error { _, err := em.AttnAccInto(64, 256, KVF32); return err }},

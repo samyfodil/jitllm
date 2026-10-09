@@ -83,6 +83,10 @@ type Emitters struct {
 	RoPESplit func(hd, nrot int) ([]byte, error)
 	PackedRow func(q kernels.Quant) ([]byte, error)
 	Widen     func(bf16 bool) ([]byte, error)
+	// NarrowF16 is Widen's inverse for binary16, the f16 KV cache's store:
+	// Args.K whole units of ElemLanes and Args.Rows singles of float32 (W)
+	// rounded to binary16 (Out) exactly as quant.EncodeHalf rounds.
+	NarrowF16 func() ([]byte, error)
 	// RopeTable is the rotary table -- the {cos, sin} pair per rotary pair of
 	// one position -- where RoPE above is its application to a run of heads.
 	// npairs is baked; Out is the table, AScale the per-model plane block,
@@ -311,6 +315,7 @@ var primaryEmitters = Emitters{
 	RoPESplit: EmitRoPESplit,
 	PackedRow: EmitPackedRow,
 	Widen:     func(bf16 bool) ([]byte, error) { return must("widen", EmitWiden(bf16)) },
+	NarrowF16: func() ([]byte, error) { return must("narrow_f16", EmitNarrowF16()) },
 	RopeTable: EmitRopeTable,
 	HCMix:     EmitHCMix,
 	ColPool:   func() ([]byte, error) { return must("colpool", EmitColPool()) },
@@ -408,6 +413,7 @@ var sseEmitters = Emitters{
 	RoPESplit: EmitRoPESplitSSE,
 	PackedRow: EmitPackedRowSSE,
 	Widen:     EmitWidenSSE,
+	NarrowF16: EmitNarrowF16SSE,
 	RopeTable: EmitRopeTableSSE,
 	HCMix:     EmitHCMixSSE,
 	ColPool:   EmitColPoolSSE,

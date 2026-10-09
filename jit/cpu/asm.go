@@ -1010,3 +1010,34 @@ func (a *Buf) patch() {
 	}
 	a.fixup = kept
 }
+
+// VCVTPS2PH narrows float32 lanes of src to binary16 in dst (eight to an XMM
+// with l256, four without) under the rounding control imm; imm 0 is
+// round-to-nearest-even whatever MXCSR says. F16C.
+func (a *Buf) VCVTPS2PH(dst, src Reg, l256 bool, imm byte) {
+	a.vex(src, Y0, dst, noIndex, l256, p66, m0F3A, 0)
+	a.u8(0x1D)
+	a.modrmReg(src, dst)
+	a.u8(imm)
+}
+
+// VPEXTRWStore writes word imm of an XMM register to memory: one binary16 and
+// nothing past it.
+func (a *Buf) VPEXTRWStore(m Mem, src Reg, imm byte) {
+	idx := noIndex
+	if m.hasIndex() {
+		idx = m.Index
+	}
+	a.vex(src, Y0, m.Base, idx, false, p66, m0F3A, 0)
+	a.u8(0x15)
+	a.modrmMem(src, m)
+	a.u8(imm)
+}
+
+// VPANDx, VPANDNx and VPCMPGTWx are the 128-bit VPAND, VPANDN and the signed
+// int16 greater-than, for eight binary16 lanes.
+func (a *Buf) VPANDx(dst, src1, src2 Reg)  { a.vopL(0xDB, p66, m0F, 0, false, dst, src1, src2) }
+func (a *Buf) VPANDNx(dst, src1, src2 Reg) { a.vopL(0xDF, p66, m0F, 0, false, dst, src1, src2) }
+func (a *Buf) VPCMPGTWx(dst, src1, src2 Reg) {
+	a.vopL(0x65, p66, m0F, 0, false, dst, src1, src2)
+}
