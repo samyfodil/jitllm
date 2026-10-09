@@ -1,0 +1,274 @@
+package model
+
+import (
+	"encoding/json"
+	"math"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/samyfodil/jitllm/tok/jinja"
+)
+
+// The decision models' label readouts against llama.cpp's /v1/systemone on
+// the same GGUF (b11514; scripts/decisiongold.sh writes the goldens). RULE 7m:
+// llama.cpp is the oracle for the readout here because it reads the GGUF's own
+// template and metadata, which is what jitllm's container carries.
+
+type decisionGold struct {
+	Answers map[string]struct {
+		Type          string             `json:"type"`
+		Noul          float64            `json:"noul"`
+		Choice        string             `json:"choice"`
+		Score         float64            `json:"score"`
+		Confidence    float64            `json:"confidence"`
+		Probabilities map[string]float64 `json:"probabilities"`
+	} `json:"answers"`
+	Usage struct {
+		InputTokens int `json:"input_tokens"`
+	} `json:"usage"`
+}
+
+// decisionRequest reads a /v1/systemone body into the Decider's inputs.
+func decisionRequest(t testing.TB, path string) (jinja.Value, []DecisionQuestion) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := jinja.FromJSON(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _ := v.AsDict().Get("state")
+	qv, _ := v.AsDict().Get("questions")
+	qs, err := ParseDecisionQuestions(qv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state, qs
+}
+
+// decisionCases are the models and the llama.cpp answers they are held to.
+var decisionCases = []struct {
+	name, gguf, gold string // gold is the golden's prefix: <gold>.<request>.llamacpp.json
+	kind             jlm.DecisionKind
+	// ownConfidence: the model's reference computes its confidence its own
+	// way (Laya: one minus normalised entropy) and jitllm follows it, where
+	// llama.cpp gives TypeSafe's formula (RULE 7m); the field is not compared.
+	ownConfidence bool
+}{
+	{"d1-3B", "d1/d1-3B-Q8_0.gguf", "d1-3B-Q8_0", jlm.DecisionLFM2D1, false},
+	{"lev", "lev/lev-Q8_0.gguf", "lev-Q8_0", jlm.DecisionLev, false},
+	{"laya", "laya/gguf/Laya-BF16.gguf", "Laya-BF16", jlm.DecisionLaya, true},
+}
+
+// decisionRequests are the request bodies in testdata/decision: an object
+// state with every question type, and a string state whose answers are not
+// saturated, where a feature's removal shows.
+var decisionRequests = []string{"support", "ambiguous"}
+
+// The tolerances a probability may sit from llama.cpp's on the same bytes.
+// llama-server's kv cache is f16 (its answers did not move with -ctk f32), so
+// the f16 arm is the like-for-like one: worst 0.021 (d1's billing/returns
+// near-tie) and 0.029 (lev's tone, neutral 0.42 against annoyed 0.54). The
+// f32 arm moves lev's tone by 0.09: the two arms' raw logits sit 0.2-0.4 apart
+// on a scale of 20, and the BF16 adapter-merged model in transformers (f32,
+// the reference graph on the same prompt ids) is no nearer either of them --
+// neutral leads annoyed by 1.57 there, 2.00 at f32 and 1.44 at f16 here -- so
+// the spread is Q8_0 rounding meeting a near-tie, not a kv path's fault.
+const (
+	decisionTolF16 = 0.03
+	decisionTolF32 = 0.10
+	// decisionSeen is how far a removed feature must move an answer to count
+	// as seen: twice the worst f32 difference on the questions the
+	// violations ask (0.0044 on d1, 0.0145 on lev's object state).
+	decisionSeen = 0.03
+)
+
+// openDecision opens a case's model, or skips it as missing.
+func openDecision(t *testing.T, gguf string, kind jlm.DecisionKind) *Model {
+	t.Helper()
+	src := testmodels.Path(gguf)
+	if _, err := os.Stat(src); err != nil {
+		testmodels.Missing(t, "%s (scripts/decisiongold.sh names its source)", src)
+	}
+	m, err := Open(jlmOf(t, src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Decision(); got != kind {
+		m.Close()
+		t.Fatalf("the container says readout %v, want %v", got, kind)
+	}
+	return m
+}
+
+func readDecisionGold(t *testing.T, name string) decisionGold {
+	t.Helper()
+	var gold decisionGold
+	b, err := os.ReadFile(filepath.Join("testdata", "decision", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &gold); err != nil {
+		t.Fatal(err)
+	}
+	return gold
+}
+
+type decisionArm struct {
+	name string
+	f16  bool
+	tol  float64
+}
+
+func TestDecisionMatchesLlamaCpp(t *testing.T) {
+	for _, c := range decisionCases {
+		t.Run(c.name, func(t *testing.T) {
+			m := openDecision(t, c.gguf, c.kind)
+			defer m.Close()
+			// A decoder runs both kv caches; an encoder keeps none.
+			arms := []decisionArm{{"kv-f32", false, decisionTolF32}, {"kv-f16", true, decisionTolF16}}
+			if m.IsEncoder() {
+				// Laya: worst 0.0042 on either request.
+				arms = []decisionArm{{"encoder", false, 0.01}}
+			}
+			for _, req := range decisionRequests {
+				gold := readDecisionGold(t, c.gold+"."+req+".llamacpp.json")
+				for _, arm := range arms {
+					t.Run(req+"/"+arm.name, func(t *testing.T) {
+						if !m.IsEncoder() {
+							m.SetKVF16(arm.f16)
+						}
+						state, qs := decisionRequest(t, filepath.Join("testdata", "decision", req+".json"))
+						d, err := m.NewDecider(4096)
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer d.Close()
+						if d.st != nil && d.st.KVIsF16() != arm.f16 {
+							t.Fatalf("the kv cache is f16=%v, the arm asked for %v", d.st.KVIsF16(), arm.f16)
+						}
+						ans, err := d.Decide(state, qs)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if d.InputTokens() != gold.Usage.InputTokens {
+							t.Errorf("ran %d prompt tokens, llama.cpp %d: the prompts differ", d.InputTokens(), gold.Usage.InputTokens)
+						}
+						checkDecisions(t, qs, ans, gold, arm.tol, !c.ownConfidence)
+					})
+				}
+			}
+		})
+	}
+}
+
+// TestDecisionReadoutIsLoadBearing removes each feature of a readout and
+// requires the answers to leave llama.cpp's by more than the gate's tolerance:
+// a feature whose removal the gate cannot see is not gated (RULE 10). d1's
+// GGUF states no temperature, so calibration is a feature of lev's alone; and
+// d1's second code form (" A" beside "A") moved no answer past 0.004 on
+// either request, so it is the reference's behaviour kept without a gate.
+func TestDecisionReadoutIsLoadBearing(t *testing.T) {
+	for _, c := range []struct {
+		name, gguf, gold, req string
+		kind                  jlm.DecisionKind
+		violation             string
+		ask                   []string // the questions the feature touches
+	}{
+		{"d1-false-first", "d1/d1-3B-Q8_0.gguf", "d1-3B-Q8_0", "ambiguous", jlm.DecisionLFM2D1, "false-first", []string{"compensate", "churn", "damage"}},
+		{"lev-one-order", "lev/lev-Q8_0.gguf", "lev-Q8_0", "support", jlm.DecisionLev, "one-order", []string{"intent", "team"}},
+		{"lev-unsorted", "lev/lev-Q8_0.gguf", "lev-Q8_0", "support", jlm.DecisionLev, "unsorted", []string{"intent", "urgent", "frustration", "refund", "team"}},
+		{"lev-uncalibrated", "lev/lev-Q8_0.gguf", "lev-Q8_0", "support", jlm.DecisionLev, "uncalibrated", []string{"intent", "urgent"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := openDecision(t, c.gguf, c.kind)
+			defer m.Close()
+			m.SetKVF16(false)
+			gold := readDecisionGold(t, c.gold+"."+c.req+".llamacpp.json")
+			state, all := decisionRequest(t, filepath.Join("testdata", "decision", c.req+".json"))
+			var qs []DecisionQuestion
+			for _, q := range all {
+				for _, id := range c.ask {
+					if q.ID == id {
+						qs = append(qs, q)
+					}
+				}
+			}
+			d, err := m.NewDecider(4096)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
+			d.violation = c.violation
+			ans, err := d.Decide(state, qs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			worst := 0.0
+			for i, q := range qs {
+				g := gold.Answers[q.ID]
+				if q.Type == jlm.QuestionNoul {
+					worst = max(worst, math.Abs(ans[i].Noul-g.Noul))
+					continue
+				}
+				for j, o := range q.Options {
+					worst = max(worst, math.Abs(ans[i].Probs[j]-g.Probabilities[o.Key]))
+				}
+			}
+			t.Logf("%s moves the answers by %.4f", c.violation, worst)
+			if worst <= decisionSeen {
+				t.Errorf("removing %s moved no answer past %.2f: the gate does not see it", c.violation, decisionSeen)
+			}
+		})
+	}
+}
+
+// checkDecisions holds every answer to the golden's within tol.
+func checkDecisions(t *testing.T, qs []DecisionQuestion, ans []DecisionAnswer, gold decisionGold, tol float64, confidence bool) {
+	t.Helper()
+	worst := 0.0
+	for i, q := range qs {
+		g, ok := gold.Answers[q.ID]
+		if !ok {
+			t.Fatalf("the golden has no answer for %s", q.ID)
+		}
+		a := ans[i]
+		if a.Type.String() != g.Type {
+			t.Errorf("%s: type %v, golden %s", q.ID, a.Type, g.Type)
+		}
+		diff := func(what string, got, want float64) {
+			if math.IsNaN(got) || math.IsInf(got, 0) {
+				t.Errorf("%s %s: %v is not finite", q.ID, what, got)
+				return
+			}
+			d := math.Abs(got - want)
+			worst = max(worst, d)
+			if d > tol {
+				t.Errorf("%s %s: %.4f, llama.cpp %.4f", q.ID, what, got, want)
+			}
+		}
+		switch q.Type {
+		case jlm.QuestionNoul:
+			diff("noul", a.Noul, g.Noul)
+		default:
+			if q.Type == jlm.QuestionChoice && a.Choice != g.Choice {
+				t.Errorf("%s: chose %q, llama.cpp %q", q.ID, a.Choice, g.Choice)
+			}
+			if q.Type == jlm.QuestionScore {
+				diff("score", a.Score, g.Score)
+			}
+			if confidence {
+				diff("confidence", a.Confidence, g.Confidence)
+			}
+			for j, o := range q.Options {
+				diff("p("+o.Key+")", a.Probs[j], g.Probabilities[o.Key])
+			}
+		}
+	}
+	t.Logf("worst difference from llama.cpp: %.5f", worst)
+}

@@ -350,6 +350,9 @@ func (a Arch) name() string {
 	if n := flagshipArchNames[a]; n != "" {
 		return n
 	}
+	if n := encoderArchNames[a]; n != "" {
+		return n
+	}
 	return visionArchNames[a]
 }
 
@@ -360,7 +363,7 @@ func (a Arch) Valid() bool { return a != ArchNone && (a <= archMax || a.name() !
 // Encoder reports whether a is an embedding encoder (the BERT family): run by
 // the engine's encoder rather than its decoder graph, with no KV cache and no
 // logits. A decoder that pools (FlagPoolMean and its siblings) is not one.
-func (a Arch) Encoder() bool { return a == ArchBERT || a == ArchNomicBERT }
+func (a Arch) Encoder() bool { return a == ArchBERT || a == ArchNomicBERT || a == ArchModernBERT }
 
 // Config is the model description. Every field is written by the converter and
 // read by the engine; nothing is derived at load from a string.
@@ -627,6 +630,17 @@ type Config struct {
 	SituBeta, SituLinearBeta   float32
 	KDALowerBound              float32
 	LatentNormEps              float32
+
+	// A decision model (decision.go): its readout, the head blocks that end
+	// the stack and the token budget of the question and options, and its
+	// fitted temperatures. A tenth optional tail; see encodeConfig.
+	Decision           DecisionKind
+	DecisionBlocks     uint32
+	DecisionHeadTokens uint32
+	DecisionTemps      []DecisionTemp
+	// DecisionHeads is the head blocks' attention head count, which Laya's
+	// reference sets as max(1, n_embd/64) whatever the encoder's is.
+	DecisionHeads uint32
 
 	Flags Flags
 }

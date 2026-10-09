@@ -43,6 +43,7 @@ type encoder struct {
 	blocks   []encBlock
 	rope     *nn.Rope // nomic-bert's rotary, nil for BERT
 	swiglu   bool
+	mb       *modernBERT // ModernBERT's own graph; nil for BERT and nomic-bert
 }
 
 // buildEncoder loads an encoder container. It touches no block page: every
@@ -104,6 +105,13 @@ func buildEncoder(c *jlm.File, m *Model) error {
 	var err error
 	if m.embd, err = get(jlm.RoleTokenEmbd, jlm.DenseBlock); err != nil {
 		return err
+	}
+	if cfg.Arch == jlm.ArchModernBERT.String() {
+		if err := buildModernBERT(c, m, enc); err != nil {
+			return err
+		}
+		m.enc = enc
+		return nil
 	}
 	if c.Has(jlm.RoleTokenTypes, jlm.DenseBlock, -1) {
 		tt, err := vec(jlm.RoleTokenTypes, jlm.DenseBlock, 0)
@@ -417,7 +425,7 @@ func buildEncoderModel(c *jlm.File, options ...tok.Option) (*Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Pooling == jlm.PoolNone {
+	if cfg.Pooling == jlm.PoolNone && c.Config().Decision == jlm.DecisionNone {
 		return nil, fmt.Errorf("model: %s is an encoder with no pooling; the container "+
 			"says nothing about how to read a vector out of it", cfg.Arch)
 	}

@@ -7,11 +7,11 @@ a GGUF architecture, Hugging Face class or vision projector that is not here is 
 by name. `internal/srcgate.TestModelsDocIsGenerated` fails when the page and the code part; rerun
 `go run ./scripts/genmodels docs/models.md`.
 
-- **65** GGUF text architecture names (`general.architecture`, `convert.Architectures`) on **57** graphs
+- **66** GGUF text architecture names (`general.architecture`, `convert.Architectures`) on **58** graphs
 - **30** Hugging Face safetensors classes (`architectures` in `config.json`, `convert.HFClasses`) on **23** graphs, **1** of them reached only from safetensors
-- **58** graphs in all (`jlm.Arch`)
+- **59** graphs in all (`jlm.Arch`)
 - **17** vision projectors (`clip.projector_type`, `convert.Projectors`)
-- **2** embedding encoders, and pooling on any decoder
+- **3** embedding encoders, and pooling on any decoder
 - **12** weight types read (`quant.Dequantable`), **9** of them packed quantizations (`quant.PackedTypes`)
 - **82** models in the download catalogue (`jitllm library`), **9** of them with a vision tower
 
@@ -59,6 +59,7 @@ further at conversion (a stated sliding window, M-RoPE sections); the Models col
 | `minimax-m2` | `minimax-m2` | -- | MiniMax-M2, M2.1, M2.5 |
 | `minimax-m3` | `minimax-m3` | -- | MiniMax-M3 |
 | `mistral3` | `mistral3` | `Ministral3ForCausalLM` | Ministral 3 |
+| `modern-bert` | `modern-bert` | -- | Laya (decision model, /v1/systemone) |
 | `nemotron` | `nemotron` | -- | Nemotron-4 Minitron, Nemotron-Mini |
 | `nemotron_h` | `nemotron_h`, `nemotron_h_moe` | -- | `nemotron_h`: Nemotron-H, Nemotron Nano 2; `nemotron_h_moe`: Nemotron 3 Nano |
 | `nomic-bert` | `nomic-bert` | -- | nomic-embed-text (embeddings) |
@@ -150,6 +151,7 @@ convert together, the text model one of the architectures above. The projector i
 Encoders, run by the engine's encoder rather than its decoder graph:
 
 - `bert`: all-MiniLM, mxbai-embed-large, bge-large, snowflake-arctic-embed (embeddings)
+- `modern-bert`: Laya (decision model, /v1/systemone)
 - `nomic-bert`: nomic-embed-text (embeddings)
 
 Any decoder above also converts as an embedding model when its GGUF states `pooling_type` 1 (mean),

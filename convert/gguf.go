@@ -650,7 +650,7 @@ func falconNorms(f *meta.File, role jlm.Role) (jlm.Role, error) {
 // than some other block's fused projection (qwen3next's delta rule).
 func fusesQKV(a jlm.Arch) bool {
 	switch a {
-	case jlm.ArchPhi3, jlm.ArchNomicBERT, jlm.ArchPhi2, jlm.ArchStarcoder, jlm.ArchFalcon, jlm.ArchDBRX,
+	case jlm.ArchPhi3, jlm.ArchNomicBERT, jlm.ArchModernBERT, jlm.ArchPhi2, jlm.ArchStarcoder, jlm.ArchFalcon, jlm.ArchDBRX,
 		jlm.ArchBailingMoE2,
 		// glm4's q, k and v are separate tensors; its gate|up is fused, which
 		// this switch also admits.

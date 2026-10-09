@@ -236,5 +236,11 @@ variable it needs and did not find.
 | `BAILING_PY`, `BAILING_REF` | the python of a second venv with transformers 4.52.3, and inclusionAI's Ling 2.0 remote code | `moegold.py`'s `synth-bailingmoe2` only |
 | `L4_TOK` | the directory holding Llama 4's `tokenizer.json` | `llama4gold.py`, `llama4visiongold.py` |
 
+The decision models' goldens: `scripts/decisiongold.sh` (llama-server's
+`/v1/systemone` under `JITLLM_LCPP` on `$JITLLM_MODELS/{d1,lev,laya/gguf}`) and
+`scripts/layagold.py` (Laya's own code: `real` on the checkpoint, `fixture`
+builds the random fixture into `$JITLLM_MODELS/laya/fixture` with llama.cpp's
+converter); `docs/design/decision-models.md` names the files.
+
 A script-specific override (`QVL_TOK`, `PIX_HF`, `PHI4V_TOK` and the like) is
 named in that script's docstring and defaults to a path under `$JITLLM_MODELS`.

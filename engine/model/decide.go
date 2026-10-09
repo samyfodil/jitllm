@@ -1,0 +1,779 @@
+package model
+
+import (
+	"fmt"
+	"math"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/samyfodil/jitllm/tok/jinja"
+)
+
+// Decisions: a decision model answers typed questions about a state in one
+// forward pass and generates nothing (docs/design/decision-models.md). The
+// request is TypeSafe's /v1/systemone; this file is the engine half of it --
+// the prompt each question is asked with, the scores read from the forward
+// pass, and the calibrated answer. The readout is the container's
+// (jlm.DecisionKind): what the reference hardcodes per model, stated at
+// conversion.
+//
+// The label readouts (Lev, d1) are the backbone's own forward pass and logits
+// read at a handful of ids, so a decision runs wherever that backbone runs, on
+// every tier, through Prefill.
+
+// DecisionOption is one allowed answer: its key (a choice's name, a score's
+// level "0".."n-1", a noul's "true"/"false") and its description, a string or
+// any JSON value, None when the request gave none.
+type DecisionOption struct {
+	Key         string
+	Description jinja.Value
+}
+
+// DecisionQuestion is one named question of a request, its options in the
+// order the request wrote them.
+type DecisionQuestion struct {
+	ID           string
+	Type         jlm.QuestionType
+	Instructions jinja.Value
+	Options      []DecisionOption
+}
+
+// DecisionAnswer is one question's answer. Probs is per option, in the
+// question's option order. Noul is P(true) for a noul; Choice, Score and
+// Confidence are set by the types that have them.
+type DecisionAnswer struct {
+	Type       jlm.QuestionType
+	Probs      []float64
+	Noul       float64
+	Choice     string
+	Score      float64
+	Confidence float64
+}
+
+// Decision is the model's readout, DecisionNone for a model that is not a
+// decision model.
+func (m *Model) Decision() jlm.DecisionKind {
+	if m.container == nil {
+		return jlm.DecisionNone
+	}
+	return m.container.Config().Decision
+}
+
+// levRatings is the scale lev reads a noul from: 0 = certainly no, 8 =
+// certainly yes, read at the first nine codes.
+const levRatings = 9
+
+// Decider asks a decision model questions. It holds one State and is one
+// request at a time; build one per concurrent caller.
+type Decider struct {
+	m    *Model
+	cfg  *jlm.Config
+	kind jlm.DecisionKind
+	st   *State
+	tpl  *jinja.Template
+
+	// lev: the single-token codes A..Z, AA..ZZ, in order, and their ids.
+	labels     []int32
+	labelTexts []string
+	maxOptions int
+
+	scores []float32
+	input  int
+
+	// emb is the encoder's working memory, for a readout that runs on an
+	// encoder (Laya); st is nil then.
+	emb *Embedder
+
+	// violation names one feature of the readout a test removes, to show the
+	// gate sees it (RULE 10). Empty in every caller but those tests.
+	violation string
+}
+
+// NewDecider builds a Decider whose prompts may run to maxSeq tokens.
+func (m *Model) NewDecider(maxSeq int) (*Decider, error) {
+	kind := m.Decision()
+	if kind == jlm.DecisionNone {
+		return nil, fmt.Errorf("model: %s is not a decision model: its container states no decision readout", m.Cfg.Arch)
+	}
+	if m.Vocab == nil {
+		return nil, fmt.Errorf("model: a decision model needs its tokenizer: %v", m.TokErr)
+	}
+	src, ok := m.ChatTemplate("systemone")
+	if !ok {
+		return nil, fmt.Errorf("model: decision model carries no systemone template")
+	}
+	tpl, err := jinja.Compile(src)
+	if err != nil {
+		return nil, fmt.Errorf("model: the systemone template: %w", err)
+	}
+	d := &Decider{m: m, cfg: m.container.Config(), kind: kind, tpl: tpl, maxOptions: 255}
+	switch kind {
+	case jlm.DecisionLev:
+		// Codes A..Z then AA..ZZ; only those that are one token are used, up
+		// to 255 (lev's serving code, ADR-028).
+		var codes []string
+		for a := 'A'; a <= 'Z'; a++ {
+			codes = append(codes, string(a))
+		}
+		for a := 'A'; a <= 'Z'; a++ {
+			for b := 'A'; b <= 'Z'; b++ {
+				codes = append(codes, string([]rune{a, b}))
+			}
+		}
+		for _, c := range codes {
+			if id, ok := d.single(c); ok && len(d.labels) < 255 {
+				d.labels = append(d.labels, id)
+				d.labelTexts = append(d.labelTexts, c)
+			}
+		}
+		if len(d.labels) < levRatings {
+			return nil, fmt.Errorf("model: lev needs at least %d single-token codes, the vocabulary has %d", levRatings, len(d.labels))
+		}
+		d.maxOptions = len(d.labels)
+	case jlm.DecisionLFM2D1:
+	case jlm.DecisionLaya:
+		if m.encMB() == nil || m.encMB().head == nil {
+			return nil, fmt.Errorf("model: a laya readout wants a ModernBERT encoder with its head")
+		}
+		d.emb = &Embedder{m: m}
+		if err := d.emb.encoderJIT(); err != nil {
+			return nil, err
+		}
+		m.mbBind()
+		return d, nil
+	default:
+		return nil, fmt.Errorf("model: decision readout %v has no implementation", kind)
+	}
+	d.st = m.NewState(maxSeq)
+	return d, nil
+}
+
+// Close releases the Decider's State.
+func (d *Decider) Close() error {
+	if d.emb != nil {
+		d.emb.Close()
+		return nil
+	}
+	return d.st.Close()
+}
+
+// single is the id text encodes to when it is exactly one token.
+func (d *Decider) single(text string) (int32, bool) {
+	ids := d.m.Vocab.Encode(text, false)
+	if len(ids) != 1 {
+		return 0, false
+	}
+	return ids[0], true
+}
+
+// InputTokens is how many tokens the last Decide ran.
+func (d *Decider) InputTokens() int { return d.input }
+
+// Prepare checks a request's questions against what this readout can ask and
+// puts each in the order the model was trained to see it: a noul true first on
+// d1. It is called by Decide; a caller that wants the refusal before queueing
+// calls it first.
+func (d *Decider) Prepare(state jinja.Value, qs []DecisionQuestion) error {
+	if len(qs) == 0 {
+		return fmt.Errorf("questions must be a non-empty object")
+	}
+	if (state.IsNone() || state.IsUndefined()) && d.kind != jlm.DecisionLFM2D1 {
+		return fmt.Errorf("state must be provided")
+	}
+	for i := range qs {
+		q := &qs[i]
+		n := len(q.Options)
+		switch q.Type {
+		case jlm.QuestionChoice:
+			if n == 0 {
+				return fmt.Errorf("questions.%s: criteria must be a non-empty object", q.ID)
+			}
+		case jlm.QuestionScore:
+			if n < 2 || n > 10 {
+				return fmt.Errorf("questions.%s: criteria must be an array of 2 to 10 levels", q.ID)
+			}
+		case jlm.QuestionNoul:
+			if n != 2 || q.Options[0].Key != "false" || q.Options[1].Key != "true" {
+				return fmt.Errorf("questions.%s: a noul's options are false then true", q.ID)
+			}
+		default:
+			return fmt.Errorf("questions.%s: type must be one of: choice, score, noul", q.ID)
+		}
+		if n > d.maxOptions {
+			return fmt.Errorf("questions.%s: too many options (%d), this model supports at most %d", q.ID, n, d.maxOptions)
+		}
+	}
+	return nil
+}
+
+// Decide answers every question about state, one forward pass per question
+// (two for a lev choice, its options shown in both orders). qs is the
+// request's questions in its order; the answers come back in the same order.
+func (d *Decider) Decide(state jinja.Value, qs []DecisionQuestion) ([]DecisionAnswer, error) {
+	if err := d.Prepare(state, qs); err != nil {
+		return nil, err
+	}
+	d.input = 0
+	out := make([]DecisionAnswer, len(qs))
+	for i := range qs {
+		q := &qs[i]
+		nv := d.variants(q)
+		var all [][]float32
+		for v := 0; v < nv; v++ {
+			s, err := d.run(state, q, v)
+			if err != nil {
+				return nil, fmt.Errorf("questions.%s: %w", q.ID, err)
+			}
+			all = append(all, s)
+		}
+		a, err := d.answer(q, all)
+		if err != nil {
+			return nil, fmt.Errorf("questions.%s: %w", q.ID, err)
+		}
+		out[i] = a
+	}
+	return out, nil
+}
+
+// variants is how many times a question is asked: lev shows a choice's options
+// in two orders, to cancel its preference for the first label.
+func (d *Decider) variants(q *DecisionQuestion) int {
+	if d.kind == jlm.DecisionLev && q.Type == jlm.QuestionChoice && len(q.Options) > 1 && d.violation != "one-order" {
+		return 2
+	}
+	return 1
+}
+
+// order is the question's options in the order the prompt shows them: d1
+// shows a noul true first.
+func (d *Decider) order(q *DecisionQuestion) []DecisionOption {
+	if d.kind == jlm.DecisionLFM2D1 && q.Type == jlm.QuestionNoul && d.violation != "false-first" {
+		return []DecisionOption{q.Options[1], q.Options[0]}
+	}
+	return q.Options
+}
+
+// run renders variant v of q, runs it, and returns one score per output: per
+// option in the shown order (reversed for variant 1), or lev's nine ratings
+// for a noul.
+func (d *Decider) run(state jinja.Value, q *DecisionQuestion, v int) ([]float32, error) {
+	opts := d.order(q)
+	var groups [][]int32
+	var labels []string
+	switch d.kind {
+	case jlm.DecisionLev:
+		labels = d.labelTexts
+		n := len(opts)
+		if q.Type == jlm.QuestionNoul {
+			n = levRatings
+		}
+		for _, id := range d.labels[:n] {
+			groups = append(groups, []int32{id})
+		}
+	case jlm.DecisionLFM2D1:
+		var err error
+		if labels, groups, err = d.d1Labels(q.Type, opts); err != nil {
+			return nil, err
+		}
+	}
+	if d.kind == jlm.DecisionLaya {
+		return d.layaRun(state, q)
+	}
+	prompt, err := d.render(state, q, opts, labels, v)
+	if err != nil {
+		return nil, err
+	}
+	ids := d.m.Vocab.EncodeSpecial(prompt, false)
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("the prompt is empty")
+	}
+	if len(ids) > d.st.MaxSeq() {
+		return nil, fmt.Errorf("the prompt is %d tokens and this decider holds %d", len(ids), d.st.MaxSeq())
+	}
+	d.st.Reset()
+	lg, err := d.st.Prefill(ids)
+	if err != nil {
+		return nil, err
+	}
+	d.input += len(ids)
+	// A group scores by its largest logit (d1's code and " "+code).
+	s := make([]float32, len(groups))
+	for i, g := range groups {
+		best := float32(math.Inf(-1))
+		for _, id := range g {
+			if int(id) >= len(lg) {
+				return nil, fmt.Errorf("label id %d is past the %d logits", id, len(lg))
+			}
+			best = max(best, lg[id])
+		}
+		s[i] = best
+	}
+	return s, nil
+}
+
+// render is the systemone template over one question, given the inputs
+// llama.cpp's server gives it (server-decision.cpp: render): id, type,
+// instructions, state and the options, each with its key, description and
+// label, and an empty image list.
+func (d *Decider) render(state jinja.Value, q *DecisionQuestion, opts []DecisionOption, labels []string, v int) (string, error) {
+	n := len(opts)
+	list := make([]jinja.Value, n)
+	for i := range opts {
+		o := opts[i]
+		if v == 1 {
+			o = opts[n-1-i]
+		}
+		od := jinja.NewDict()
+		od.AsDict().Set("key", jinja.NewString(o.Key))
+		desc := o.Description
+		if desc.IsUndefined() {
+			desc = jinja.None()
+		}
+		od.AsDict().Set("description", desc)
+		if labels != nil {
+			od.AsDict().Set("label", jinja.NewString(labels[i]))
+		}
+		list[i] = od
+	}
+	// Instructions are optional in TypeSafe's protocol, and the reference
+	// models that read an absent one ask by the question's id (Clef's
+	// encode_record, lev's template); llama.cpp refuses the request instead.
+	ins := q.Instructions
+	if ins.IsUndefined() || ins.IsNone() {
+		ins = jinja.NewString(q.ID)
+	}
+	in := jinja.NewDict()
+	dict := in.AsDict()
+	dict.Set("id", jinja.NewString(q.ID))
+	dict.Set("type", jinja.NewString(q.Type.String()))
+	dict.Set("instructions", ins)
+	dict.Set("state", state)
+	dict.Set("options", jinja.NewList(list))
+	if d.kind == jlm.DecisionLev && d.violation != "unsorted" {
+		// lev was trained with every object's keys sorted.
+		in = sortKeys(in)
+		dict = in.AsDict()
+	}
+	data := map[string]any{"images": jinja.NewList(nil)}
+	for _, k := range dict.Keys {
+		data[k] = dict.Data[k]
+	}
+	return d.tpl.Render(data)
+}
+
+// sortKeys is v with every object's keys in sorted order.
+func sortKeys(v jinja.Value) jinja.Value {
+	switch {
+	case v.IsList():
+		items := v.AsList().Items
+		out := make([]jinja.Value, len(items))
+		for i, x := range items {
+			out[i] = sortKeys(x)
+		}
+		return jinja.NewList(out)
+	case v.IsDict():
+		src := v.AsDict()
+		keys := append([]string(nil), src.Keys...)
+		sort.Strings(keys)
+		out := jinja.NewDict()
+		for _, k := range keys {
+			out.AsDict().Set(k, sortKeys(src.Data[k]))
+		}
+		return out
+	}
+	return v
+}
+
+// d1Labels are d1's option codes and the token group each is scored by
+// (prompt.py of the model repo, as llama.cpp's server-decision.cpp ports it):
+// a noul reads yes/Yes/YES against no/No/NO, a score its level digits, and a
+// choice its one-letter keys when every key is one letter, else A, B, ... or
+// 00..99, each code taken only when it is one token not used before, and
+// otherwise the next free one from a pool.
+func (d *Decider) d1Labels(t jlm.QuestionType, opts []DecisionOption) ([]string, [][]int32, error) {
+	singles := func(forms ...string) []int32 {
+		var out []int32
+		for _, f := range forms {
+			if id, ok := d.single(f); ok && !containsID(out, id) {
+				out = append(out, id)
+			}
+		}
+		return out
+	}
+	var texts []string
+	var groups [][]int32
+	if t != jlm.QuestionChoice {
+		for _, o := range opts {
+			var g []int32
+			switch {
+			case t == jlm.QuestionScore:
+				g = singles(o.Key)
+			case o.Key == "true":
+				g = singles("yes", "Yes", "YES")
+			default:
+				g = singles("no", "No", "NO")
+			}
+			if len(g) == 0 {
+				return nil, nil, fmt.Errorf("decision label %q is not a single token", o.Key)
+			}
+			texts = append(texts, o.Key)
+			groups = append(groups, g)
+		}
+		return texts, groups, nil
+	}
+	letters := true
+	for _, o := range opts {
+		r := []rune(o.Key)
+		letters = letters && len(o.Key) == 1 && len(r) == 1 && (r[0] >= 'a' && r[0] <= 'z' || r[0] >= 'A' && r[0] <= 'Z')
+	}
+	n := len(opts)
+	codes := make([]string, n)
+	for i := range opts {
+		switch {
+		case letters:
+			codes[i] = opts[i].Key
+		case n <= 26:
+			codes[i] = string(rune('A' + i))
+		default:
+			codes[i] = fmt.Sprintf("%02d", i)
+		}
+	}
+	var pool []string
+	for c := 'A'; c <= 'Z'; c++ {
+		pool = append(pool, string(c))
+	}
+	for i := 0; i < 100; i++ {
+		pool = append(pool, fmt.Sprintf("%02d", i))
+	}
+	for c := 'a'; c <= 'z'; c++ {
+		pool = append(pool, string(c))
+	}
+	for i := 0; i < 200; i++ {
+		pool = append(pool, fmt.Sprintf("#%d", i))
+	}
+	for a := 'A'; a <= 'Z'; a++ {
+		for b := 'A'; b <= 'Z'; b++ {
+			pool = append(pool, string([]rune{a, b}))
+		}
+	}
+	var used []int32
+	take := func(code string) bool {
+		id, ok := d.single(code)
+		if !ok || containsID(used, id) {
+			return false
+		}
+		used = append(used, id)
+		g := []int32{id}
+		for _, x := range singles(" " + code) {
+			if d.violation == "code-only" {
+				break
+			}
+			if x != id {
+				g = append(g, x)
+			}
+		}
+		texts = append(texts, code)
+		groups = append(groups, g)
+		return true
+	}
+	for _, code := range codes {
+		taken := take(code)
+		for i := 0; !taken && i < len(pool); i++ {
+			taken = take(pool[i])
+		}
+		if !taken {
+			return nil, nil, fmt.Errorf("no single-token label left for %d options", n)
+		}
+	}
+	return texts, groups, nil
+}
+
+func containsID(s []int32, id int32) bool {
+	for _, x := range s {
+		if x == id {
+			return true
+		}
+	}
+	return false
+}
+
+// answer calibrates and averages a question's variants and forms the answer
+// (server-decision.cpp: format_answer, which is TypeSafe's arithmetic). The
+// softmax over the scaled scores is generated code; what follows is a few
+// scalars per question.
+func (d *Decider) answer(q *DecisionQuestion, variants [][]float32) (DecisionAnswer, error) {
+	shown := d.order(q)
+	n := len(variants[0])
+	t := d.cfg.Temperature(q.Type, len(q.Options))
+	if d.violation == "uncalibrated" {
+		t = 1
+	}
+	probs := make([]float64, n)
+	if cap(d.scores) < n {
+		d.scores = make([]float32, n)
+	}
+	for v, s := range variants {
+		if len(s) != n {
+			return DecisionAnswer{}, fmt.Errorf("variant %d has %d scores, want %d", v, len(s), n)
+		}
+		p := d.scores[:n]
+		copy(p, s)
+		for _, x := range p {
+			if x != x {
+				return DecisionAnswer{}, fmt.Errorf("the model could not evaluate the decision (a score is NaN)")
+			}
+		}
+		nn.Scale32JIT(p, 1/t)
+		nn.Softmax32JIT(p, n)
+		for i := range p {
+			j := i
+			if v == 1 {
+				j = n - 1 - i
+			}
+			probs[j] += float64(p[i]) / float64(len(variants))
+		}
+	}
+	a := DecisionAnswer{Type: q.Type}
+	if q.Type == jlm.QuestionNoul {
+		if d.kind == jlm.DecisionLev {
+			for i, p := range probs {
+				a.Noul += p * float64(i) / float64(n-1)
+			}
+			return a, nil
+		}
+		for i, o := range shown {
+			if o.Key == "true" {
+				a.Noul = probs[i]
+			}
+		}
+		return a, nil
+	}
+	// Choice and score options were shown in the request's order.
+	a.Probs = probs
+	best := 0
+	for i := range probs {
+		if probs[i] > probs[best] {
+			best = i
+		}
+	}
+	if q.Type == jlm.QuestionChoice {
+		a.Choice = q.Options[best].Key
+		a.Confidence = confidenceChoice(probs)
+	} else {
+		for i, p := range probs {
+			a.Score += float64(i) * p
+		}
+		a.Confidence = confidenceScore(probs)
+	}
+	if d.kind == jlm.DecisionLaya {
+		a.Confidence = layaConfidence(probs)
+	}
+	return a, nil
+}
+
+// confidenceChoice is TypeSafe's choice confidence: how far the top
+// probability stands above uniform, on [0, 1].
+func confidenceChoice(p []float64) float64 {
+	if len(p) < 2 {
+		return 1
+	}
+	u := 1 / float64(len(p))
+	top := 0.0
+	for _, x := range p {
+		top = max(top, x)
+	}
+	return max(0, (top-u)/(1-u))
+}
+
+// confidenceScore is TypeSafe's score confidence: one minus the mean distance
+// to the mode, relative to that of a uniform distribution about its centre.
+func confidenceScore(p []float64) float64 {
+	n := len(p)
+	if n < 2 {
+		return 1
+	}
+	mode := 0
+	for i := range p {
+		if p[i] > p[mode] {
+			mode = i
+		}
+	}
+	var dist, uni float64
+	for i := range p {
+		dist += p[i] * math.Abs(float64(i-mode))
+		uni += math.Abs(float64(i)-float64(n-1)/2) / float64(n)
+	}
+	return max(0, 1-dist/uni)
+}
+
+// ParseDecisionQuestions reads TypeSafe's questions object, in its key order.
+func ParseDecisionQuestions(v jinja.Value) ([]DecisionQuestion, error) {
+	if !v.IsDict() || v.AsDict().Len() == 0 {
+		return nil, fmt.Errorf("questions must be a non-empty object")
+	}
+	var out []DecisionQuestion
+	qd := v.AsDict()
+	for _, id := range qd.Keys {
+		x := qd.Data[id]
+		if !x.IsDict() {
+			return nil, fmt.Errorf("questions.%s: must be an object", id)
+		}
+		qx := x.AsDict()
+		q := DecisionQuestion{ID: id, Instructions: jinja.None()}
+		if ins, ok := qx.Get("instructions"); ok {
+			q.Instructions = ins
+		}
+		tv, _ := qx.Get("type")
+		typ := ""
+		if tv.IsString() {
+			typ = tv.AsString()
+		}
+		crit, hasCrit := qx.Get("criteria")
+		switch typ {
+		case "choice":
+			q.Type = jlm.QuestionChoice
+			if hasCrit && crit.IsList() {
+				// TypeSafe clients send a list of names for undescribed
+				// options (lev and laya accept it).
+				for _, k := range crit.AsList().Items {
+					if !k.IsString() {
+						return nil, fmt.Errorf("questions.%s: a criteria list holds option names", id)
+					}
+					q.Options = append(q.Options, DecisionOption{Key: k.AsString(), Description: jinja.None()})
+				}
+			} else if hasCrit && crit.IsDict() {
+				cd := crit.AsDict()
+				for _, k := range cd.Keys {
+					q.Options = append(q.Options, DecisionOption{Key: k, Description: cd.Data[k]})
+				}
+			} else {
+				return nil, fmt.Errorf("questions.%s: criteria must be a non-empty object", id)
+			}
+		case "score":
+			q.Type = jlm.QuestionScore
+			if !hasCrit || !crit.IsList() {
+				return nil, fmt.Errorf("questions.%s: criteria must be an array of 2 to 10 levels", id)
+			}
+			for i, c := range crit.AsList().Items {
+				q.Options = append(q.Options, DecisionOption{Key: fmt.Sprint(i), Description: c})
+			}
+		case "noul":
+			q.Type = jlm.QuestionNoul
+			if hasCrit && !crit.IsNone() && !crit.IsDict() {
+				return nil, fmt.Errorf("questions.%s: criteria must be an object", id)
+			}
+			for _, k := range []string{"false", "true"} {
+				desc := jinja.None()
+				if hasCrit && crit.IsDict() {
+					if dv, ok := crit.AsDict().Get(k); ok {
+						desc = dv
+					}
+				}
+				q.Options = append(q.Options, DecisionOption{Key: k, Description: desc})
+			}
+		default:
+			return nil, fmt.Errorf("questions.%s: type must be one of: choice, score, noul", id)
+		}
+		out = append(out, q)
+	}
+	return out, nil
+}
+
+// DecisionResponse is TypeSafe's response body: the answers keyed by question id in request order,
+// each in TypeSafe's shape. A score's legend carries each level's description
+// as the request gave it.
+func DecisionResponse(modelID string, qs []DecisionQuestion, answers []DecisionAnswer, inputTokens int) []byte {
+	var b strings.Builder
+	b.WriteString(`{"model":`)
+	b.WriteString(strconv.Quote(modelID))
+	b.WriteString(`,"answers":{`)
+	for i, q := range qs {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		a := answers[i]
+		b.WriteString(jsonString(q.ID))
+		b.WriteString(`:{"type":`)
+		b.WriteString(jsonString(q.Type.String()))
+		switch q.Type {
+		case jlm.QuestionNoul:
+			b.WriteString(`,"noul":`)
+			b.WriteString(jsonFloat(a.Noul))
+		case jlm.QuestionChoice:
+			b.WriteString(`,"choice":`)
+			b.WriteString(jsonString(a.Choice))
+			b.WriteString(`,"confidence":`)
+			b.WriteString(jsonFloat(a.Confidence))
+			writeProbs(&b, q, a)
+		case jlm.QuestionScore:
+			b.WriteString(`,"score":`)
+			b.WriteString(jsonFloat(a.Score))
+			b.WriteString(`,"confidence":`)
+			b.WriteString(jsonFloat(a.Confidence))
+			b.WriteString(`,"legend":{`)
+			for j, o := range q.Options {
+				if j > 0 {
+					b.WriteByte(',')
+				}
+				b.WriteString(jsonString(o.Key))
+				b.WriteByte(':')
+				b.WriteString(o.Description.JSON())
+			}
+			b.WriteByte('}')
+			writeProbs(&b, q, a)
+		}
+		b.WriteByte('}')
+	}
+	b.WriteString(`},"usage":{"input_tokens":`)
+	b.WriteString(strconv.Itoa(inputTokens))
+	b.WriteString(`,"output_tokens":0}}`)
+	return []byte(b.String())
+}
+
+func writeProbs(b *strings.Builder, q DecisionQuestion, a DecisionAnswer) {
+	b.WriteString(`,"probabilities":{`)
+	for j, o := range q.Options {
+		if j > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(jsonString(o.Key))
+		b.WriteByte(':')
+		b.WriteString(jsonFloat(a.Probs[j]))
+	}
+	b.WriteByte('}')
+}
+
+func jsonString(s string) string { return jinja.NewString(s).JSON() }
+
+func jsonFloat(f float64) string { return strconv.FormatFloat(f, 'g', -1, 64) }
+
+// ParseDecisionRequest reads a /v1/systemone body: the model it names (""
+// when none), the state and the questions, every object's keys in the order
+// the body wrote them.
+func ParseDecisionRequest(body []byte) (string, jinja.Value, []DecisionQuestion, error) {
+	v, err := jinja.FromJSON(body)
+	if err != nil {
+		return "", jinja.None(), nil, fmt.Errorf("the request is not JSON: %w", err)
+	}
+	if !v.IsDict() {
+		return "", jinja.None(), nil, fmt.Errorf("the request must be a JSON object")
+	}
+	req := v.AsDict()
+	name := ""
+	if mv, ok := req.Get("model"); ok && mv.IsString() {
+		name = mv.AsString()
+	}
+	state, ok := req.Get("state")
+	if !ok {
+		return "", jinja.None(), nil, fmt.Errorf("state must be provided")
+	}
+	qv, _ := req.Get("questions")
+	qs, err := ParseDecisionQuestions(qv)
+	if err != nil {
+		return "", jinja.None(), nil, err
+	}
+	return name, state, qs, nil
+}

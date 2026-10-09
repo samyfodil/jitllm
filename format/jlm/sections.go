@@ -167,8 +167,12 @@ func encodeConfig(c *Config) []byte {
 	// mixture, situ bounds, decay bound and latent norm epsilon, implies the
 	// first eight; ArchKimiK3 writes all of it, and ArchKimiLinear the latent
 	// norm epsilon alone, which an older reader drops and norms at RMSEps, as
-	// it did before the field existed.
-	k3 := c.AttnResBlock != 0 || c.ExpertLatent != 0 || c.SituBeta != 0 || c.SituLinearBeta != 0 ||
+	// it did before the field existed. The tenth, a decision model's readout
+	// and temperatures, implies the first nine; an older reader drops it and
+	// runs the model as the backbone it is, a model that generates.
+	dec := c.Decision != DecisionNone || c.DecisionBlocks != 0 || c.DecisionHeadTokens != 0 || len(c.DecisionTemps) != 0 ||
+		c.DecisionHeads != 0
+	k3 := dec || c.AttnResBlock != 0 || c.ExpertLatent != 0 || c.SituBeta != 0 || c.SituLinearBeta != 0 ||
 		c.KDALowerBound != 0 || c.LatentNormEps != 0
 	ds4 := k3 || c.HCMult != 0 || len(c.CompKinds) != 0
 	msa := ds4 || c.IdxBlock != 0 || c.IdxLocal != 0
@@ -235,6 +239,19 @@ func encodeConfig(c *Config) []byte {
 		w.f32(c.SituLinearBeta)
 		w.f32(c.KDALowerBound)
 		w.f32(c.LatentNormEps)
+	}
+	if dec {
+		w.u8(uint8(c.Decision))
+		w.u32(c.DecisionBlocks)
+		w.u32(c.DecisionHeadTokens)
+		w.u32(c.DecisionHeads)
+		w.u32(uint32(len(c.DecisionTemps)))
+		for _, d := range c.DecisionTemps {
+			w.u8(uint8(d.Type))
+			w.u32(d.MinOptions)
+			w.u32(d.MaxOptions)
+			w.f32(d.T)
+		}
 	}
 	return w.b
 }
@@ -341,6 +358,22 @@ func decodeConfig(b []byte) (*Config, error) {
 		c.KDALowerBound = r.f32()
 		c.LatentNormEps = r.f32()
 	}
+	if r.err == nil && len(r.b) > 0 {
+		c.Decision = DecisionKind(r.u8())
+		c.DecisionBlocks = r.u32()
+		c.DecisionHeadTokens = r.u32()
+		c.DecisionHeads = r.u32()
+		if n := r.count(13); n > 0 {
+			c.DecisionTemps = make([]DecisionTemp, n)
+			for i := range c.DecisionTemps {
+				d := &c.DecisionTemps[i]
+				d.Type = QuestionType(r.u8())
+				d.MinOptions = r.u32()
+				d.MaxOptions = r.u32()
+				d.T = r.f32()
+			}
+		}
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
@@ -357,6 +390,14 @@ func decodeConfig(b []byte) (*Config, error) {
 	// DeepSeek V4's compression kinds are one per layer too, or none.
 	if n := len(c.CompKinds); n != 0 && uint32(n) != c.NLayer {
 		return nil, fmt.Errorf("jlm: %d compression kinds for %d layers", n, c.NLayer)
+	}
+	if _, ok := decisionNames[c.Decision]; !ok && c.Decision != DecisionNone {
+		return nil, fmt.Errorf("jlm: decision kind %d is not one this format defines", c.Decision)
+	}
+	for _, d := range c.DecisionTemps {
+		if d.Type > QuestionNoul || !(d.T > 0) {
+			return nil, fmt.Errorf("jlm: decision temperature %v for %v is not a positive temperature of a question type", d.T, d.Type)
+		}
 	}
 	for i, k := range c.CompKinds {
 		if k > CompHCA {

@@ -40,6 +40,12 @@ var goComputeAllowed = map[string]string{
 	// activation is read.
 	"engine/model/slices.go:slicedGrid": "MiniCPM-V's slice grid: which cols x rows best matches the picture's aspect, from its width and height",
 	"engine/nn/ropeaxes.go:runFreqs":    "a multi-axis rotary's per-pair frequencies, once per configuration",
+	// A decision's typed answer from its calibrated option probabilities,
+	// after the forward pass and its generated softmax: at most 255 numbers,
+	// once per question, the response's arithmetic rather than the model's.
+	"engine/model/decide.go:answer":             "a decision's variants averaged and its expected level, once per question",
+	"engine/model/decide.go:confidenceScore":    "TypeSafe's score confidence over a question's probabilities, once per question",
+	"engine/model/decidelaya.go:layaConfidence": "Laya's entropy confidence over a question's probabilities, once per question",
 }
 
 // TestNoGoComputeOnTheInferencePath is AGENTS.md RULE 8 read off the source:

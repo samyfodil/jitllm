@@ -9254,3 +9254,17 @@ The engine keeps a compressed block's pending compressor inputs in the
 window's own cached rows, so the window must cover what the compressor
 still reads: the HCA rate, and two CSA windows (the overlap). DeepSeek V4's
 own (128 against 128 and 8) does; another is refused by name.
+
+## Decision models
+
+Laya (ModernBERT and its decision head), d1 and Lev (label-token readouts
+over lfm2 and qwen35) answer TypeSafe's `/v1/systemone`. The research, the
+readouts, the divergences and the gates with their numbers are in
+`docs/design/decision-models.md` (sections 8 and 9). The bisection that
+found the one bug on the way: the fixture's head runs 2 heads of 64 beside an
+encoder of 4 heads of 32, and `JIT.AddAttn` keeps ONE default attention set,
+so registering the head's width replaced the encoder's and every encoder
+layer attended at the wrong width (layer 0 off from its first block); the
+encoder and the head now each hold the set for their own geometry
+(`JIT.AttnSetFor`). The real checkpoint could not have shown it: 1024 wide at
+16 heads, both widths are 64.

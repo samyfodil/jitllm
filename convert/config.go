@@ -45,6 +45,9 @@ var archOf = map[string]jlm.Arch{
 	// nomic-embed-text declares "nomic-bert". See jlm.ArchBERT.
 	"bert":       jlm.ArchBERT,
 	"nomic-bert": jlm.ArchNomicBERT,
+	// ModernBERT, and the decision encoders built on it (Laya). See
+	// jlm.ArchModernBERT.
+	"modern-bert": jlm.ArchModernBERT,
 	// Llama 4 Scout (16 experts) and Maverick (128), text only. See
 	// jlm.ArchLlama4 for the five things that make it not llama.
 	"llama4": jlm.ArchLlama4,
@@ -597,6 +600,10 @@ func configOf(f *meta.File) (*jlm.Config, error) {
 		} else {
 			c.Flags |= jlm.FlagGELU
 		}
+	case jlm.ArchModernBERT:
+		if err := modernBERTConfig(f, c); err != nil {
+			return nil, fmt.Errorf("convert: %s: %w", name, err)
+		}
 	}
 
 	// A clamp on any other architecture is refused, not dropped: this converter
@@ -847,6 +854,9 @@ func configOf(f *meta.File) (*jlm.Config, error) {
 		if err := minimaxM3Blocks(f, c); err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", name, err)
 		}
+	}
+	if err := decisionOf(f, c); err != nil {
+		return nil, fmt.Errorf("convert: %s: %w", name, err)
 	}
 	return c, nil
 }

@@ -30,6 +30,13 @@ var roleOf = map[string]jlm.Role{
 	"position_embd.weight":   jlm.RolePosEmbd,
 	"token_embd_norm.weight": jlm.RoleTokenEmbdNorm,
 	"token_embd_norm.bias":   jlm.RoleTokenEmbdNormBias,
+	// A decision model's scorer, as llama.cpp names Laya's (conversion/bert.py).
+	"cls.norm.weight":   jlm.RoleScorerNorm,
+	"cls.norm.bias":     jlm.RoleScorerNormBias,
+	"cls.weight":        jlm.RoleScorer,
+	"cls.bias":          jlm.RoleScorerBias,
+	"cls.output.weight": jlm.RoleScorerOut,
+	"cls.output.bias":   jlm.RoleScorerOutBias,
 	// EmbeddingGemma's sentence-transformers Dense layers, which llama.cpp
 	// names after the module index they occupy in the pipeline (2 and 3).
 	"dense_2.weight": jlm.RoleEmbdDense1,

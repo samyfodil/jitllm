@@ -54,6 +54,7 @@ var ggufModels = map[string]string{
 	"nemotron_h":     "Nemotron-H, Nemotron Nano 2",
 	"nemotron_h_moe": "Nemotron 3 Nano",
 	"nomic-bert":     "nomic-embed-text (embeddings)",
+	"modern-bert":    "Laya (decision model, /v1/systemone)",
 	"olmo2":          "OLMo 2; OLMo 3 (its sliding window makes it the olmo3 graph)",
 	"olmoe":          "OLMoE",
 	"phi2":           "Phi-2",
