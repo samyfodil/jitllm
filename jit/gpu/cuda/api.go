@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"os"
 	"math"
+	"os"
 	"runtime"
 	"unsafe"
 )
