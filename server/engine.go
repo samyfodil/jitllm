@@ -341,6 +341,9 @@ type LoadOptions struct {
 	DeviceIDs       []string
 	MaxDeviceBlocks int // -1 means "as many as fit"
 	KVF16           *bool
+	// DeviceSample forces where a sampled token's candidates are selected
+	// (model.WithDeviceSample); the zero value, auto, measures.
+	DeviceSample model.DeviceSampleMode
 	// Sessions is how many concurrent sessions every placed linear block
 	// reserves a recurrent pair for (tier.Config.Sessions); attention history
 	// is paged and reserves nothing. 0 and 1 are one: a second session then
@@ -468,6 +471,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 	if kv := cmp.Or(o.KVF16, e.cfg.KVF16); kv != nil {
 		opts = append(opts, model.WithKVF16(*kv))
 	}
+	opts = append(opts, model.WithDeviceSample(o.DeviceSample))
 	m, err := model.Open(path, opts...)
 	if err != nil {
 		closeDev()
