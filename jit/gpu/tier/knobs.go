@@ -85,6 +85,12 @@ func WithDeviceTune(m TuneMode) Option { return func(o *openOpts) { o.kb.tune = 
 // process-wide: it is the one option here that is not per tier.
 func WithVerbose(on bool) Option { return func(o *openOpts) { o.verbose, o.verboseSet = on, true } }
 
+// WithROCm names the ROCm library directory (the one holding
+// libamdhip64.so) the AMD backend loads from, in place of the default search;
+// only that directory is tried. A directory with no ROCm is no HIP device, and
+// an explicit hip:N then fails naming it.
+func WithROCm(dir string) Option { return func(o *openOpts) { o.hip.Path = dir } }
+
 // WithVulkanDevice pins one Vulkan device by enumeration index or name
 // substring, for a host with more than one.
 func WithVulkanDevice(sel string) Option { return func(o *openOpts) { o.vk.Device = sel } }
@@ -282,7 +288,7 @@ func (o *openOpts) apply() {
 
 // devOpts is what every device this option set opens is opened with.
 func (o *openOpts) devOpts() backend.Opts {
-	return backend.Opts{Vulkan: o.vk, CUDAPosted: o.cudaPosted, Metal: o.metal}
+	return backend.Opts{Vulkan: o.vk, CUDAPosted: o.cudaPosted, Metal: o.metal, HIP: o.hip}
 }
 
 // WithAutoStream sets whether a mixture block no device can hold resident is

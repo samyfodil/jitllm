@@ -12,7 +12,7 @@ import (
 // DeviceInfo is one enumerated compute resource, in Go terms.
 type DeviceInfo struct {
 	ID      string
-	Backend string // "cpu", "cuda", "vulkan", "metal"
+	Backend string // "cpu", "cuda", "hip", "vulkan", "metal"
 	Index   int
 	Name    string
 
@@ -80,7 +80,7 @@ func (e *Engine) Devices(refresh bool) ([]DeviceInfo, error) {
 	}
 	probe := e.cfg.Probe
 	if probe == nil {
-		probe = probeDevices
+		probe = func() ([]DeviceInfo, error) { return probeDevices(e.cfg.ROCm) }
 	}
 	e.devices, e.devErr = probe()
 	// Dedupe whatever the probe returned, injected probes included.
@@ -99,7 +99,7 @@ func (e *Engine) snapshotDevices() []DeviceInfo {
 	return out
 }
 
-func probeDevices() ([]DeviceInfo, error) {
+func probeDevices(rocm string) ([]DeviceInfo, error) {
 	out := []DeviceInfo{{
 		ID:                     HostGateID,
 		Backend:                "cpu",
@@ -138,7 +138,30 @@ func probeDevices() ([]DeviceInfo, error) {
 		}
 	}
 
-	devs := backend.Open()
+	// Every HIP device is listed as hip:N, as every Vulkan device is above. No
+	// ROCm is no entry, not an error: the card is then vulkan:N alone.
+	hipCfg := backend.HIPConfig{Path: rocm}
+	for i := 0; i < backend.HIPCount(hipCfg); i++ {
+		d := DeviceInfo{ID: "hip:" + strconv.Itoa(i), Backend: "hip", Index: i, Kind: KindDiscrete}
+		hd, err := backend.OpenHIPWith(i, backend.Opts{HIP: hipCfg})
+		if err != nil {
+			d.Why = err.Error()
+			out = append(out, d)
+			continue
+		}
+		d.Name, d.Available = hd.Name(), true
+		d.PhysicalID = backend.IdentityOf(hd).Key
+		if free, total, ok := deviceMem(hd); ok {
+			d.FreeMemory, d.TotalMemory = free, total
+		}
+		if u, ok := hd.(backend.Unified); ok && u.UnifiedMemory() {
+			d.Kind, d.CountsTowardHostBudget = KindIntegrated, true
+		}
+		hd.Close()
+		out = append(out, d)
+	}
+
+	devs := backend.OpenWith(backend.Opts{HIP: hipCfg})
 	defer func() {
 		for _, d := range devs {
 			d.Close()
@@ -146,6 +169,9 @@ func probeDevices() ([]DeviceInfo, error) {
 	}()
 	for _, d := range devs {
 		api := apiName(d.API())
+		if api == "hip" {
+			continue // listed above, every ordinal
+		}
 		if api == "vulkan" {
 			// Already listed above; fill in the memory figures for the one
 			// Vulkan actually opened, matched by name.
@@ -243,6 +269,8 @@ func apiName(api string) string {
 		return "vulkan"
 	case "msl":
 		return "metal"
+	case "amdgcn":
+		return "hip"
 	}
 	return strings.ToLower(api)
 }

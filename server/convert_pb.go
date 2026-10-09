@@ -41,6 +41,8 @@ func pbBackend(name string) v1.Backend {
 		return v1.Backend_BACKEND_VULKAN
 	case "metal":
 		return v1.Backend_BACKEND_METAL
+	case "hip":
+		return v1.Backend_BACKEND_HIP
 	}
 	return v1.Backend_BACKEND_UNSPECIFIED
 }

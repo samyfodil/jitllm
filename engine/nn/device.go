@@ -1376,11 +1376,11 @@ type ExpertModer interface {
 }
 
 // DeviceName is a device name as a placement compares it: lower case, and the
-// API spellings (ptx, spirv, msl) under the backend ones -devices prints, so
+// API spellings (ptx, amdgcn, spirv, msl) under the backend ones -devices prints, so
 // "PTX:0" and "cuda:0" are one device.
 func DeviceName(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
-	for _, r := range [][2]string{{"ptx", "cuda"}, {"spirv", "vulkan"}, {"msl", "metal"}} {
+	for _, r := range [][2]string{{"ptx", "cuda"}, {"amdgcn", "hip"}, {"spirv", "vulkan"}, {"msl", "metal"}} {
 		if s == r[0] || strings.HasPrefix(s, r[0]+":") {
 			s = r[1] + s[len(r[0]):]
 		}

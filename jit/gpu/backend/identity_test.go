@@ -72,16 +72,17 @@ func TestAnUnknownIdentityMatchesNothing(t *testing.T) {
 	}
 }
 
-// TestTheBackendPreferenceIsCUDAThenMetalThenVulkan. It orders backends for one
-// card and nothing else; see APIRank.
-func TestTheBackendPreferenceIsCUDAThenMetalThenVulkan(t *testing.T) {
-	if !(APIRank("ptx") > APIRank("msl") && APIRank("msl") > APIRank("spirv")) {
-		t.Fatalf("rank ptx=%d msl=%d spirv=%d, want CUDA over Metal over Vulkan",
-			APIRank("ptx"), APIRank("msl"), APIRank("spirv"))
+// TestTheBackendPreferenceIsCUDAThenMetalThenHIPThenVulkan. It orders backends
+// for one card and nothing else; see APIRank.
+func TestTheBackendPreferenceIsCUDAThenMetalThenHIPThenVulkan(t *testing.T) {
+	if !(APIRank("ptx") > APIRank("msl") && APIRank("msl") > APIRank("amdgcn") &&
+		APIRank("amdgcn") > APIRank("spirv")) {
+		t.Fatalf("rank ptx=%d msl=%d amdgcn=%d spirv=%d, want CUDA over Metal over HIP over Vulkan",
+			APIRank("ptx"), APIRank("msl"), APIRank("amdgcn"), APIRank("spirv"))
 	}
 	// The grammar's own spellings rank the same as the code generators' names,
 	// because one vocabulary reaches the API and the CLI.
-	for _, p := range [][2]string{{"ptx", "cuda"}, {"msl", "metal"}, {"spirv", "vulkan"}} {
+	for _, p := range [][2]string{{"ptx", "cuda"}, {"msl", "metal"}, {"amdgcn", "hip"}, {"spirv", "vulkan"}} {
 		if APIRank(p[0]) != APIRank(p[1]) {
 			t.Errorf("%q and %q are the same backend and rank %d against %d",
 				p[0], p[1], APIRank(p[0]), APIRank(p[1]))
