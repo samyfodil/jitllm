@@ -141,10 +141,9 @@ func BenchmarkNoDotProdDecode(b *testing.B) {
 				b.Fatal(err)
 			}
 			defer m.Close()
-			if widened := cpu.DotEmulated() != before; widened != (arm == "widened") {
-				b.Fatalf("arm %s: widened=%v -- the arm ran the other kernels", arm, widened)
-			}
 			ids := m.Vocab.Encode("The capital of France is", true)
+			// The kernels are emitted with the State's JIT (Model.newJIT, at
+			// NewState), not at Open, so the arm is checked after the prompt.
 			st := m.NewState(len(ids) + b.N + 2)
 			defer st.Close()
 			var lg []float32
@@ -152,6 +151,9 @@ func BenchmarkNoDotProdDecode(b *testing.B) {
 				if lg, err = st.Forward(id); err != nil {
 					b.Fatal(err)
 				}
+			}
+			if widened := cpu.DotEmulated() != before; widened != (arm == "widened") {
+				b.Fatalf("arm %s: widened=%v -- the arm ran the other kernels", arm, widened)
 			}
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
