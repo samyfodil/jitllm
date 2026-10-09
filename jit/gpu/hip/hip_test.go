@@ -5,6 +5,7 @@ import (
 	"go/token"
 	"io/fs"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -23,8 +24,14 @@ func TestBogusROCmIsNoDevices(t *testing.T) {
 		if rt != nil {
 			t.Errorf("%s: Open returned a runtime with no ROCm behind it", p)
 		}
-		if why := Why(Config{Path: p}); !strings.Contains(why, "not loadable") {
-			t.Errorf("%s: Why = %q, want the load failure named", p, why)
+		// Off Linux the runtime is refused before any load is tried, and Why
+		// says so; on Linux it names the load that failed.
+		want := "not loadable"
+		if runtime.GOOS != "linux" {
+			want = "ROCm is a Linux runtime"
+		}
+		if why := Why(Config{Path: p}); !strings.Contains(why, want) {
+			t.Errorf("%s: Why = %q, want it to say %q", p, why, want)
 		}
 		if _, err := LoadComgr(Config{Path: p}); err == nil {
 			t.Errorf("%s: comgr loaded from a directory that has none", p)
@@ -36,12 +43,13 @@ func TestBogusROCmIsNoDevices(t *testing.T) {
 // none. A search that fell back to the default places would load a different
 // ROCm than the one asked for.
 func TestNamedPathIsTheOnlyOneTried(t *testing.T) {
-	got := candidates(Config{Path: "/x/lib"}, HIPNames)
+	dir := filepath.Join(string(filepath.Separator)+"x", "lib")
+	got := candidates(Config{Path: dir}, HIPNames)
 	if len(got) != len(HIPNames) {
 		t.Fatalf("candidates = %v", got)
 	}
 	for _, c := range got {
-		if !strings.HasPrefix(c, "/x/lib/") {
+		if filepath.Dir(c) != dir {
 			t.Errorf("candidate %q is outside the named directory", c)
 		}
 	}
