@@ -65,6 +65,8 @@ type oaChatRequest struct {
 	// ---- jitllm extensions. Prefixed so they cannot collide with a future
 	// OpenAI field, and ignored by any client that does not know them.
 	JitllmSession string `json:"jitllm_session,omitempty"`
+	// JitllmPriority is "high" or "normal" (Engine.prioritise).
+	JitllmPriority string `json:"jitllm_priority,omitempty"`
 	// JitllmSpeculate turns speculative decoding on or off for the request
 	// (Speculation); absent takes the session's.
 	JitllmSpeculate *bool `json:"jitllm_speculate,omitempty"`
@@ -84,6 +86,8 @@ type oaCompletionRequest struct {
 	oaSampling
 
 	JitllmSession string `json:"jitllm_session,omitempty"`
+	// JitllmPriority is "high" or "normal" (Engine.prioritise).
+	JitllmPriority string `json:"jitllm_priority,omitempty"`
 	// JitllmSpeculate turns speculative decoding on or off for the request
 	// (Speculation); absent takes the session's.
 	JitllmSpeculate *bool `json:"jitllm_speculate,omitempty"`
@@ -93,9 +97,16 @@ type oaCompletionRequest struct {
 }
 
 type oaUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens        int                `json:"prompt_tokens"`
+	CompletionTokens    int                `json:"completion_tokens"`
+	TotalTokens         int                `json:"total_tokens"`
+	PromptTokensDetails *oaPromptTokenInfo `json:"prompt_tokens_details,omitempty"`
+}
+
+// oaPromptTokenInfo is OpenAI's prompt_tokens_details: cached_tokens is how
+// many prompt tokens the prompt store restored rather than computed.
+type oaPromptTokenInfo struct {
+	CachedTokens int `json:"cached_tokens"`
 }
 
 type oaChatChoice struct {
@@ -134,9 +145,11 @@ type oaJitllmExtra struct {
 	HostBlocks    int      `json:"host_blocks"`
 	DeviceIDs     []string `json:"device_ids,omitempty"`
 	PrefillMillis int64    `json:"prefill_ms"`
-	DecodeMillis  int64    `json:"decode_ms"`
-	TokensPerSec  float64  `json:"decode_tokens_per_second"`
-	BytesPerToken uint64   `json:"bytes_per_token"`
+	// RestoredTokens is how many prompt tokens came from the prompt store.
+	RestoredTokens int     `json:"restored_tokens"`
+	DecodeMillis   int64   `json:"decode_ms"`
+	TokensPerSec   float64 `json:"decode_tokens_per_second"`
+	BytesPerToken  uint64  `json:"bytes_per_token"`
 	// Seeds and PromptRestored are set for several choices: each choice's
 	// seed, and how many prompt positions each restored rather than ran.
 	Seeds          []int64 `json:"seeds,omitempty"`
@@ -288,6 +301,7 @@ func (e *compat) openAIChatCompletions(w http.ResponseWriter, r *http.Request) {
 		IgnoreEOS:   req.IgnoreEOS,
 		Seeds:       seeds,
 		Speculation: oaSpeculation(req.JitllmSpeculate),
+		Priority:    req.JitllmPriority,
 	}
 	if o.Grammar, err = oaResponseFormat(req.ResponseFormat); err != nil {
 		oaFailErr(w, err)
@@ -379,6 +393,7 @@ func (e *compat) openAICompletions(w http.ResponseWriter, r *http.Request) {
 		IgnoreEOS:   req.IgnoreEOS,
 		Seeds:       seeds,
 		Speculation: oaSpeculation(req.JitllmSpeculate),
+		Priority:    req.JitllmPriority,
 	}
 	if o.Grammar, err = oaResponseFormat(req.ResponseFormat); err != nil {
 		oaFailErr(w, err)
@@ -530,6 +545,7 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 			// restored it rather than running it.
 			if i == 0 {
 				u.PromptTokens = c.fin.PromptTokens
+				u.PromptTokensDetails = &oaPromptTokenInfo{CachedTokens: c.fin.Restored}
 			}
 			u.CompletionTokens += c.fin.CompletionTokens
 		}
@@ -616,6 +632,10 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 	// ---- streaming: Server-Sent Events, `data: {...}` per chunk, terminated
 	// by `data: [DONE]`. That terminator is OpenAI's and is NOT part of SSE;
 	// clients written against the spec wait for it, so omitting it hangs them.
+	if err := admits(e.b, o); err != nil {
+		oaFailErr(w, err)
+		return
+	}
 	sse, err := newSSE(w)
 	if err != nil {
 		oaFail(w, http.StatusInternalServerError, err.Error(), "server_error")
@@ -757,13 +777,14 @@ func jitllmExtra(s *Started, f *Finished) *oaJitllmExtra {
 		return nil
 	}
 	x := &oaJitllmExtra{
-		SessionID:     s.SessionID,
-		QueuedMillis:  s.QueuedFor.Milliseconds(),
-		QueueDepth:    s.QueueDepth,
-		DeviceBlocks:  s.DeviceBlocks,
-		HostBlocks:    s.HostBlocks,
-		DeviceIDs:     s.DeviceIDs,
-		PrefillMillis: s.Prefill.Milliseconds(),
+		SessionID:      s.SessionID,
+		QueuedMillis:   s.QueuedFor.Milliseconds(),
+		QueueDepth:     s.QueueDepth,
+		DeviceBlocks:   s.DeviceBlocks,
+		HostBlocks:     s.HostBlocks,
+		DeviceIDs:      s.DeviceIDs,
+		PrefillMillis:  s.Prefill.Milliseconds(),
+		RestoredTokens: s.Restored,
 	}
 	if f != nil {
 		x.DecodeMillis = f.Decode.Milliseconds()
@@ -831,6 +852,9 @@ func oaFailErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrQueueTimeout):
 		// 429, because retrying is correct: the session was queued behind
 		// another on the same device, never refused.
+		status, typ = http.StatusTooManyRequests, "rate_limit_error"
+	case errors.Is(err, ErrOverloaded):
+		retryAfter(w, err)
 		status, typ = http.StatusTooManyRequests, "rate_limit_error"
 	}
 	oaFail(w, status, err.Error(), typ)

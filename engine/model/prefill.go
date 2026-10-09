@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -343,6 +344,18 @@ func (s *State) prefillInto(slot int, tokens []int32) ([]float32, error) {
 	return s.prefillSrc(slot, src, tokens, nil)
 }
 
+// ErrPrefillInterrupted is a prefill stopped between chunks because its
+// interrupt (SetPrefillInterrupt) asked. The sequence holds the chunks that
+// ran and nothing after them; the caller resets it before reusing the State.
+var ErrPrefillInterrupted = errors.New("model: prefill interrupted")
+
+// SetPrefillInterrupt has every chunked prefill ask f before each chunk and
+// stop with ErrPrefillInterrupted when it answers true: a server stops a long
+// prompt whose client has gone without waiting out the whole prefill. nil
+// removes it. f runs on the prefill's goroutine, between chunks, never
+// inside one.
+func (s *State) SetPrefillInterrupt(f func() bool) { s.interrupt = f }
+
 // prefillSrc is the chunked prefill over an abstract row source. src[i] fills
 // one n_embd-wide row of the residual stream, and is either a vocabulary
 // lookup or a caller-supplied embedding -- the two entry points differ in
@@ -445,6 +458,9 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 	ps := s.newPrefillStreamer(chunks, bidir || len(s.bidir) > 0)
 	defer func() { ps.finish(s.seqPos(slot)) }()
 	for base := 0; base < len(src); {
+		if s.interrupt != nil && s.interrupt() {
+			return nil, ErrPrefillInterrupted
+		}
 		ps.before(s.seqPos(slot))
 		// Asked per chunk, not once: while the tuner is cycling, successive
 		// chunks deliberately use different widths.

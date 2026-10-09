@@ -162,6 +162,17 @@ func serve(args []string) {
 	jointSteps := fs.String("joint-steps", "auto",
 		"how a batch's decode step runs: auto (time joint against one session after another, "+
 			"per row count, and run the faster), always (one joint step) or never (each session alone)")
+	warm := fs.Bool("warm", true,
+		"after every load, run a short prefill and a decode step so the first request does not pay for them")
+	noStore := fs.Bool("no-mem-cache", false,
+		"turn off each model's memory cache: every request prefills its whole prompt")
+	storeMax := fs.String("mem-cache-max", "",
+		"bound each model's memory cache, e.g. 2G (default: an eighth of the model's host share)")
+	pool := fs.Int("session-pool", 0,
+		"reset sessions each model keeps for model_id requests; 0 is -sessions, -1 none")
+	maxQueue := fs.Int("max-queue", 0,
+		"requests one model holds, running or waiting, before it answers 429; 0 is 64, -1 unbounded")
+	retry := fs.Duration("retry-after", time.Second, "the Retry-After a 429 for a full queue names")
 	kvF16 := fs.Bool("kv-f16", false,
 		"the KV cache width of every load that names none: true binary16, false f32 (default: the engine's per-host choice)")
 	kvCache := fs.String("kv-cache", "",
@@ -189,6 +200,15 @@ func serve(args []string) {
 			fatal("-maxmem: %v", err)
 		}
 		budget = b
+	}
+
+	var storeBytes uint64
+	if *storeMax != "" {
+		b, err := tier.ParseBytes(*storeMax)
+		if err != nil {
+			fatal("-mem-cache-max: %v", err)
+		}
+		storeBytes = b
 	}
 
 	joint, ok := map[string]server.JointSteps{
@@ -223,6 +243,13 @@ func serve(args []string) {
 		JointSteps:    joint,
 		DefaultMaxSeq: *maxSeq,
 		Version:       *version,
+
+		NoMemCache:    *noStore,
+		MemCacheBytes: storeBytes,
+		SessionPool:   *pool,
+		MaxQueue:      *maxQueue,
+		RetryAfter:    *retry,
+		WarmLoads:     *warm,
 	})
 	defer e.Close()
 

@@ -311,14 +311,20 @@ func TestNChoicesEachMatchTheRequestAlone(t *testing.T) {
 			t.Fatalf("usage %+v, want the prompt once (%d) and %d completion tokens",
 				many.Usage, alone.Usage.PromptTokens, completion)
 		}
-		// The prompt prefilled once: positions computed across the choices
-		// sum to one prompt.
+		// The prompt prefilled at most once: every choice after the first
+		// restores all of it. The first may restore too, since the choices
+		// run through the model's memory cache and an earlier request (the
+		// streamed pass, or the request alone) left the prompt there.
 		r := many.Jitllm.PromptRestored
 		computed := 0
 		for _, x := range r {
 			computed += many.Usage.PromptTokens - x
 		}
-		if len(r) != n || r[0] != 0 || computed != many.Usage.PromptTokens {
+		later := len(r) == n
+		for _, x := range r[min(1, len(r)):] {
+			later = later && x == many.Usage.PromptTokens
+		}
+		if !later || computed > many.Usage.PromptTokens {
 			t.Fatalf("restored per choice %v for a %d-token prompt: computed %d positions, want one prompt",
 				r, many.Usage.PromptTokens, computed)
 		}

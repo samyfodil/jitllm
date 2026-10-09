@@ -41,6 +41,9 @@ func connectErr(err error) error {
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, ErrInUse):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
+	case errors.Is(err, ErrOverloaded):
+		// Nothing ran; the caller retries after the queue drains.
+		return connect.NewError(connect.CodeResourceExhausted, err)
 	case errors.Is(err, ErrQueueTimeout):
 		// ResourceExhausted, not Unavailable: the caller stopped waiting for
 		// a busy device, the session is still open and a retry is correct.

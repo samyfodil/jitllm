@@ -11,7 +11,6 @@ import (
 	"io"
 	"slices"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -80,59 +79,6 @@ func (NoStore) Set(string, int, int, io.Reader) error { return nil }
 
 // Drop has nothing to forget.
 func (NoStore) Drop(string) error { return nil }
-
-// MemStore keeps pages in host memory, keyed by (cache, layer, index).
-//
-// NoStore and MemStore must produce the same tokens, which is the equality
-// gate. It locks because a store exists to be shared between sessions.
-type MemStore struct {
-	mu    sync.RWMutex
-	pages map[kvStoreKey][]byte
-}
-
-type kvStoreKey struct {
-	cache        string
-	layer, index int
-}
-
-// NewMemStore returns an empty MemStore.
-func NewMemStore() *MemStore { return &MemStore{pages: map[kvStoreKey][]byte{}} }
-
-// Get writes the held page into page, or returns ErrNoPage.
-func (m *MemStore) Get(cacheId string, layer, index int, page io.Writer) error {
-	m.mu.RLock()
-	b, ok := m.pages[kvStoreKey{cacheId, layer, index}]
-	m.mu.RUnlock()
-	if !ok {
-		return ErrNoPage
-	}
-	_, err := page.Write(b)
-	return err
-}
-
-// Set reads the page and holds a copy, replacing one held under the same key.
-func (m *MemStore) Set(cacheId string, layer, index int, page io.Reader) error {
-	b, err := io.ReadAll(page)
-	if err != nil {
-		return err
-	}
-	m.mu.Lock()
-	m.pages[kvStoreKey{cacheId, layer, index}] = b
-	m.mu.Unlock()
-	return nil
-}
-
-// Drop forgets every page held for cacheId.
-func (m *MemStore) Drop(cacheId string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for k := range m.pages {
-		if k.cache == cacheId {
-			delete(m.pages, k)
-		}
-	}
-	return nil
-}
 
 // kvKeyTile is how far past a row's causal width the score kernel may write, and
 // therefore the alignment a page boundary has to respect. jit/gpu/tier carries
@@ -1457,6 +1403,72 @@ func (s *State) spanKey(p0 int, spans []Span, rp [][4]int) []int32 {
 // shorter than the prompt restores no further than it reaches. run prefills
 // the rows from n on, after the restore.
 func (s *State) prefillCachedKey(key []int32, rows int, run func(n int) ([]float32, error)) ([]float32, error) {
+	n, full, err := s.restoreKey(key, rows, true)
+	if err != nil {
+		return nil, err
+	}
+	if full != nil && n == rows {
+		// Nothing to prefill: the position is already past the prompt and the
+		// logits are the ones that run produced. The tail is already in the
+		// store under this key, so there is nothing to seal either.
+		return full, nil
+	}
+	lg, err := run(n)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.SealPrompt(lg); err != nil {
+		return nil, err
+	}
+	return lg, nil
+}
+
+// RestorePrefix is the restore half of PrefillCached: it restores the
+// longest prefix of tokens the store holds under this session's key, leaving
+// at least the last token to run, and returns how many positions it took.
+// The State is then at that position, and the caller runs tokens[n:] by any
+// path that records its ids (Prefill, Forward, StepRuns) and calls SealPrompt
+// with the last logits, so the next request finds this prompt too. A server's
+// step loop restores this way and then runs the rest as a row.
+func (s *State) RestorePrefix(tokens []int32) (int, error) {
+	defer s.m.enterPager()()
+	if s.batched {
+		return 0, errBatch{}
+	}
+	if len(tokens) == 0 {
+		return 0, errEmptyPrompt{}
+	}
+	if s.seqPos(0) != 0 {
+		return 0, fmt.Errorf("model: RestorePrefix wants a fresh sequence, this one is at position %d", s.seqPos(0))
+	}
+	n, _, err := s.restoreKey(tokens, len(tokens), false)
+	return n, err
+}
+
+// SealPrompt offers the store what a prompt just run left: the pages a
+// placed block holds on its device, the partial last page, a hybrid's
+// recurrent summary at the position, and the logits lg the prompt ended on.
+// PrefillCached calls it itself; a caller that restored with RestorePrefix
+// calls it once the rest of the prompt has run. Without a store or a cache
+// key it does nothing.
+func (s *State) SealPrompt(lg []float32) error {
+	if err := s.syncKVFromDevice(); err != nil {
+		return err
+	}
+	// Seal the prompt's own partial page too: seal only offers pages the
+	// position has passed, and a short prompt would store nothing.
+	s.kv.tailStored += int64(s.kv.sealTail(s.pos))
+	s.sealRecurrentTail(s.pos)
+	s.sealLogits(s.pos, lg)
+	return nil
+}
+
+// restoreKey restores what the store holds of a prompt of rows rows named by
+// key and advances the State past it, returning the positions restored and,
+// for a whole-prompt hit when logits says the caller can take one, the
+// logits the prompt ended on. Without them a whole-prompt hit gives its last
+// position back, so something is left to run.
+func (s *State) restoreKey(key []int32, rows int, logits bool) (int, []float32, error) {
 	tokens := key
 	// The tokens come first: restore() names the pages by H(tokens[0:boundary]).
 	s.kv.seq, s.kv.bh = append(s.kv.seq[:0], tokens...), map[int][]string{}
@@ -1468,19 +1480,19 @@ func (s *State) prefillCachedKey(key []int32, rows int, run func(n int) ([]float
 	// summary cannot be shortened by one position to make room for a token.)
 	n, err := s.restoreKV(len(tokens))
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	full := []float32(nil)
 	if n == rows {
 		lg := make([]float32, s.c.NVocab)
-		if s.faultLogits(n, lg) {
+		if logits && s.faultLogits(n, lg) {
 			full = lg
 		} else {
 			// No logits for this boundary: give the last position back so
 			// something is left to run. A hybrid cannot shorten a restored
 			// tail, so it gives the tail up entirely -- restoreKV's rule.
 			if n, err = s.restoreKV(rows - 1); err != nil {
-				return nil, err
+				return 0, nil, err
 			}
 		}
 	}
@@ -1489,7 +1501,7 @@ func (s *State) prefillCachedKey(key []int32, rows int, run func(n int) ([]float
 	for _, r := range s.bidir {
 		if r.Lo < n && n < r.Hi {
 			if n, err = s.restoreKV(r.Lo); err != nil {
-				return nil, err
+				return 0, nil, err
 			}
 			full = nil
 		}
@@ -1528,25 +1540,7 @@ func (s *State) prefillCachedKey(key []int32, rows int, run func(n int) ([]float
 		s.advance(0, n)
 	}
 	s.kvSkipped = n
-	if full != nil && n == rows {
-		// Nothing to prefill: the position is already past the prompt and the
-		// logits are the ones that run produced. The tail is already in the
-		// store under this key, so there is nothing to seal either.
-		return full, nil
-	}
-	lg, err := run(n)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.syncKVFromDevice(); err != nil {
-		return nil, err
-	}
-	// Seal the prompt's own partial page too: seal only offers pages the
-	// position has passed, and a short prompt would store nothing.
-	s.kv.tailStored += int64(s.kv.sealTail(s.pos))
-	s.sealRecurrentTail(s.pos)
-	s.sealLogits(s.pos, lg)
-	return lg, nil
+	return n, full, nil
 }
 
 // syncKVFromDevice brings a placed block's history down into the host pages so
