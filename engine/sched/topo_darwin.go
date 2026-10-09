@@ -40,13 +40,5 @@ func perfLevel(level, dflt int) int {
 	return dflt
 }
 
-func seq(n int) []int {
-	if n < 1 {
-		n = 1
-	}
-	out := make([]int, n)
-	for i := range out {
-		out[i] = i
-	}
-	return out
-}
+// CoreSource says where the pool's CPUs came from, for a report.
+func CoreSource() string { return "perflevel sysctls" }

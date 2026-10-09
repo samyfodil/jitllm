@@ -40,6 +40,7 @@ func reportCPU() {
 		fmt.Printf("   %d E-core(s) %s", len(e), list(e))
 	}
 	fmt.Println()
+	fmt.Printf("          source    %s\n", sched.CoreSource())
 	if t := len(smt) / max(1, len(p)); t > 1 {
 		fmt.Printf("          SMT       %d threads per P-core: %s\n", t, list(smt))
 	} else {

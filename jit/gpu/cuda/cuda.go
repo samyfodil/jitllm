@@ -55,6 +55,13 @@ var (
 	cuDeviceGetAttribute func(*int32, int32, CUdevice) CUresult
 	cuMemHostAlloc       func(*unsafe.Pointer, uint64, uint32) CUresult
 	cuMemFreeHost        func(unsafe.Pointer) CUresult
+	// cuMemHostRegister page-locks memory the caller already owns and maps
+	// it into the device's address space; cuMemHostGetDevicePointer is the
+	// address a kernel reads it at. Together they are the host-pointer
+	// import (backend.HostImport).
+	cuMemHostRegister         func(unsafe.Pointer, uint64, uint32) CUresult
+	cuMemHostUnregister       func(unsafe.Pointer) CUresult
+	cuMemHostGetDevicePointer func(*CUdevptr, unsafe.Pointer, uint32) CUresult
 )
 
 // The device identity calls, bound only if the driver has them (binding panics
@@ -245,6 +252,9 @@ func bindCUDA() error {
 	cuDeviceGetAttribute = ffi.Fn3[CUresult, *int32, int32, CUdevice](lib, "cuDeviceGetAttribute")
 	cuMemHostAlloc = ffi.Fn3[CUresult, *unsafe.Pointer, uint64, uint32](lib, "cuMemHostAlloc")
 	cuMemFreeHost = ffi.Fn1[CUresult, unsafe.Pointer](lib, "cuMemFreeHost")
+	cuMemHostRegister = ffi.Fn3[CUresult, unsafe.Pointer, uint64, uint32](lib, "cuMemHostRegister_v2")
+	cuMemHostUnregister = ffi.Fn1[CUresult, unsafe.Pointer](lib, "cuMemHostUnregister")
+	cuMemHostGetDevicePointer = ffi.Fn3[CUresult, *CUdevptr, unsafe.Pointer, uint32](lib, "cuMemHostGetDevicePointer_v2")
 	loadGraphs(lib)
 	loadQueues(lib)
 	loadEvents(lib)

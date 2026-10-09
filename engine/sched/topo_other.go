@@ -23,3 +23,6 @@ func PCores() []int {
 
 func ECores() []int      { return nil }
 func SMTSiblings() []int { return PCores() }
+
+// CoreSource says where the pool's CPUs came from, for a report.
+func CoreSource() string { return "runtime.NumCPU" }
