@@ -87,8 +87,9 @@ func TestImportedWeightsAreTheHostsOwnBytes(t *testing.T) {
 	// A run where nothing imported proved nothing and must say so (RULE 10).
 	if len(importers) == 0 {
 		t.Fatal("no device on this host offers a host-pointer import, so this gate did not " +
-			"run at all -- check that VK_EXT_external_memory_host was enabled on the " +
-			"logical device, not merely supported by the physical one")
+			"run at all -- on Vulkan check that VK_EXT_external_memory_host was enabled on " +
+			"the logical device, not merely supported by the physical one; on CUDA that " +
+			"the card reports CAN_MAP_HOST_MEMORY and HOST_REGISTER_SUPPORTED")
 	}
 }
 

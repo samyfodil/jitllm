@@ -769,6 +769,30 @@ func (c *cudaDev) PinHost(n int) ([]byte, error) {
 	return b, err
 }
 
+// ImportAlign and Import are cuda.Device's host-pointer import
+// (backend.HostImport) on the owner goroutine. The buffer is not counted: the
+// card did not allocate it.
+func (c *cudaDev) ImportAlign() int { return c.d.ImportAlign() }
+
+func (c *cudaDev) Import(p unsafe.Pointer, n int) (Buf, error) {
+	var b *cuda.Buffer
+	err := errCUDAClosed
+	c.do(func() { b, err = c.d.Import(p, n) })
+	if err != nil {
+		return nil, err
+	}
+	return &cudaBuf{b: b, dev: c}, nil
+}
+
+// UnifiedMemory is CU_DEVICE_ATTRIBUTE_INTEGRATED: a Jetson's memory is the
+// host's, a discrete card's is not (backend.Unified).
+func (c *cudaDev) UnifiedMemory() bool { return c.d.Integrated() }
+
+var (
+	_ HostImport = (*cudaDev)(nil)
+	_ Unified    = (*cudaDev)(nil)
+)
+
 // UnpinHost gives PinHost's memory back.
 func (c *cudaDev) UnpinHost(b []byte) { c.do(func() { cuda.FreeHost(b) }) }
 
