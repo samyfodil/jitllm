@@ -117,7 +117,13 @@ func TestEveryLoadRederivesTheOffHeapBudget(t *testing.T) {
 	e, a, _ := loadedEngine(t, smallModel, "a", LoadOptions{})
 	var told []uint64
 	e.cfg.OffHeap = func(b uint64) { told = append(told, b) }
+	// Every load re-reads the host (rereadHostLocked); held still here, so
+	// the sum is the division's and not the moment's free memory.
+	e.hostAvail = func() uint64 { return 6 << 30 }
+	e.mu.Lock()
+	e.rereadHostLocked()
 	total := e.hostTotal()
+	e.mu.Unlock()
 	last := func(what string, want uint64) {
 		t.Helper()
 		if len(told) == 0 {
