@@ -3025,6 +3025,62 @@ off-card one, and whether that beats the host is measured.
   GiB could be used. No reduced or streamed mode of it reads weights from
   anywhere but that local tree. Nothing was deleted for it.
 
+## ★ 16d. FOUR JITLLMD SERVING A 0.8 GB MODEL GREW TO 17.6 GB EACH ON ONE NUMA NODE, AND THE KERNEL KILLED ONE. THE HOST BUDGET IS THE SMALLEST OF THREE LIMITS NOW, AND THE MEMORY CACHE FOLLOWS WHAT IS FREE.
+
+The Xeon E5-2680 v4 box (2 sockets, 251 GB, 128 GB a node) ran four
+`jitllmd serve` under `numactl --membind=0 taskset -c 0-11`, each serving
+Llama-3.2-1B-Instruct Q4_K_M with `-max-batch 64` and the defaults, under an
+httpbench sweep (-c up to 16, 128-word prompts, 64 new tokens). Each reached
+~17.6 GB anonymous RSS and node 0 OOM-killed one
+(constraint=CONSTRAINT_MEMORY_POLICY nodemask=0).
+
+**Where the bytes were.** A host-only reproduction on the laptop counted the
+engine's ledger (the live heap after a GC, `jlm.OffHeapBytes`, the memory
+cache's `Bytes`, the pooled States' history), not RSS:
+
+| term | before | sized from |
+|---|---|---|
+| weights (dense region and pages, off the heap) | 766 MiB | the file |
+| memory cache | +33.4 MB per distinct 170-token prompt, never hit, bound 24.3 GB | an eighth of the model's host share: 190 GB on that box |
+| a State's prompt score rows (`battf`) | 89 MB for a 170-token prompt | chunk x maxSeq, and maxSeq defaults to the model's 131072 |
+| a State's decode score rows (`atth`, `attf`) | 32 MB | NHead x maxSeq (not changed) |
+| KV pages | committed on growth, dropped by Reset; a pooled State holds none | the positions written |
+
+The cache costs 188 KB a prompt position against 64 KB of f32 KV, because a
+partial page is stored at several fills and a logits row (0.5 MB at a 128256
+vocabulary) is stored beside it. 17.6 GB is ~530 distinct prompts at 33 MB:
+the cache, growing toward 24 GB, is the term that fits, and
+`jitllm_mem_cache_bytes` on that box is the number that confirms it.
+
+**Why the limit was not seen.** `sched.MemBudget` was eight tenths of the
+smaller of MemAvailable and the cgroup. A process under `--membind=0` can
+allocate only from node 0, and the budget never read that; each of four
+processes saw ~240 GB available and took 190 GB, and each cache an eighth of
+it. The server also read the budget once per process.
+
+**The rule.** The host budget is eight tenths of the smallest of: the
+cgroup's ceiling (memory.high or memory.max); the memory of the NUMA nodes the
+process may allocate from (a `get_mempolicy` MPOL_BIND mask intersected with
+the cpuset's Mems_allowed, each node's MemFree plus its file pages and
+reclaimable slab); and MemAvailable. It is re-read at each load, with what the
+engine's own models hold added back. `sched.MemLimit` -- the collector's
+ceiling -- is the smaller of the cgroup and the bound nodes' MemTotal. Every
+figure is overridable: `model.WithPageBudget`, jitllmd `-maxmem` (a model) and
+`-host-mem` (`server.Config.HostBudget`, what the models divide),
+`-mem-cache-max`. The memory cache is bounded by an eighth of the share AND an
+eighth of what it holds plus what the host has free now, re-read after every
+generate: n caches on one host settle at n/(n+7) of the memory that was free
+(four: 36%) instead of each taking an eighth of a figure read before the
+others grew. The many-row score buffers are sized by the keys their rows
+reach, doubling from 256, never by maxSeq.
+
+Gates: `sched.TestMemBudgetHonoursEveryLimit` (fake /proc and /sys: cgroup,
+membind, cpuset, others holding memory; reverting the node term fails membind
+and cpuset), `sched.TestKernelBindNodesReadsThisProcess` (passes unbound and
+under `numactl --membind=0`), `model.TestScoreRowsFollowTheReach` (sizing at
+the context fails it), `server.TestAServerUnderLoadStaysUnderItsBound` (the
+ledger of the 1B under 16 distinct prompts with 2 GiB available).
+
 ## GPU.Layers' head-on-another-device arm is dead code
 
 ★★★ **AND `GPU.Layers`' HEAD-ON-ANOTHER-DEVICE ARM IS DEAD CODE, ESTABLISHED

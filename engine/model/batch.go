@@ -111,8 +111,14 @@ func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float
 		unitHeads = c.NHead
 	}
 	units := n * c.NHead / unitHeads
-	if len(s.bathf) < units*s.attStride {
-		s.bathf = make([]float32, units*s.attStride)
+	// A row reaches keys below its own position plus one (rowsStride).
+	reach := 0
+	for i := 0; i < n; i++ {
+		reach = max(reach, pos[i]+1)
+	}
+	astride := s.rowsStride(reach)
+	if len(s.bathf) < units*astride {
+		s.bathf = make([]float32, units*astride)
 	}
 
 	// c.AttnScale rather than 1/sqrt(hd): they differ under YaRN (DeepSeek).
@@ -327,7 +333,7 @@ func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float
 			// as the context grows. A step with a chunk has rows enough.
 			t0 = s.tick()
 			bq, bxb, bqf, bxbf := s.bq, s.bxb, s.bqf, s.bxbf
-			bathf, fast, astride := s.bathf, s.attnAt(li), s.attStride
+			bathf, fast := s.bathf, s.attnAt(li)
 			hd, qDim, gqa := c.HeadDimAt(li), c.QDimAt(li), c.GQAAt(li)
 			// MLA reads a wider query than it writes, and every head reads the
 			// same cached row: qw is the whole row, ow its latent prefix, and
@@ -351,7 +357,8 @@ func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float
 				s.idxRows(kvli, n, func(i int) int { return seq[i] }, func(i int) int { return pos[i] + 1 }, masks)
 			}
 			if c.MSAAt(li) {
-				masks, mstride = s.msaMasks, astride
+				// The masks are laid out at the State's own stride (msa.go).
+				masks, mstride = s.msaMasks, s.attStride
 				s.msaRows(kvli, n, func(i int) int { return seq[i] }, func(i int) int { return pos[i] + 1 }, masks)
 			}
 			s.jit.Parallel(units, 1, func(lo, hi int) {
