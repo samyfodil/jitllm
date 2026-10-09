@@ -626,8 +626,19 @@ func TestForceUnloadStopsAGenerateMidDecode(t *testing.T) {
 // the session exist" are different answers. A cancel from inside the stream
 // stops the decode at the next token. With cancelGeneration not calling the
 // cancel func the generate runs to max_tokens and this fails.
+//
+// It runs with batching off: alone, the decode waits for each token's emit,
+// which is what makes "the next token" exact. A row of the step loop does not
+// wait for its client (its tokens go to an outbox), so a cancel reaches it
+// some steps on; TestBatchCancelOneRowLeavesTheOthers gates that path.
 func TestCancelReportsWhetherAGenerateWasRunning(t *testing.T) {
-	e, _, c := loadedEngine(t, smallModel, "small", LoadOptions{})
+	path := modelPath(t, smallModel)
+	e := New(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test", MaxBatchRows: 1})
+	t.Cleanup(e.Close)
+	if _, err := e.LoadModel(LoadOptions{Path: path, ModelID: "small"}); err != nil {
+		t.Fatal(err)
+	}
+	c := serveEngine(t, e)
 	ctx := context.Background()
 	_, err := c.inference.Cancel(ctx, req(&v1.CancelRequest{SessionId: "nope"}))
 	wantCode(t, "Cancel on an unknown session", err, connect.CodeNotFound)
@@ -670,14 +681,11 @@ func TestCancelReportsWhetherAGenerateWasRunning(t *testing.T) {
 	if !was {
 		t.Fatal("Cancel during a generate reported nothing running")
 	}
-	// Alone, the decode waits for each token's emit, so the cancel stops it
-	// at the next token. As a row of the step loop (a host model has one,
-	// batch.go) the loop does not wait for a client: its tokens go to an
-	// outbox, so the cancel reaches it some steps on, and the bound is that
-	// it ends there, cancelled, short of max_tokens.
-	if fin.Reason != FinishCancelled || (!batched && fin.CompletionTokens != 1) || fin.CompletionTokens >= 64 {
-		t.Fatalf("finished %v after %d token(s) (batched %v), want CANCELLED after 1 alone, short of 64 as a row",
-			fin.Reason, fin.CompletionTokens, batched)
+	if batched {
+		t.Fatal("with batching off the generate ran as a row")
+	}
+	if fin.Reason != FinishCancelled || fin.CompletionTokens != 1 {
+		t.Fatalf("finished %v after %d token(s), want CANCELLED after 1", fin.Reason, fin.CompletionTokens)
 	}
 
 	// A client that goes away is a cancel too: its context ends the decode.
