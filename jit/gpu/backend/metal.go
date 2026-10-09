@@ -13,6 +13,7 @@ import (
 
 type mtlDev struct {
 	allocCount
+	once
 	c *metal.Ctx
 	// free is Session's free list: a session handed to the caller's f
 	// escapes, so a fresh one per call was a heap object per token. Nested
@@ -46,6 +47,7 @@ func openMetal(o Opts) (Device, error) {
 			return nil, err
 		}
 	}
+	ownedDevices.Add(1)
 	return &mtlDev{c: c}, nil
 }
 
@@ -56,7 +58,10 @@ func (m *mtlDev) API() string  { return "msl" }
 // a core count, and deriving one from the GPU name is the kind of table this
 // project exists to avoid. 0 means "use the caller's default".
 func (m *mtlDev) Slots() int { return 0 }
-func (m *mtlDev) Close()     { m.c.Close() }
+func (m *mtlDev) Close() {
+	m.c.Close()
+	m.release(&ownedDevices)
+}
 
 // Mem satisfies the same optional interface cudaDev and vkDev do:
 // recommendedMaxWorkingSetSize as total, minus currentAllocatedSize as free.
@@ -372,6 +377,7 @@ func (s *mtlSession) finish() {
 // mtlQueue is a command queue of the device's own, with the session SessionOn
 // hands out on it.
 type mtlQueue struct {
+	once
 	mu sync.Mutex
 	q  *metal.Queue
 	s  mtlSession
@@ -381,6 +387,7 @@ func (q *mtlQueue) Close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.q.Close()
+	q.release(&ownedQueues)
 }
 
 // NewQueue is a command queue of its own (backend.Queued).
@@ -389,6 +396,7 @@ func (d *mtlDev) NewQueue() (Queue, error) {
 	if err != nil {
 		return nil, err
 	}
+	ownedQueues.Add(1)
 	return &mtlQueue{q: q}, nil
 }
 
