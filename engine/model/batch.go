@@ -159,8 +159,16 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 	if c.MSA() {
 		astride = s.attStride
 	}
+	// The rows grow a position a step, so the scores grow with them: room
+	// for the next power of two of positions, or a warm step allocates every
+	// sixteen. Doubling is what bounds the reallocations, and the scores
+	// then stay under twice the rows' length, not the context.
 	if len(s.bathf) < units*astride {
-		s.bathf = make([]float32, units*astride)
+		room := 16
+		for room < astride {
+			room *= 2
+		}
+		s.bathf = make([]float32, units*room)
 	}
 
 	// c.AttnScale rather than 1/sqrt(hd): they differ under YaRN (DeepSeek).
