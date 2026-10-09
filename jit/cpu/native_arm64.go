@@ -8,7 +8,7 @@ import "github.com/samyfodil/jitllm/format/quant"
 //
 // SupportedNative is "can this host run it": what EmitA64 can produce. Every
 // kernel runs on ARMv8.0 NEON: the quantized ones use SDOT where the chip has
-// FEAT_DotProd and widen it to SMULL/SADDLP/ADDP where it does not
+// FEAT_DotProd and widen it to SMULL/SMLAL/ADDP/SADALP where it does not
 // (sdotemu.go), so a Cortex-A53/A57/A72/A73 runs the same list.
 func SupportedNative(t quant.Type) bool { return SupportedA64(t) }
 func EmitNative(s Spec) ([]byte, error) { return EmitA64(s) }

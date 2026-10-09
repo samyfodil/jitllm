@@ -1817,9 +1817,33 @@ runs `TestEveryModelRunsGenerated` and the golden `TestGreedyMatchesLlamaCpp` wi
 off, and `TestNoDotProdIsBitIdentical` holds every model under 2 GiB to the SDOT kernels' decode and
 prefill logits, bit for bit, in one process.
 
-**What is owed:** a faster ARMv8.0 kernel. The widening costs six instructions where SDOT was one;
-a layout regrouped for `SMLAL` chains (sixteen products per two instructions, reduced once per
-block rather than per SDOT) is the optimized kernel RULE 8 still asks for.
+**The six instructions became four, and the decode kernels chain.** The sequence above was replaced
+by `smull`, `smull2`, `addp t0.8h`, `sadalp vd.4s`: adding a product PAIR in int16 is exact because
+one operand of every dot in `jit/cpu` is an activation or query quantized at amax/127, so a pair is
+at most 2*128*127 = 32512. On top of that the container decode kernels (`emitA64Packed`: the tiled
+matvec, the fused one and its integer fold) chain the two dots a row group takes per payload word --
+the low and the high nibble, or the two halves of a merged Q5/Q6 plane -- into one int16 pair with
+`smlal`/`smlal2` and fold it once (`A64.DotChain`), and broadcast each activation element once per
+word, before the row-group loop, instead of a `dup` per dot. `DotChainCap` is the bound:
+2*links*|w|max*127 <= 32767, so a nibble chains eight, a merged Q6 plane (63) two, an int8 weight
+one; the kernels use two. `jit/cpu.TestNoDotProdChainCapIsTheOverflowBound` runs the worst case
+(every product +|w|*127) exact at the cap and wrapped one link past it.
+
+Instructions spent beyond the SDOT kernel, per SDOT (`TestNoDotProdChainsTheDecodeDots`,
+deterministic, the payload loop is unrolled): the per-SDOT widening was +6.00 everywhere; now
++1.56 (Q4_0, Q4_K, Q3_K, MXFP4 tiled) to +1.75 (fused), +2.06/+2.25 for the merged planes
+(Q5_0, Q5_1, Q5_K, Q6_K) and +3.06/+3.25 for Q8_0. Whole fused Q4_K kernel at 16 rows: 1586 words
+with SDOT, 3122 with the six-instruction widening, 2034 now (1.53x fewer). The prefill kernels
+(tiled matmul, stationary and row-major GEMM) take the four-instruction widening per SDOT: +3 a
+vector SDOT and +4 a by-element one (its `dup`), where they were +5 and +6.
+
+**The layout was not changed.** The container puts four rows' word w in one vector, a row per
+int32 lane, and the chain keeps rows apart in the int16 lanes without a horizontal reduction, so
+the reduction is once per word and row group. Chaining further -- across words, an int16 pair per
+row group held for the sub-block -- would save the remaining `addp`/`sadalp` per word but costs two
+registers per row group, which the fused kernel at 16 rows does not have; nothing measured asks for
+a regrouped layout yet. What is owed is the measurement: the A/B of this kernel against the
+per-SDOT widening on a chip without FEAT_DotProd (or the M4 with the probe forced off).
 
 ## ★ RULE 8: `nn.JIT[t] == nil` is a supported configuration.
 

@@ -281,7 +281,7 @@ func isa() string {
 		if cpu.HasDotProd() {
 			return s + " (probed: present)"
 		}
-		return s + " (probed: ABSENT -- SDOT widened to SMULL/SADDLP/ADDP)"
+		return s + " (probed: ABSENT -- SDOT widened to SMULL/SMLAL/ADDP/SADALP)"
 	}
 	return "unknown"
 }
