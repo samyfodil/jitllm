@@ -4058,6 +4058,14 @@ func (s *State) devWhy() string {
 // which is what makes re-running a block from the embeddings unsound.
 func (s *State) recurrent() bool { return s.rconv != nil || s.rstate != nil }
 
+// RecurrenceAdvanced reports whether the device call that just failed had
+// already advanced one of this State's linear blocks, so running its tokens
+// again would apply them twice. It asks the State's own device session, which
+// is where the count lives: the GPU's own count is session 0's, and a State
+// steps on a session of its own. A joint step counts on the State that led it,
+// so a caller asks every State in the step.
+func (s *State) RecurrenceAdvanced() bool { return s.recurrent() && s.recStepped() != 0 }
+
 // recStepped is how many placed linear blocks advanced during the submission
 // that just failed. Zero means nothing moved and the host restart is sound; it
 // is -1 when the tier cannot say, which is read as "assume it did". It is
