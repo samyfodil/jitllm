@@ -113,6 +113,14 @@ var a64Encodings = []struct {
 	{"saddlp v31.4s, v30.8h", "df2b604e", func(a *A64) { a.SADDLP8h(V31, V30) }},
 	{"addp v8.4s, v8.4s, v9.4s", "08bda94e", func(a *A64) { a.ADDP4s(V8, V8, V9) }},
 	{"addp v31.4s, v30.4s, v29.4s", "dfbfbd4e", func(a *A64) { a.ADDP4s(V31, V30, V29) }},
+	{"smlal v1.8h, v2.8b, v3.8b", "4180230e", func(a *A64) { a.SMLAL8b(V1, V2, V3) }},
+	{"smlal v31.8h, v30.8b, v29.8b", "df833d0e", func(a *A64) { a.SMLAL8b(V31, V30, V29) }},
+	{"smlal2 v1.8h, v2.16b, v3.16b", "4180234e", func(a *A64) { a.SMLAL16b(V1, V2, V3) }},
+	{"smlal2 v31.8h, v30.16b, v29.16b", "df833d4e", func(a *A64) { a.SMLAL16b(V31, V30, V29) }},
+	{"addp v1.8h, v2.8h, v3.8h", "41bc634e", func(a *A64) { a.ADDP8h(V1, V2, V3) }},
+	{"addp v31.8h, v30.8h, v29.8h", "dfbf7d4e", func(a *A64) { a.ADDP8h(V31, V30, V29) }},
+	{"sadalp v1.4s, v2.8h", "4168604e", func(a *A64) { a.SADALP8h(V1, V2) }},
+	{"sadalp v31.4s, v30.8h", "df6b604e", func(a *A64) { a.SADALP8h(V31, V30) }},
 
 	// The Q4_0 nibble unpack.
 	{"and v3.16b, v2.16b, v29.16b", "431c3d4e", func(a *A64) { a.AND16b(V3, V2, V29) }},
