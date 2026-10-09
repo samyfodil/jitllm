@@ -234,6 +234,11 @@ func TestRunPrintsTheLinesTheScriptsParse(t *testing.T) {
 	}
 	for name, re := range map[string]*regexp.Regexp{"decode rate": reDecodeRate, "prompt rate": rePromptRate} {
 		m := re.FindStringSubmatch(stderr)
+		if m == nil && strings.Contains(stderr, "0s (rate under the clock's resolution)") {
+			// A run inside one tick of a coarse clock (Windows) has no rate to
+			// print; the line says so rather than +Inf.
+			continue
+		}
 		if m == nil {
 			t.Fatalf("no %s line a harness can read:\n%s", name, stderr)
 		}

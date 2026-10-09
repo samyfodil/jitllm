@@ -198,12 +198,26 @@ func (e *Engine) initTTFT(lm *LoadedModel, o LoadOptions) {
 }
 
 // storeLimit is the memory cache's bound under a host share: what the config
-// names, else an eighth of the share.
-func (e *Engine) storeLimit(share uint64) uint64 {
+// names, else an eighth of the share -- and never more than an eighth of what
+// the cache holds plus what the host has available now.
+//
+// The share is divided from what the host offered at load, and a cache grows
+// for as long as distinct prompts arrive: an eighth of a 190 GB share is
+// 24 GB for a 0.8 GB model, and four such servers bound to one 128 GB NUMA
+// node may each grow to it. Re-read after every generate, the second bound
+// follows the host: as other processes (or other servers) fill it, each cache
+// stops growing: each settles where it holds an eighth of what it holds plus
+// what is free, so n caches on one host hold at most n/(n+7) of the memory
+// that was free (four: 36%).
+func (e *Engine) storeLimit(share, held uint64) uint64 {
 	if e.cfg.MemCacheBytes > 0 {
 		return e.cfg.MemCacheBytes
 	}
-	return max(share/storeShare, 1)
+	lim := share / storeShare
+	if now := e.availNow(); now > 0 {
+		lim = min(lim, (held+now)/storeShare)
+	}
+	return max(lim, 1)
 }
 
 // admitQueue counts a request against its model's bound, or refuses it. The

@@ -1,13 +1,12 @@
 package tier
 
 import (
-	"encoding/binary"
 	"fmt"
 	"math"
 	"slices"
+	"unsafe"
 
 	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/format/quant"
 	"github.com/samyfodil/jitllm/jit/gpu/backend"
 	"github.com/samyfodil/jitllm/jit/gpu/ir"
 	"github.com/samyfodil/jitllm/jit/gpu/kernels"
@@ -1306,20 +1305,21 @@ func (g *devTier) reserveKVSeqs(sid uint64, bases, ends []int) bool {
 	return true
 }
 
-// packF16 is f32 values as packed binary16, two to a word: the pool's f16 V.
+// packF16 is f32 values as packed binary16, two to a word: the pool's f16 V,
+// rounded by the host's generated narrowing (nn.NarrowF16).
 func packF16(v []float32) []byte {
 	b := make([]byte, 2*len(v))
-	for i, x := range v {
-		binary.LittleEndian.PutUint16(b[2*i:], quant.EncodeHalf(x))
+	if len(v) > 0 {
+		nn.NarrowF16(unsafe.Slice((*uint16)(unsafe.Pointer(&b[0])), len(v)), v)
 	}
 	return b
 }
 
-// unpackF16 widens packed binary16 words into dst.
+// unpackF16 widens packed binary16 words into dst through the host's
+// generated widening (nn.WidenF16).
 func unpackF16(dst, words []float32) {
-	b := f32b(words)
-	for i := range dst {
-		dst[i] = float32(quant.DecodeHalf(binary.LittleEndian.Uint16(b[2*i:])))
+	if len(dst) > 0 {
+		nn.WidenF16(dst, unsafe.Slice((*uint16)(unsafe.Pointer(&words[0])), len(dst)))
 	}
 }
 

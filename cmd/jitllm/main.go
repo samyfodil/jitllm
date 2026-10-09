@@ -1050,9 +1050,9 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// The prompt is the text ids plus whatever an image spliced in (marker
 	// tokens and one embedding per projected patch group).
 	ptok := len(ids) + extra
-	fmt.Fprintf(os.Stderr, "\nprompt %d tok in %v (%.2f tok/s)   decode %d tok in %v (%.2f tok/s)\n",
-		ptok, prefill.Round(time.Millisecond), float64(ptok)/prefill.Seconds(),
-		len(out), decode.Round(time.Millisecond), float64(len(out))/decode.Seconds())
+	fmt.Fprintf(os.Stderr, "\nprompt %d tok in %v (%s)   decode %d tok in %v (%s)\n",
+		ptok, prefill.Round(time.Millisecond), rateOf(ptok, prefill),
+		len(out), decode.Round(time.Millisecond), rateOf(len(out), decode))
 	if nodes, aff := st.JIT().NUMA(); nodes > 1 {
 		fmt.Fprintf(os.Stderr, "numa     %d nodes, %d region(s) read node-affine\n", nodes, aff)
 	}
@@ -1956,4 +1956,14 @@ func withDeviceErr(err error, dev nn.Device) error {
 		}
 	}
 	return err
+}
+
+// rateOf is n tokens over d as the run line prints it. A clock that moves in
+// ticks (Windows) can read 0 for a short run, and n/0 printed +Inf tok/s: a
+// rate no harness should read as a measurement. Such a run says so instead.
+func rateOf(n int, d time.Duration) string {
+	if d <= 0 {
+		return "rate under the clock's resolution"
+	}
+	return fmt.Sprintf("%.2f tok/s", float64(n)/d.Seconds())
 }

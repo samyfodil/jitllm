@@ -4,7 +4,6 @@ import (
 	"unsafe"
 
 	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/format/quant"
 	"github.com/samyfodil/jitllm/jit/cpu"
 )
 
@@ -111,18 +110,16 @@ func (l kvLayout) Write(dst []float32, slot, pos int, src []float32) {
 
 // store copies one run of whole head rows at the cache's own format.
 //
-// At f16 this is the only place f32 becomes f16 in the engine, so an f16
-// cache must match an f32 cache rounded through binary16 bit for bit.
+// At f16 this is the only place f32 becomes f16 on the host's KV path, so an
+// f16 cache must match an f32 cache rounded through binary16 bit for bit: the
+// generated narrowing (nn.NarrowF16) rounds as quant.EncodeHalf does.
 // TestKVF16IsSelectedAndRuns holds the f16 cache end to end: that it is
 // selected, and that its logits stay in the band rounding alone costs. At q8
 // each head row goes through the generated quantizer (nn.QuantizeKVRows).
 func (l kvLayout) store(dst []float32, src []float32) {
 	switch l.fmt {
 	case cpu.KVF16:
-		h := unsafe.Slice((*uint16)(unsafe.Pointer(&dst[0])), len(src))
-		for i, v := range src {
-			h[i] = quant.EncodeHalf(v)
-		}
+		nn.NarrowF16(unsafe.Slice((*uint16)(unsafe.Pointer(&dst[0])), len(src)), src)
 	case cpu.KVQ8:
 		l.jit.QuantizeKVRows(dst, src, l.headDim, len(src)/l.headDim)
 	default:

@@ -147,28 +147,23 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 		unitHeads = c.NHead
 	}
 	units := n * c.NHead / unitHeads
-	// A unit's scores row spans its row's positions so far and a sink, not
-	// the context: at a 128K context a row per head of sixteen decoding rows
-	// was 256 MiB of scores, for rows a few hundred positions long. MSA's
-	// masks are laid out at the context's stride, so it keeps it.
-	maxPos := 0
-	for _, p := range pos {
-		maxPos = max(maxPos, p)
+	// A row reaches keys below its own position plus one (rowsStride).
+	reach := 0
+	for i := 0; i < n; i++ {
+		reach = max(reach, pos[i]+1)
 	}
-	astride := attStride(maxPos + 1 + s.m.sinkSlot())
-	if c.MSA() {
-		astride = s.attStride
-	}
-	// The rows grow a position a step, so the scores grow with them: room
-	// for the next power of two of positions, or a warm step allocates every
-	// sixteen. Doubling is what bounds the reallocations, and the scores
-	// then stay under twice the rows' length, not the context.
-	if len(s.bathf) < units*astride {
-		room := 16
-		for room < astride {
-			room *= 2
+	astride := s.rowsStride(reach)
+	// Across sessions a row's reach is its own session's, which may run
+	// past the leading State's context, where rowsStride stops.
+	if len(s.rowOwn) > 0 && astride < attStride(reach+s.m.sinkSlot()) {
+		r := scoreReachMin
+		for r < reach {
+			r *= 2
 		}
-		s.bathf = make([]float32, units*room)
+		astride = attStride(r + s.m.sinkSlot())
+	}
+	if len(s.bathf) < units*astride {
+		s.bathf = make([]float32, units*astride)
 	}
 
 	// c.AttnScale rather than 1/sqrt(hd): they differ under YaRN (DeepSeek).
@@ -420,7 +415,8 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 				s.idxRows(kvli, n, func(i int) int { return seq[i] }, func(i int) int { return pos[i] + 1 }, masks)
 			}
 			if c.MSAAt(li) {
-				masks, mstride = s.msaMasks, astride
+				// The masks are laid out at the State's own stride (msa.go).
+				masks, mstride = s.msaMasks, s.attStride
 				s.msaRows(kvli, n, func(i int) int { return seq[i] }, func(i int) int { return pos[i] + 1 }, masks)
 			}
 			// The fan-out's arguments are State fields and its function a

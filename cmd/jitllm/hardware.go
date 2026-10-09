@@ -153,7 +153,7 @@ func isa() string {
 	case "arm64":
 		s := "NEON + FEAT_DotProd SDOT"
 		if !cpu.HasDotProd() {
-			s += " (probed: ABSENT -- every SDOT is widened to SMULL/SADDLP/ADDP: the same bits, slower)"
+			s += " (probed: ABSENT -- every SDOT is widened to SMULL/SMLAL/ADDP/SADALP: the same bits, slower)"
 		} else {
 			s += " (probed: present)"
 		}
