@@ -362,6 +362,11 @@ func (e *Embedder) mm(out []float32, w tensor, x []float32, n int) error {
 		}
 		return nil
 	}
+	// A float matrix (F32, F16, BF16) reads each row once per tile of tokens
+	// on the float GEMM; MatVec per token is the path for a type it declines.
+	if n > 1 && e.jit.MatMulFloat(out, w.typ, w.data, x, w.rows, w.k, n) {
+		return nil
+	}
 	for i := 0; i < n; i++ {
 		if !e.jit.MatVec(out[i*w.rows:(i+1)*w.rows], w.typ, w.data, x[i*w.k:(i+1)*w.k], w.rows, w.k) {
 			return fmt.Errorf("jitllm: no host kernel reads %s (%s, %dx%d) on %s",

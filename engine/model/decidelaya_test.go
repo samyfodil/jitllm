@@ -90,6 +90,9 @@ func TestLayaMatchesReference(t *testing.T) {
 						}
 					}
 					t.Logf("worst logit difference from the reference: %.6f", worst)
+					if d.emb.jit.FloatMatMulCalls() == 0 {
+						t.Errorf("the encoder's float matrices never ran the float GEMM")
+					}
 				})
 			}
 		})

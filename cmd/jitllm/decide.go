@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/pprof"
 	"time"
 
 	"github.com/samyfodil/jitllm/engine/model"
@@ -23,6 +24,8 @@ func decideCmd(args []string) error {
 	fs := flag.NewFlagSet("decide", flag.ExitOnError)
 	lines := fs.Bool("lines", false, "answer every line of stdin as one request")
 	maxSeq := fs.Int("max-seq", 8192, "the longest prompt one question may render to, in tokens")
+	repeat := fs.Int("repeat", 1, "answer each request this many times, to tell a cold call from a warm one")
+	cpuProf := fs.String("cpuprofile", "", "write a CPU profile of the answering (not the load) here")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -48,6 +51,17 @@ func decideCmd(args []string) error {
 	defer d.Close()
 	fmt.Fprintf(os.Stderr, "%s: %s, %v readout, loaded in %v\n",
 		fs.Arg(0), m.Cfg.Arch, m.Decision(), time.Since(t0).Round(time.Millisecond))
+	if *cpuProf != "" {
+		f, err := os.Create(*cpuProf)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			return err
+		}
+		defer pprof.StopCPUProfile()
+	}
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
 	one := func(body []byte) error {
@@ -55,12 +69,15 @@ func decideCmd(args []string) error {
 		if err != nil {
 			return err
 		}
-		t := time.Now()
-		ans, err := d.Decide(state, qs)
-		if err != nil {
-			return err
+		var ans []model.DecisionAnswer
+		for r := 0; r < max(1, *repeat); r++ {
+			t, reads, read := time.Now(), m.PagerReads(), m.BytesRead()
+			if ans, err = d.Decide(state, qs); err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "%d questions, %d tokens in %v; %d page reads, %d MiB read\n", len(qs), d.InputTokens(),
+				time.Since(t).Round(time.Microsecond), m.PagerReads()-reads, (m.BytesRead()-read)>>20)
 		}
-		fmt.Fprintf(os.Stderr, "%d questions, %d tokens in %v\n", len(qs), d.InputTokens(), time.Since(t).Round(time.Microsecond))
 		if _, err := out.Write(model.DecisionResponse(fs.Arg(0), qs, ans, d.InputTokens())); err != nil {
 			return err
 		}
