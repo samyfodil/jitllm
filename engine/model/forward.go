@@ -459,6 +459,8 @@ type State struct {
 	// Attention scores per (sequence, head). atth/attf are the nseq==1 case;
 	// a batch parallelises over sequences and heads, so every pair needs a row.
 	bathf []float32
+	// scoreReach is the key reach bathf and battf are sized for (rowsStride).
+	scoreReach int
 
 	// Batched prefill scratch, allocated on first use and sized by
 	// PrefillChunk rather than by the sequence length.
@@ -469,7 +471,7 @@ type State struct {
 	// clampIn), grown on first use; nil on every other model.
 	bclamp    []float32
 	bqf, bxbf []float32
-	battf     []float32 // per-token score rows, at attStride
+	battf     []float32 // per-token score rows, at rowsStride
 
 	// jit is the generated-code tier.
 	jit *nn.JIT
@@ -2528,6 +2530,31 @@ func (s *State) softmax(row []float32, n int) { nn.Softmax32JIT(row, n) }
 // attStride rounds a score row's stride up to a whole vector, so the padding
 // the generated softmax writes stays inside the row it belongs to.
 func attStride(maxSeq int) int { return (maxSeq + 15) &^ 15 }
+
+// rowsStride is the stride of the many-row score buffers (battf for a prefill
+// chunk, bathf for a batch step) when their rows reach keys below reach.
+//
+// Those buffers hold a row per token or per (row, head), so sized at maxSeq
+// they were the largest thing a State allocated: a 170-token prompt on a
+// 131072-position context held 89 MB of scores for keys it could not reach,
+// and a server keeps a State per concurrent request. The reach they are sized
+// for grows by doubling, from scoreReachMin, up to maxSeq, so a sequence
+// re-sizes them a handful of times in its life and a warm step at a steady
+// reach allocates nothing.
+func (s *State) rowsStride(reach int) int {
+	if reach > s.scoreReach {
+		r := max(s.scoreReach, scoreReachMin)
+		for r < reach {
+			r *= 2
+		}
+		s.scoreReach = min(r, s.maxSeq)
+	}
+	return attStride(s.scoreReach + s.m.sinkSlot())
+}
+
+// scoreReachMin is the first reach rowsStride sizes for: a page's worth of
+// positions, past which a short exchange never re-sizes.
+const scoreReachMin = 256
 
 // sinkSlot is 1 when any layer carries attention sinks, and the score rows
 // need room for the one extra logit.
