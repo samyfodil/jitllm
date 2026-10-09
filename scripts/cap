@@ -167,7 +167,7 @@ fi
 # wall rather than its own. Only with neither is the address space limited
 # with ulimit -v, the coarsest wall: the CUDA driver reserves virtual address
 # space in proportion to the card, and on an 80 GB H100 a 16G ulimit -v failed
-# every cuMemAlloc. The mode is printed, so a log says what capped it.
+# every cuMemAlloc, so that wall adds the cards' memory. The mode is printed, so a log says what capped it.
 capmode=systemd
 runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 if [ "$(uname -s)" = Linux ] && [ ! -d /run/systemd/system ] \
@@ -267,8 +267,18 @@ if [ "$capmode" = container ]; then
   elif encl="$(cat "/sys/fs/cgroup${rel%/}/memory.max" 2>/dev/null)" && [ -n "$encl" ] && [ "$encl" != max ]; then
     echo "scripts/cap: container mode, the container's own cgroup memory.max=$encl (read-only; $mem not applied)" >&2
   else
+    # The CUDA driver's address-space reservation grows with the cards, so
+    # the cards' memory is added to the wall; a job's own bytes are still
+    # held to $mem plus that.
+    vram=0
+    if command -v nvidia-smi >/dev/null 2>&1; then
+      for m in $(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null); do
+        vram=$(( vram + m * 1024 * 1024 ))
+      done
+    fi
+    maxb=$(( maxb + vram ))
     ulimit -v "$(( maxb / 1024 ))" || { echo "scripts/cap: REFUSING -- no systemd, no writable cgroup, and ulimit -v failed." >&2; exit 70; }
-    echo "scripts/cap: container mode, ulimit -v $mem (no writable cgroup)" >&2
+    echo "scripts/cap: container mode, ulimit -v $mem + $(( vram >> 20 ))M of card memory (no cgroup to write or read)" >&2
   fi
   exec "$@"
 fi
