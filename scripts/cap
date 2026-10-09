@@ -162,9 +162,12 @@ fi
 # host that boots systemd -- the laptop -- a missing user manager is still the
 # refusal below, never this. The container's own cgroup takes the limit when
 # it is writable (a child cgroup with memory.max, memory.high and
-# memory.swap.max); failing that, the address space is limited with ulimit -v,
-# a coarser wall (a GPU driver's virtual reservations count against it). The
-# mode is printed, so a log says what capped it.
+# memory.swap.max). Failing that, a container whose own cgroup states a
+# memory.max is already capped by it, read-only, and the job runs under that
+# wall rather than its own. Only with neither is the address space limited
+# with ulimit -v, the coarsest wall: the CUDA driver reserves virtual address
+# space in proportion to the card, and on an 80 GB H100 a 16G ulimit -v failed
+# every cuMemAlloc. The mode is printed, so a log says what capped it.
 capmode=systemd
 runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 if [ "$(uname -s)" = Linux ] && [ ! -d /run/systemd/system ] \
@@ -261,6 +264,8 @@ if [ "$capmode" = container ]; then
   fi
   if [ -n "$cg" ]; then
     echo "scripts/cap: container mode, cgroup $cg memory.max=$mem memory.high=$highb" >&2
+  elif encl="$(cat "/sys/fs/cgroup${rel%/}/memory.max" 2>/dev/null)" && [ -n "$encl" ] && [ "$encl" != max ]; then
+    echo "scripts/cap: container mode, the container's own cgroup memory.max=$encl (read-only; $mem not applied)" >&2
   else
     ulimit -v "$(( maxb / 1024 ))" || { echo "scripts/cap: REFUSING -- no systemd, no writable cgroup, and ulimit -v failed." >&2; exit 70; }
     echo "scripts/cap: container mode, ulimit -v $mem (no writable cgroup)" >&2
