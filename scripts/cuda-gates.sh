@@ -16,6 +16,9 @@ cd "$(dirname "$0")"
 here=$PWD
 : "${JITLLM_MODELS:?set JITLLM_MODELS to the model directory (docs/testing.md)}"
 export JITLLM_SHIPPED_BINARY=1 CGO_ENABLED=0
+# llama.cpp's binaries are the oracle TestGreedyMatchesLlamaCpp runs; a bundle
+# may carry them in lcpp/.
+[ -z "${JITLLM_LCPP:-}" ] && [ -x "$here/lcpp/llama-completion" ] && export JITLLM_LCPP=$here/lcpp
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 fail=0
@@ -45,8 +48,8 @@ gate engine/model 24G -test.run \
 
 echo "== skips"
 grep -B1 -E -- '--- SKIP' "$log" | grep -vE -- '^--$' || true
-if grep -E 'no GPU|no (cuda|CUDA) (device|driver)|no device|NO DEVICE|MODEL MISSING|CARD TOO SMALL|took no block' "$log" | grep -v 'no two devices'; then
-	echo "FAIL: a gate skipped for want of a device or a model on the host meant to run it" >&2
+if grep -E 'no GPU( backend)?( on this host)?( --|"|$)|no (cuda|CUDA) (device|driver)|no device on this host( --|$)|NO DEVICE|MODEL MISSING|CARD TOO SMALL|took no block|set JITLLM_LCPP|not in JITLLM_LCPP' "$log"; then
+	echo "FAIL: a gate skipped for want of a device, a model or its oracle on the host meant to run it" >&2
 	fail=1
 fi
 if ! grep -qE '/ptx\b|"ptx"| ptx ' "$log"; then
