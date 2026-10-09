@@ -445,11 +445,16 @@ func TestNoPEMLAOnEveryDevice(t *testing.T) {
 			}
 			// The recurrence must have advanced: a linear block whose kernels
 			// never ran leaves the summary at zero and the model still answers.
-			if rs := gpu.RecSteps(); rs == 0 {
-				t.Errorf("%s: recSteps is 0 with %d linear block(s) placed -- the "+
-					"recurrence never advanced on the device", spec, linear)
+			if rs := st.recStepped(); rs != linear {
+				t.Errorf("%s: recSteps is %d with %d linear block(s) placed -- every "+
+					"linear block advances its recurrence once per call", spec, rs, linear)
 			} else {
 				t.Logf("%s: recSteps %d", spec, rs)
+			}
+			// The question a caller asks before re-running a failed step (the
+			// server's joint step does) reads the same session's count.
+			if !st.RecurrenceAdvanced() {
+				t.Errorf("%s: RecurrenceAdvanced is false after %d linear block(s) stepped", spec, linear)
 			}
 			worst, worstD := compare(t, want, got)
 			t.Logf("%s: %d of %d blocks on %s (%d linear), %d positions, worst logit "+

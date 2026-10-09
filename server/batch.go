@@ -550,7 +550,11 @@ func (lp *stepLoop) stepJoint(units []unit) bool {
 		// A hybrid's linear block keeps a summary that a step advances in
 		// place: once any advanced, running the tokens again would apply them
 		// twice, so those rows end with the device's error.
-		if gpu.RecSteps() > 0 {
+		advanced := false
+		for _, u := range units {
+			advanced = advanced || u.r.s.st.RecurrenceAdvanced()
+		}
+		if advanced {
 			for _, u := range units {
 				lp.finish(u.r, FinishError, "", err)
 			}
