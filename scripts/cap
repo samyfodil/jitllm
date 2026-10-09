@@ -156,8 +156,30 @@ if [ "$(uname -s)" = Darwin ]; then
   exec "$@"
 fi
 
+# ★ A CONTAINER WITH NO SYSTEMD AT ALL (Kaggle, a CI image) is the one place
+# the cap is applied another way, and it is decided by a PLATFORM fact, as
+# Darwin's is: /run/systemd/system exists exactly when systemd is PID 1. On a
+# host that boots systemd -- the laptop -- a missing user manager is still the
+# refusal below, never this. The container's own cgroup takes the limit when
+# it is writable (a child cgroup with memory.max, memory.high and
+# memory.swap.max); failing that, the address space is limited with ulimit -v,
+# a coarser wall (a GPU driver's virtual reservations count against it). The
+# mode is printed, so a log says what capped it.
+capmode=systemd
 runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-if ! command -v systemd-run >/dev/null 2>&1 || [ ! -S "$runtime/systemd/private" ]; then
+if [ "$(uname -s)" = Linux ] && [ ! -d /run/systemd/system ] \
+  && { ! command -v systemd-run >/dev/null 2>&1 || [ ! -S "$runtime/systemd/private" ]; }; then
+  capmode=container
+fi
+capBytes() {
+  case "$1" in
+    *G) echo $(( ${1%G} * 1024 * 1024 * 1024 )) ;;
+    *M) echo $(( ${1%M} * 1024 * 1024 )) ;;
+    *K) echo $(( ${1%K} * 1024 )) ;;
+    *) echo "$1" ;;
+  esac
+}
+if [ "$capmode" = systemd ] && { ! command -v systemd-run >/dev/null 2>&1 || [ ! -S "$runtime/systemd/private" ]; }; then
   echo "scripts/cap: REFUSING to run uncapped — systemd-run --user is unavailable." >&2
   echo "  RULE 3c: systemd-oomd has killed the desktop three times on this box, twice from an" >&2
   echo "  uncapped 'go test'. There is NO bypass here on purpose -- a flag that makes a" >&2
@@ -213,6 +235,37 @@ if [ "${JITLLM_NO_LOCK:-0}" != "1" ]; then
       echo "scripts/cap: acquired after $((SECONDS-t0))s" >&2
     fi
   fi
+fi
+
+if [ "$capmode" = container ]; then
+  maxb="$(capBytes "$mem")"
+  highb="$(( maxb / 1000 * 900 ))"
+  cg=""
+  rel="$(sed -n 's/^0:://p' /proc/self/cgroup 2>/dev/null | head -1)"
+  if [ -n "$rel" ] && [ -f "/sys/fs/cgroup${rel%/}/cgroup.controllers" ]; then
+    parent="/sys/fs/cgroup${rel%/}"
+    # The memory controller must be delegated to the children; a write the
+    # container forbids fails and leaves the ulimit mode.
+    grep -qw memory "$parent/cgroup.subtree_control" 2>/dev/null \
+      || echo +memory 2>/dev/null >"$parent/cgroup.subtree_control"
+    child="$parent/jitllm-cap-$$"
+    if grep -qw memory "$parent/cgroup.subtree_control" 2>/dev/null && mkdir "$child" 2>/dev/null; then
+      if echo "$maxb" 2>/dev/null >"$child/memory.max" && echo "$highb" 2>/dev/null >"$child/memory.high" \
+        && { echo 0 2>/dev/null >"$child/memory.swap.max" || [ ! -e "$child/memory.swap.max" ]; } \
+        && echo $$ 2>/dev/null >"$child/cgroup.procs"; then
+        cg="$child"
+      else
+        rmdir "$child" 2>/dev/null
+      fi
+    fi
+  fi
+  if [ -n "$cg" ]; then
+    echo "scripts/cap: container mode, cgroup $cg memory.max=$mem memory.high=$highb" >&2
+  else
+    ulimit -v "$(( maxb / 1024 ))" || { echo "scripts/cap: REFUSING -- no systemd, no writable cgroup, and ulimit -v failed." >&2; exit 70; }
+    echo "scripts/cap: container mode, ulimit -v $mem (no writable cgroup)" >&2
+  fi
+  exec "$@"
 fi
 
 exec systemd-run --user --scope -q --collect \
