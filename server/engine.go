@@ -56,6 +56,10 @@ type Config struct {
 	// does run: measured per row count (the default), always joint, or never.
 	JointSteps JointSteps
 
+	// ROCm is the ROCm library directory the AMD backend loads from, or empty
+	// for the default search (jit/gpu/hip). jitllmd fills it from JITLLM_ROCM.
+	ROCm string
+
 	// DefaultMaxSeq is the KV capacity a session gets when it asks for none.
 	// Zero takes the model's own context length.
 	DefaultMaxSeq int
@@ -466,6 +470,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		if wantsDevice {
 			g, err := tier.OpenWith(
 				tier.WithDevices(spec),
+				tier.WithROCm(e.cfg.ROCm),
 				tier.WithHostBudget(hostBudget),
 				tier.WithConfig(func(c *tier.Config) {
 					c.Sessions = o.Sessions

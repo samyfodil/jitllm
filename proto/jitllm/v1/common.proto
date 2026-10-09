@@ -14,6 +14,8 @@ enum Backend {
   BACKEND_CUDA = 2;
   BACKEND_VULKAN = 3;
   BACKEND_METAL = 4;
+  // An AMD GPU through ROCm, its kernels lowered to LLVM IR for the device.
+  BACKEND_HIP = 5;
 }
 
 // DeviceKind is what the memory behind a device IS, not how fast it is. It

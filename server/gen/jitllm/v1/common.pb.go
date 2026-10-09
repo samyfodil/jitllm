@@ -32,6 +32,8 @@ const (
 	Backend_BACKEND_CUDA        Backend = 2
 	Backend_BACKEND_VULKAN      Backend = 3
 	Backend_BACKEND_METAL       Backend = 4
+	// An AMD GPU through ROCm, its kernels lowered to LLVM IR for the device.
+	Backend_BACKEND_HIP Backend = 5
 )
 
 // Enum value maps for Backend.
@@ -42,6 +44,7 @@ var (
 		2: "BACKEND_CUDA",
 		3: "BACKEND_VULKAN",
 		4: "BACKEND_METAL",
+		5: "BACKEND_HIP",
 	}
 	Backend_value = map[string]int32{
 		"BACKEND_UNSPECIFIED": 0,
@@ -49,6 +52,7 @@ var (
 		"BACKEND_CUDA":        2,
 		"BACKEND_VULKAN":      3,
 		"BACKEND_METAL":       4,
+		"BACKEND_HIP":         5,
 	}
 )
 
@@ -666,13 +670,14 @@ const file_jitllm_v1_common_proto_rawDesc = "" +
 	"\fdraft_tokens\x18\x02 \x01(\x05R\vdraftTokens\"6\n" +
 	"\bByteSize\x12\x14\n" +
 	"\x05bytes\x18\x01 \x01(\x04R\x05bytes\x12\x14\n" +
-	"\x05human\x18\x02 \x01(\tR\x05human*l\n" +
+	"\x05human\x18\x02 \x01(\tR\x05human*}\n" +
 	"\aBackend\x12\x17\n" +
 	"\x13BACKEND_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vBACKEND_CPU\x10\x01\x12\x10\n" +
 	"\fBACKEND_CUDA\x10\x02\x12\x12\n" +
 	"\x0eBACKEND_VULKAN\x10\x03\x12\x11\n" +
-	"\rBACKEND_METAL\x10\x04*u\n" +
+	"\rBACKEND_METAL\x10\x04\x12\x0f\n" +
+	"\vBACKEND_HIP\x10\x05*u\n" +
 	"\n" +
 	"DeviceKind\x12\x1b\n" +
 	"\x17DEVICE_KIND_UNSPECIFIED\x10\x00\x12\x14\n" +

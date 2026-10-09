@@ -68,7 +68,7 @@ func HIPMissing(c hip.Config) string {
 		}
 		return "ROCm found and reports no HIP device: " + why
 	}
-	return fmt.Sprintf("ROCm not found (searched %s): %s", hip.Searched(c), why)
+	return fmt.Sprintf("ROCm not found (searched %s)", hip.Searched(c))
 }
 
 // OpenHIPWith opens HIP device ord. An ordinal the runtime does not have, or
@@ -83,8 +83,8 @@ func OpenHIPWith(ord int, o Opts) (Device, error) {
 		return nil, fmt.Errorf("hip:%d requested; 0 HIP devices (%s)", ord, hip.Why(o.HIP))
 	}
 	if rt == nil {
-		return nil, fmt.Errorf("hip:%d requested but ROCm was not found (searched %s): %s",
-			ord, hip.Searched(o.HIP), hip.Why(o.HIP))
+		return nil, fmt.Errorf("hip:%d requested but ROCm was not found (searched %s)",
+			ord, hip.Searched(o.HIP))
 	}
 	if n := rt.Count(); ord < 0 || ord >= n {
 		return nil, fmt.Errorf("hip:%d requested; %d HIP devices", ord, n)
