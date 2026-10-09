@@ -13,6 +13,7 @@ import (
 
 type vkDev struct {
 	allocCount
+	once
 	c *vulkan.Ctx
 	// free is Session's free list: a session handed to the caller's f
 	// escapes, so a fresh one per call was a heap object per token. Nested
@@ -60,6 +61,7 @@ func OpenVulkanWith(sel string, o Opts) (Device, error) {
 			"declining it so the seam tuner cannot place blocks on the host's own cores "+
 			"(a Vulkan device pin of \"0\", or JITLLM_VK_DEVICE=0, takes it anyway)", name)
 	}
+	ownedDevices.Add(1)
 	return &vkDev{c: c}, nil
 }
 
@@ -88,7 +90,10 @@ func (v *vkDev) GuaranteedLanes(w int) (bool, string) { return v.c.Subgroups().G
 // nothing about how many the device holds resident. 0 means "use the caller's
 // default".
 func (v *vkDev) Slots() int { return 0 }
-func (v *vkDev) Close()     { v.c.Close() }
+func (v *vkDev) Close() {
+	v.c.Close()
+	v.release(&ownedDevices)
+}
 
 // Mem satisfies the same optional interface cudaDev does: free and total bytes
 // of the device-local heap, from VK_EXT_memory_budget. Vulkan needs none of
@@ -353,6 +358,7 @@ func coopComp(e ir.TileElem) vulkan.ComponentType {
 
 // vkQueue is a queue of the context, with the session SessionOn hands out on it.
 type vkQueue struct {
+	once
 	mu sync.Mutex
 	l  *vulkan.Queue
 	s  vkSession
@@ -362,6 +368,7 @@ func (q *vkQueue) Close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.l.Close()
+	q.release(&ownedQueues)
 }
 
 // NewQueue is a queue of its own: a command pool, buffers, descriptor pool,
@@ -371,6 +378,7 @@ func (d *vkDev) NewQueue() (Queue, error) {
 	if err != nil {
 		return nil, err
 	}
+	ownedQueues.Add(1)
 	return &vkQueue{l: l}, nil
 }
 
