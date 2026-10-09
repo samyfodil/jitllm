@@ -16,6 +16,7 @@ func TestAct32JITRunsEveryUngatedKind(t *testing.T) {
 	ref := map[ActKind]func(float64) float64{
 		ActSiLU:      oracle.SiLU,
 		ActGELU:      oracle.GELUTanh,
+		ActGELUErf:   oracle.GELUErf,
 		ActQuickGELU: func(x float64) float64 { return x / (1 + math.Exp(-1.702*x)) },
 		ActReLU2:     func(x float64) float64 { r := math.Max(x, 0); return r * r },
 		ActReLU:      func(x float64) float64 { return math.Max(x, 0) },

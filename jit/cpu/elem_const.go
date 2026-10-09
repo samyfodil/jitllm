@@ -85,6 +85,13 @@ func actConsts() []float32 {
 		// mantissa mask, as bits, and ln 2.
 		math.Float32frombits(0x007FFFFF), // 172
 		float32(math.Ln2),                // 176
+		// 180..204: ActGELUErf's 1/sqrt 2 and its erf (kernels.GELUErfP,
+		// then GELUErfA from the first coefficient to the fifth).
+		float32(1/math.Sqrt2),                    // 180
+		kernels.GELUErfP,                         // 184
+		kernels.GELUErfA[0], kernels.GELUErfA[1], // 188, 192
+		kernels.GELUErfA[2], kernels.GELUErfA[3], // 196, 200
+		kernels.GELUErfA[4], // 204
 	)
 }
 

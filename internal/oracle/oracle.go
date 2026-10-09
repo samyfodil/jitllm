@@ -160,6 +160,10 @@ func SqrtSoftplus(x float64) float64 {
 	return math.Sqrt(math.Log1p(math.Exp(x)))
 }
 
+// GELUErf is GELU as transformers' GELUActivation and torch compute it,
+// 0.5x(1 + erf(x/sqrt 2)), with Go's erf.
+func GELUErf(x float64) float64 { return 0.5 * x * (1 + math.Erf(x/math.Sqrt2)) }
+
 // GELUTanh is the tanh approximation of GELU, which is what gemma uses and what
 // ggml's GGML_UNARY_OP_GELU computes.
 func GELUTanh(x float64) float64 {

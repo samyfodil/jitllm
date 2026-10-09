@@ -262,7 +262,7 @@ Order, by what each unlocks (coordinator's priorities):
 | Laya head's last block | every row | every row | the marker rows only (keys and values from every row) |
 | Laya head heads | the encoder's count | `max(1, d // 64)` | the reference's, stated in the container (`Config.DecisionHeads`); they agree on every published checkpoint |
 | Laya sequence | template rendered whole, then re-cut | each piece tokenized alone | the reference; token for token equal to both on the gates' requests |
-| Laya GELU | tanh (GeGLU), erf (scorer) | erf in both | tanh in both, the engine's kernel: worst logit 3e-4 on the f32 fixture, 0.027 on the BF16 checkpoint |
+| Laya GELU | tanh (GeGLU), erf (scorer) | erf in both | the reference: `ActGELUErf` on every tier (host and device); worst logit 1e-6 on the f32 fixture, where the tanh form left 3e-4 |
 | Laya state cut | the context | `max_len` (512) | the context: the GGUF does not carry `max_len` |
 
 ## 9. What was built, and the gates
@@ -271,7 +271,7 @@ Order, by what each unlocks (coordinator's priorities):
 |---|---|---|---|---|
 | d1-3B (Q8_0) | label logits, lfm2 | `TestDecisionMatchesLlamaCpp`, `TestDecisionReadoutIsLoadBearing` (noul shown true first) | not run: the reference is transformers remote code (>=5.14) and was not run here | worst probability 0.021 (f16 kv, llama.cpp's own), 0.020 (f32 kv); prompts token for token |
 | Lev (Q8_0 of the merged adapter) | label logits, qwen35 | same, plus two option orders, sorted keys and calibration load-bearing | the graph only: Qwen3.5-4B with the adapter merged, f32 in transformers, on jitllm's prompt ids: raw label logits within 0.3 on a scale of 20 (Q8_0 against BF16); `lev serve`'s own prompt code was not run | worst 0.029 (f16 kv), 0.090 (f32 kv, lev's tone near-tie; see decide_test.go) |
-| Laya (BF16) | marker head, ModernBERT | `TestLayaMatchesReference`, `TestLayaFeaturesAreLoadBearing` (window, local base, GeGLU's gated half, type row, head count), `TestLayaPagesWithTheSameAnswer`, `TestDecisionMatchesLlamaCpp` | logits within 3e-4 (random fixture, f32) and 0.027 (checkpoint) of Laya's own code | worst probability 0.0042 |
+| Laya (BF16) | marker head, ModernBERT | `TestLayaMatchesReference`, `TestLayaFeaturesAreLoadBearing` (window, local base, GeGLU's gated half, type row, head count, erf GELU), `TestLayaPagesWithTheSameAnswer`, `TestDecisionMatchesLlamaCpp` | logits within 1e-6 (random fixture, f32) and 0.027 (checkpoint) of Laya's own code | worst probability 0.0039 |
 
 Features the gates could not show load-bearing, kept as the reference has them:
 d1's second code form (" A" beside "A", at most 0.004 on either request), and

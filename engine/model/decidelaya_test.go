@@ -31,11 +31,10 @@ var layaCases = []struct {
 	name, gguf, gold string
 	tol              float64 // on a raw logit
 }{
-	// f32 weights: what is left is f32 reduction order and the tanh GELU
-	// against the reference's erf.
-	{"fixture", "laya/fixture/laya-fixture.gguf", "laya-fixture", 1e-3},
+	// f32 weights: what is left is f32 reduction order (worst 1e-6).
+	{"fixture", "laya/fixture/laya-fixture.gguf", "laya-fixture", 2e-5},
 	// BF16 weights read as the reference reads them (exactly); 28 blocks of
-	// f32 order and the tanh GELU.
+	// f32 order (worst 0.027).
 	{"laya", "laya/gguf/Laya-BF16.gguf", "laya", 0.035},
 }
 
@@ -138,7 +137,7 @@ func TestLayaFeaturesAreLoadBearing(t *testing.T) {
 		t.Fatal(err)
 	}
 	state, qs := decisionRequest(t, filepath.Join("testdata", "decision", "support.json"))
-	for _, v := range []string{"no-window", "one-base", "up-gated", "type-row-0", "encoder-heads"} {
+	for _, v := range []string{"no-window", "one-base", "up-gated", "type-row-0", "encoder-heads", "tanh-gelu"} {
 		t.Run(v, func(t *testing.T) {
 			d, err := m.NewDecider(0)
 			if err != nil {

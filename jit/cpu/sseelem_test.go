@@ -146,6 +146,7 @@ func sseElemKerns() []sseElemKern {
 	gated := map[ActKind]func(g, u float64) float64{
 		ActSiLU:        func(g, u float64) float64 { return oracle.SiLU(g) * u },
 		ActGELU:        func(g, u float64) float64 { return oracle.GELUTanh(g) * u },
+		ActGELUErf:     func(g, u float64) float64 { return oracle.GELUErf(g) * u },
 		ActSwiGLUOAI:   oracle.SwiGLUOAI,
 		ActSwiGLUClamp: oracle.SwiGLUClamp,
 		ActSitu:        oracle.Situ,
@@ -159,6 +160,7 @@ func sseElemKerns() []sseElemKern {
 	ungated := map[ActKind]func(x, _ float64) float64{
 		ActSiLU:      func(x, _ float64) float64 { return oracle.SiLU(x) },
 		ActGELU:      func(x, _ float64) float64 { return oracle.GELUTanh(x) },
+		ActGELUErf:   func(x, _ float64) float64 { return oracle.GELUErf(x) },
 		ActQuickGELU: func(x, _ float64) float64 { return quickGELURef(x) },
 		ActReLU2:     func(x, _ float64) float64 { r := math.Max(x, 0); return r * r },
 		ActReLU:      func(x, _ float64) float64 { return math.Max(x, 0) },
@@ -310,6 +312,8 @@ func TestEmitActMulSSEMatchesReference(t *testing.T) {
 		switch k {
 		case ActGELU:
 			return oracle.GELUTanh(g) * u
+		case ActGELUErf:
+			return oracle.GELUErf(g) * u
 		case ActIdentity:
 			return g * u
 		case ActSwiGLUOAI:

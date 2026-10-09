@@ -535,7 +535,7 @@ The recorded divergences (each with its measurement in the evidence file):
 | a decision request without `instructions` | refused | TypeSafe's protocol: optional, asked by the question's id (Clef's code, lev's template) | `docs/design/decision-models.md` |
 | Laya's confidence | TypeSafe's formula | Laya's code: one minus normalised entropy | same |
 | Laya's sequence | the template rendered whole, then re-cut | `rl_common.build_sequence`: each piece tokenized alone (token for token equal on the gates' requests) | same |
-| Laya's GELU (GeGLU and the scorer) | tanh in the GeGLU, erf in the scorer | tanh in both: the engine's GELU kernel; the reference's is erf (worst logit 3e-4 on the f32 fixture) | same |
+| Laya's GELU (GeGLU and the scorer) | tanh in the GeGLU, erf in the scorer | the reference: erf in both (`ActGELUErf`, generated on every tier; worst logit 1e-6 on the f32 fixture, where tanh was 3e-4) | same |
 | Laya's state cut | the context | the context: the GGUF does not carry the reference's max_len (512) | same |
 | the stop set | EOS, a GGUF's eot, eom and FIM ids, and its name list | llama.cpp's from a GGUF (`tok.TestStopSetMatchesLlamaCpp`); from safetensors transformers' generation_config eos list beside the names | MC "The stop set: what the file states, carried into the container" |
 

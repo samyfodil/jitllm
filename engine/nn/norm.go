@@ -375,6 +375,7 @@ type ActKind = cpu.ActKind
 const (
 	ActSiLU      = cpu.ActSiLU
 	ActGELU      = cpu.ActGELU
+	ActGELUErf   = cpu.ActGELUErf
 	ActQuickGELU = cpu.ActQuickGELU
 	ActReLU2     = cpu.ActReLU2
 	ActReLU      = cpu.ActReLU

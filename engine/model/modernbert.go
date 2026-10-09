@@ -26,8 +26,8 @@ import (
 //
 // It runs on the encoder's generated kernels, as BERT does: LayerNorm32JIT,
 // the f32 attention scores and accumulate, the activation kernels and the
-// matmuls. The GELU kernels are the tanh form; see the divergence recorded in
-// docs/design/decision-models.md.
+// matmuls. GELU is the erf form both in the GeGLU and in the scorer, as the
+// reference computes it.
 
 // mbBlock is one ModernBERT encoder block.
 type mbBlock struct {
@@ -352,7 +352,7 @@ func (e *Embedder) mbEncode(ids []int32) error {
 		if e.violation == "up-gated" {
 			g, u = u, g
 		}
-		e.parallelVec(len(g), func(lo, hi int) { nn.ActMul32JIT(g[lo:hi], u[lo:hi], nn.ActGELU) })
+		e.parallelVec(len(g), func(lo, hi int) { nn.ActMul32JIT(g[lo:hi], u[lo:hi], e.gelu()) })
 		if err := e.mm(t, b.down, g, n); err != nil {
 			return err
 		}
@@ -474,7 +474,7 @@ func (e *Embedder) layaScores(out []float32, n int, qt jlm.QuestionType, markers
 		return err
 	}
 	e.addBiasRows(t, mb.scB, nm)
-	e.parallelVec(len(t), func(lo, hi int) { nn.Act32JIT(t[lo:hi], nn.ActGELU) })
+	e.parallelVec(len(t), func(lo, hi int) { nn.Act32JIT(t[lo:hi], e.gelu()) })
 	if err := e.mm(out[:nm], mb.scOut, t, nm); err != nil {
 		return err
 	}
@@ -488,4 +488,13 @@ func (m *Model) encMB() *modernBERT {
 		return nil
 	}
 	return m.enc.mb
+}
+
+// gelu is ModernBERT's and Laya's scorer's GELU: the erf form, as
+// transformers' GELUActivation computes it (and llama.cpp's GeGLU does not).
+func (e *Embedder) gelu() nn.ActKind {
+	if e.violation == "tanh-gelu" {
+		return nn.ActGELU
+	}
+	return nn.ActGELUErf
 }
