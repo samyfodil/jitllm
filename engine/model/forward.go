@@ -502,6 +502,9 @@ type State struct {
 	rowOwn []*State
 	rowWin []bool
 	rowSeq []int
+	// stepb is the model's step scratch holder while this State leads a
+	// host step (borrowStep).
+	stepb *stepBuf
 	// ra and raRun are a ragged step's attention fan-out (rowsHost).
 	ra    rowsAttn
 	raRun func(lo, hi int)

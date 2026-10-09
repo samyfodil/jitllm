@@ -147,10 +147,17 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 		unitHeads = c.NHead
 	}
 	units := n * c.NHead / unitHeads
-	// Across sessions each row's scores span its own session's context.
-	astride := s.attStride
-	for _, o := range s.rowOwn {
-		astride = max(astride, o.attStride)
+	// A unit's scores row spans its row's positions so far and a sink, not
+	// the context: at a 128K context a row per head of sixteen decoding rows
+	// was 256 MiB of scores, for rows a few hundred positions long. MSA's
+	// masks are laid out at the context's stride, so it keeps it.
+	maxPos := 0
+	for _, p := range pos {
+		maxPos = max(maxPos, p)
+	}
+	astride := attStride(maxPos + 1 + s.m.sinkSlot())
+	if c.MSA() {
+		astride = s.attStride
 	}
 	if len(s.bathf) < units*astride {
 		s.bathf = make([]float32, units*astride)

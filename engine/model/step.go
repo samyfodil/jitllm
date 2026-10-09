@@ -428,6 +428,9 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 		}
 	}
 	s0.rowOwn, s0.rowWin = own, win
+	// The step's scratch is the model's, lent to whichever State leads.
+	s0.borrowStep()
+	defer s0.returnStep()
 	lg, err := s0.rowsHost(toks, seq, pos, nlogit, len(runs))
 	if err != nil {
 		return nil, err

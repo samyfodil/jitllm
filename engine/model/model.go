@@ -1167,6 +1167,8 @@ type Model struct {
 	// prompt (promptBuf).
 	spareMu sync.Mutex
 	spare   *promptBuf
+	// step is the host step scratch across sessions (stepBuf).
+	step *stepBuf
 	// kvPool is the host KV pages closed States gave back (kvPagePool).
 	kvPool kvPagePool
 
