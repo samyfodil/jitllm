@@ -626,8 +626,19 @@ func TestForceUnloadStopsAGenerateMidDecode(t *testing.T) {
 // the session exist" are different answers. A cancel from inside the stream
 // stops the decode at the next token. With cancelGeneration not calling the
 // cancel func the generate runs to max_tokens and this fails.
+//
+// It runs with batching off: alone, the decode waits for each token's emit,
+// which is what makes "the next token" exact. A row of the step loop does not
+// wait for its client (its tokens go to an outbox), so a cancel reaches it
+// some steps on; TestBatchCancelOneRowLeavesTheOthers gates that path.
 func TestCancelReportsWhetherAGenerateWasRunning(t *testing.T) {
-	e, _, c := loadedEngine(t, smallModel, "small", LoadOptions{})
+	path := modelPath(t, smallModel)
+	e := New(Config{ModelDir: filepath.Dir(path), Probe: oneCardProbe, Version: "test", MaxBatchRows: 1})
+	t.Cleanup(e.Close)
+	if _, err := e.LoadModel(LoadOptions{Path: path, ModelID: "small"}); err != nil {
+		t.Fatal(err)
+	}
+	c := serveEngine(t, e)
 	ctx := context.Background()
 	_, err := c.inference.Cancel(ctx, req(&v1.CancelRequest{SessionId: "nope"}))
 	wantCode(t, "Cancel on an unknown session", err, connect.CodeNotFound)
@@ -643,12 +654,14 @@ func TestCancelReportsWhetherAGenerateWasRunning(t *testing.T) {
 		t.Fatal("Cancel on an idle session reported a generate in flight")
 	}
 
-	var was bool
+	var was, batched bool
 	var fin *Finished
 	err = e.Generate(ctx, GenerateOptions{
 		SessionID: "c", Prompt: Prompt{Kind: PromptText, Text: story}, MaxTokens: 64,
 	}, func(ev Event) error {
 		switch ev.Kind {
+		case EventStarted:
+			batched = ev.Started.Batched
 		case EventToken:
 			if ev.Token.Index == 0 {
 				r, err := c.inference.Cancel(ctx, req(&v1.CancelRequest{SessionId: "c"}))
@@ -667,6 +680,9 @@ func TestCancelReportsWhetherAGenerateWasRunning(t *testing.T) {
 	}
 	if !was {
 		t.Fatal("Cancel during a generate reported nothing running")
+	}
+	if batched {
+		t.Fatal("with batching off the generate ran as a row")
 	}
 	if fin.Reason != FinishCancelled || fin.CompletionTokens != 1 {
 		t.Fatalf("finished %v after %d token(s), want CANCELLED after 1", fin.Reason, fin.CompletionTokens)

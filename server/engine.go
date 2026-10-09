@@ -52,6 +52,20 @@ type Config struct {
 	// anyway; a step never carries more than model.MaxStepRows rows in all.
 	PromptChunk int
 
+	// StepPromptTokens bounds the prompt tokens one step carries beside
+	// decoding rows, so admitting a prompt holds each of their tokens up by
+	// about one decode step rather than a prompt chunk. Zero measures it
+	// (stepBudget): the prompt tokens that cost one decode step's time. A
+	// step with no decoding row takes PromptChunk whole.
+	StepPromptTokens int
+
+	// StepCost is how many decode steps' time a step carrying prompt tokens
+	// beside decoding rows may take, when StepPromptTokens measures the
+	// budget: the decoding rows' worst inter-token gap against an arriving
+	// prompt's time to its first token. Zero (or up to 1) takes
+	// DefaultStepCost.
+	StepCost float64
+
 	// JointSteps is how a decode step whose rows could run as one joint step
 	// does run: measured per row count (the default), always joint, or never.
 	JointSteps JointSteps
@@ -263,9 +277,9 @@ type LoadedModel struct {
 	// (SetKVBudget, preempt.go); 0 is none. Guarded by mu.
 	kvBudget uint64
 
-	// loop batches this model's device generates (batch.go). nil for a
-	// host-only model, or with batching off. Set before the model is
-	// published and never changed.
+	// loop batches this model's generates, on its device or on the host
+	// (batch.go). nil with batching off. Set before the model is published
+	// and never changed.
 	loop *stepLoop
 
 	// mu guards the model-level mutations: page budget, and the placement
@@ -541,7 +555,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		maxBlocks: o.MaxDeviceBlocks,
 		sessions:  map[string]*Session{},
 	}
-	if gpu != nil && e.cfg.MaxBatchRows != 1 {
+	if e.cfg.MaxBatchRows != 1 {
 		lm.loop = newStepLoop(e, lm)
 	}
 	e.initTTFT(lm, o)
@@ -967,7 +981,7 @@ func (s *Session) refresh() {
 	s.snapHist.Store(s.st.HistoryBytes())
 	s.snapDevBlocks.Store(int32(s.st.GPULayers()))
 	s.snapAt.Store(time.Now().UnixMilli())
-	s.snapBatched.Store(s.lm.loop != nil && s.st.Steppable())
+	s.snapBatched.Store(s.lm.loop != nil && stepsJointly(s.st))
 	blocks, settled := s.st.SeamTuned()
 	s.snapSeam.Store(int32(blocks))
 	s.snapSeamSettled.Store(settled)
@@ -2045,6 +2059,9 @@ func (e *Engine) applyPageBudget(lm *LoadedModel, newest *model.State) {
 	}
 	kv += lm.idleKV()
 	e.mu.RUnlock()
+	// The model's host step scratch (model.Model.StepScratchBytes): one step's
+	// rows across sessions, held between steps for the next.
+	kv += lm.m.StepScratchBytes()
 
 	// The pooled States' history (above) and the memory cache are committed
 	// host memory too. The store's bound is a share of the model's budget,

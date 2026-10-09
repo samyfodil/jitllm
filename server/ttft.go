@@ -301,7 +301,7 @@ func (e *Engine) releaseEphemeral(s *Session) {
 // the model's default placement, as a fresh State would.
 func (e *Engine) pool(lm *LoadedModel, st *model.State) bool {
 	// A parked State is not pooled: its history is in a store, not reset.
-	if lm.ttft.poolCap == 0 || st.Parked() || !st.Steppable() && lm.loop != nil {
+	if lm.ttft.poolCap == 0 || st.Parked() || !stepsJointly(st) && lm.loop != nil {
 		return false
 	}
 	st.SetPrefillInterrupt(nil)

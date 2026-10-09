@@ -154,11 +154,17 @@ func serve(args []string) {
 	sessions := fs.Int("sessions", 1, "concurrent sessions each linear device block reserves a recurrent state for, for -load (attention history is paged)")
 	maxSeq := fs.Int("max-seq", 0, "default KV capacity per session, in positions (default: the model's context length)")
 	maxBatch := fs.Int("max-batch", 0,
-		"generates of one device model that decode as rows of one step. 0 is the engine's "+
-			"bound (the widest step a device runs across sessions); 1 turns batching off")
+		"generates of one model that decode as rows of one step. 0 is the engine's "+
+			"bound (the widest step across sessions); 1 turns batching off")
 	promptChunk := fs.Int("prompt-chunk", 0,
 		"prompt tokens fed into one shared step when a request joins a batch. 0 is one "+
 			"device prefill chunk")
+	stepPrompt := fs.Int("step-prompt-tokens", 0,
+		"prompt tokens one step carries beside decoding rows. 0 measures it: the tokens "+
+			"that cost one decode step's time")
+	stepCost := fs.Float64("step-cost", 0,
+		"with -step-prompt-tokens 0, how many decode steps' time a step carrying prompt "+
+			"tokens may take (0: the engine's default)")
 	jointSteps := fs.String("joint-steps", "auto",
 		"how a batch's decode step runs: auto (time joint against one session after another, "+
 			"per row count, and run the faster), always (one joint step) or never (each session alone)")
@@ -247,15 +253,17 @@ func serve(args []string) {
 		store = fsStore
 	}
 	e := server.New(server.Config{
-		KVF16:         kvWidth,
-		OffHeap:       goheap.OffHeap,
-		PromptStore:   store,
-		ModelDir:      *models,
-		MaxBatchRows:  *maxBatch,
-		PromptChunk:   *promptChunk,
-		JointSteps:    joint,
-		DefaultMaxSeq: *maxSeq,
-		Version:       *version,
+		KVF16:            kvWidth,
+		OffHeap:          goheap.OffHeap,
+		PromptStore:      store,
+		ModelDir:         *models,
+		MaxBatchRows:     *maxBatch,
+		PromptChunk:      *promptChunk,
+		StepPromptTokens: *stepPrompt,
+		StepCost:         *stepCost,
+		JointSteps:       joint,
+		DefaultMaxSeq:    *maxSeq,
+		Version:          *version,
 		// The ROCm library directory; the server package reads no environment.
 		ROCm: os.Getenv("JITLLM_ROCM"),
 

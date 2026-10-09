@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync/atomic"
 
 	"github.com/samyfodil/jitllm/engine/nn"
 )
@@ -186,6 +187,9 @@ func StepRuns(runs []Run) ([][]float32, error) {
 	if ss, ok := stepper(runs, rows); ok {
 		return stepTogether(runs, rows, ss)
 	}
+	if hostStepper(runs, rows) {
+		return stepHost(runs, rows)
+	}
 	if len(runs) == 0 {
 		return nil, nil
 	}
@@ -298,6 +302,172 @@ var (
 	errStepHeadElsewhere = errors.New("model: the head is not on the device that runs the last block")
 	errStepSplit         = errors.New("model: not every block of the State is on the device")
 )
+
+// hostStepper reports whether the runs can go as one host step across their
+// sessions (stepHost): two or more States of one model, each HostSteppable,
+// the rows within the host's widest batch.
+func hostStepper(runs []Run, rows int) bool {
+	if len(runs) < 2 || rows > MaxPrefillChunk {
+		return false
+	}
+	s0 := runs[0].State
+	for _, r := range runs {
+		if !r.State.HostSteppable() || r.State.m != s0.m {
+			return false
+		}
+	}
+	return true
+}
+
+// HostSteppable reports whether this State can take a run of StepRuns' host
+// arm: a single sequence whose every block and head run on the host. Such
+// States of one Model step as rows of one pass over the weights (stepHost),
+// each row reading and writing its own State's history and recurrent state;
+// StepRuns runs any other State alone, which is the same answer. HostRefusal
+// says why a State is not. It allocates nothing.
+func (s *State) HostSteppable() bool { return s.HostRefusal() == nil }
+
+// HostRefusal is why this State cannot take a run of StepRuns' host arm, nil
+// when it can (HostSteppable).
+func (s *State) HostRefusal() error {
+	c := s.c
+	switch {
+	case s.batched:
+		return errStepBatched
+	case s.emb != nil:
+		return errStepEmbedder
+	case s.devCount() > 0 || s.head != nil:
+		return errHostOnDevice
+	case s.lo != 0 || s.hi != c.NLayer:
+		return errHostPartial
+	case c.MLA() || c.Indexer() || c.MSA() || c.DSV4():
+		// Their cached rows and selections are read through the batch's own
+		// slots (mlaProjectRows, idxRows, msaRows, ds4Block); a row of
+		// another session there would read the wrong history.
+		return errHostCache
+	}
+	return nil
+}
+
+// The conditions HostRefusal names beside StepRefusal's.
+var (
+	errHostOnDevice = errors.New("model: a device runs some of the State's blocks or its head")
+	errHostPartial  = errors.New("model: the State runs part of the model (a prediction block)")
+	errHostCache    = errors.New("model: the architecture's cached rows are read per batch slot (MLA, an indexer, MSA, DeepSeek V4)")
+)
+
+// PromptChunk is how many prompt tokens this State's Prefill takes in one
+// chunk: a pipelined chunk when every block is on a device that crosses
+// several cards (deviceChunk), a device chunk on a device, the host's chunk
+// otherwise. A caller feeding a prompt in pieces feeds pieces this wide to
+// keep the path Prefill would take on the whole prompt.
+func (s *State) PromptChunk() int {
+	if s.devCount() > 0 {
+		return s.deviceChunk()
+	}
+	return MaxPrefillChunk
+}
+
+// HostStepRows is the rows StepRuns has run as host steps across sessions,
+// which says whether sessions really shared passes over the weights.
+func (m *Model) HostStepRows() int64 { return atomic.LoadInt64(&m.hostStepRows) }
+
+// stepHost is StepRuns' host arm: the runs' rows as one ragged pass over the
+// weights (rowsHost, the batch's own step), each row embedded and rotated at
+// its own session's next position, its K and V written into and its attention
+// and recurrent state read from that session's State. Each State's logits and
+// position then move on as Prefill and Forward move them. The rows whose
+// logits are wanted lead, so the head projects only them.
+func stepHost(runs []Run, rows int) ([][]float32, error) {
+	s0 := runs[0].State
+	c := s0.c
+	defer s0.m.enterPager()()
+	toks, pos, own, win, seq := s0.stepTok[:0], s0.stepPos[:0], s0.rowOwn[:0], s0.rowWin[:0], s0.rowSeq[:0]
+	// The lists keep their capacity; the sessions are let go of, so a step
+	// pins no State past it.
+	defer func() {
+		clear(own)
+		s0.stepTok, s0.stepPos, s0.rowOwn, s0.rowWin, s0.rowSeq = toks[:0], pos[:0], own[:0], win[:0], seq[:0]
+	}()
+	addRow := func(r Run, j int) error {
+		st, tok := r.State, r.Tokens[j]
+		p := st.bpos[0] + j
+		if stepPos != nil {
+			p = stepPos(st.bpos[0], j, len(r.Tokens))
+		}
+		if int(tok) < 0 || int(tok) >= c.NVocab {
+			return errToken{tok, c.NVocab}
+		}
+		if p >= st.maxSeq {
+			return errFull{st.maxSeq, st.reqSeq}
+		}
+		if stepShare {
+			st = runs[0].State
+		}
+		toks, pos, own = append(toks, tok), append(pos, p), append(own, st)
+		win, seq = append(win, j == len(r.Tokens)-1), append(seq, 0)
+		return nil
+	}
+	nlogit := 0
+	for _, r := range runs {
+		if r.Logits {
+			if err := addRow(r, len(r.Tokens)-1); err != nil {
+				return nil, err
+			}
+			nlogit++
+		}
+	}
+	for _, r := range runs {
+		for j := range r.Tokens {
+			if r.Logits && j == len(r.Tokens)-1 {
+				continue
+			}
+			if err := addRow(r, j); err != nil {
+				return nil, err
+			}
+		}
+	}
+	s0.rowOwn, s0.rowWin = own, win
+	// The step's scratch is the model's, lent to whichever State leads.
+	s0.borrowStep()
+	defer s0.returnStep()
+	lg, err := s0.rowsHost(toks, seq, pos, nlogit, len(runs))
+	if err != nil {
+		return nil, err
+	}
+	atomic.AddInt64(&s0.m.hostStepRows, int64(rows))
+	out := s0.stepOut(len(runs))
+	at := 0
+	for i, r := range runs {
+		st, k := r.State, len(r.Tokens)
+		st.kv.note(st.bpos[0], r.Tokens...)
+		if r.Logits {
+			copy(st.logits, lg[at*c.NVocab:(at+1)*c.NVocab])
+			out[i] = st.logits
+			at++
+		}
+		st.advance(0, k)
+		for range k {
+			st.hot.endToken()
+		}
+		st.reap()
+		// A decoding row steps its seam tuner as stepTogether's do. A tuner
+		// that moves blocks onto a card takes the State out of the host
+		// step (HostRefusal), and StepRuns runs it alone from then on.
+		if k == 1 {
+			st.seamStep()
+		}
+		if err := st.kvCheck(); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// stepShare, when set, gives every row of a host step the first run's State
+// as its history. False but in a gate's violation: it is how the gate shows
+// that rows reading one session's history fail it.
+var stepShare bool
 
 // stepPos, when set, is where a run's row j goes, given the State's next
 // position and the run's length. Nil but in a gate's violation: it is how the
