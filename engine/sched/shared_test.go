@@ -15,15 +15,21 @@ import (
 // the last view closes.
 func TestSharedViewsTakeTurnsOnOneCrew(t *testing.T) {
 	cpus := []int{0, 1, 2, 3}
+	// Counted by identity, not by runtime.NumGoroutine: a closed pool's
+	// workers exit after Close returns (it does not join), so another test's
+	// stragglers move the process count while this one reads it.
 	g0 := runtime.NumGoroutine()
 	a := Shared(cpus)
-	g1 := runtime.NumGoroutine()
 	b := Shared(cpus)
-	if g := runtime.NumGoroutine(); g != g1 || g1-g0 != len(cpus)-1 {
-		t.Fatalf("goroutines %d -> %d -> %d: want %d workers once, none for the second view", g0, g1, g, len(cpus)-1)
-	}
+	// A failed check below must not leave this crew registered for the next
+	// run to be handed. Close is idempotent.
+	t.Cleanup(func() { a.Close(); b.Close() })
 	if a.crew != b.crew {
 		t.Fatal("two views of one core set got two crews")
+	}
+	if a.crew.crew != nil || len(a.crew.start) != len(cpus)-1 || a.start != nil || b.start != nil {
+		t.Fatalf("the crew has %d workers and the views %d and %d: want %d workers once, none for a view",
+			len(a.crew.start), len(a.start), len(b.start), len(cpus)-1)
 	}
 
 	a.SetParticipants(1)
