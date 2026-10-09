@@ -16,7 +16,10 @@ import (
 //	JITLLM_VK_MAXGROUPS  workgroups per dispatch (Opts.Vulkan.MaxGroups), e.g.
 //	                     "7", which sends nearly every launch in the suite
 //	                     through a split dispatch on every Vulkan device
+//	JITLLM_ROCM          the ROCm library directory (Opts.HIP.Path); unset
+//	                     searches the default places
 func init() {
+	openDefaults.HIP.Path = os.Getenv("JITLLM_ROCM")
 	if v := os.Getenv("JITLLM_VK_DEVICE"); v != "" {
 		openDefaults.Vulkan.Device = v
 	}

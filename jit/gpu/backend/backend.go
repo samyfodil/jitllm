@@ -334,7 +334,7 @@ func Record(rec Recorder, f func()) (Recording, error) {
 }
 
 // Open returns every backend that initialises on this host, in the order
-// CUDA, Vulkan, Metal. Absent hardware is not an error: a machine with no GPU
+// CUDA, HIP, Vulkan, Metal. Absent hardware is not an error: a machine with no GPU
 // returns an empty slice, which is the same shape as a machine with three.
 func Open() []Device { return OpenWith(openDefaults) }
 
@@ -356,12 +356,14 @@ type Opts struct {
 	CUDAPosted bool
 	// Metal is the Metal context's compile and wait choices.
 	Metal metal.Opts
+	// HIP is where ROCm is looked for. Zero searches the default places.
+	HIP HIPConfig
 }
 
 // OpenWith is Open with the devices' open choices.
 func OpenWith(o Opts) []Device {
 	var out []Device
-	for _, f := range []func(Opts) (Device, error){openCUDA, openVulkan, openMetal} {
+	for _, f := range []func(Opts) (Device, error){openCUDA, openHIP, openVulkan, openMetal} {
 		t0 := time.Now()
 		d, err := f(o)
 		if verbose {

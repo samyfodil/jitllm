@@ -42,6 +42,9 @@ func gpuOptions() []tier.Option {
 	if set("JITLLM_GPU_VERBOSE") {
 		o = append(o, tier.WithVerbose(true))
 	}
+	if v := str("JITLLM_ROCM"); v != "" {
+		o = append(o, tier.WithROCm(v))
+	}
 	if v := str("JITLLM_VK_DEVICE"); v != "" {
 		o = append(o, tier.WithVulkanDevice(v))
 	}
