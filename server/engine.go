@@ -76,8 +76,14 @@ type Config struct {
 	// prefills its whole prompt, as a session given no KVStore does.
 	NoMemCache bool
 	// MemCacheBytes bounds each model's memory cache; zero is an eighth
-	// of the model's host share.
+	// of the model's host share, and never more than an eighth of what the
+	// host has available when the cache grows (storeLimit).
 	MemCacheBytes uint64
+	// HostBudget is the host memory every loaded model's share is divided
+	// from. Zero asks the host at each load: sched.MemBudget, the smallest of
+	// the cgroup's limit, the bound NUMA nodes' memory and what is available,
+	// less a slice, plus what this engine's models already hold.
+	HostBudget uint64
 	// SessionPool is how many reset States each model keeps for model_id
 	// requests: zero is LoadOptions.Sessions (at least one), negative none.
 	SessionPool int
@@ -150,12 +156,14 @@ type Engine struct {
 	modelDir atomic.Pointer[string]
 
 	// The host budget the models divide (budget.go), guarded by mu: total is
-	// read once, order is the models in load order, and priority gives the
-	// favored model all but an eighth.
-	total    uint64
-	order    []string
-	priority bool
-	favored  string
+	// read at each load (rereadHostLocked), order is the models in load order,
+	// and priority gives the favored model all but an eighth. hostAvail, set
+	// by a test, replaces sched.MemBudget as the host's answer.
+	total     uint64
+	hostAvail func() uint64
+	order     []string
+	priority  bool
+	favored   string
 
 	preempt preemptStats
 
@@ -439,8 +447,14 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 
 	// The share is computed before the open, because model.Open and the tier
 	// otherwise read sched.MemBudget() themselves, ignoring what the loaded
-	// models already hold. A budget the caller named is a pin.
+	// models already hold. A budget the caller named is a pin. The host is
+	// asked again first: what it has to give moved since the last load.
 	hostBudget := o.PageBudgetBytes
+	e.mu.Lock()
+	if e.cfg.HostBudget == 0 {
+		e.rereadHostLocked()
+	}
+	e.mu.Unlock()
 	if hostBudget == 0 {
 		e.mu.Lock()
 		hostBudget = e.sharesLocked(id)[id]
@@ -2031,7 +2045,7 @@ func (e *Engine) applyPageBudget(lm *LoadedModel, newest *model.State) {
 	// host memory too. The store's bound is a share of the model's budget,
 	// set here so it follows every re-division.
 	if st := lm.ttft.store; st != nil {
-		st.SetLimit(e.storeLimit(avail))
+		st.SetLimit(e.storeLimit(avail, st.Bytes()))
 		kv += st.Bytes()
 	}
 	if kv < avail {

@@ -90,15 +90,52 @@ func shares(total uint64, paths []string, active string, priority bool, pins map
 	return out
 }
 
-// hostTotal is the host budget every loaded model's share is divided from,
-// read once: sched.MemBudget follows MemAvailable, so a second read after the
-// weights are resident would count the engine's own footprint as taken.
-// Guarded by e.mu.
+// hostTotal is the host budget every loaded model's share is divided from:
+// Config.HostBudget when the caller named one, else what the host offered at
+// the last load (rereadHost). Guarded by e.mu.
 func (e *Engine) hostTotal() uint64 {
+	if e.cfg.HostBudget > 0 {
+		return e.cfg.HostBudget
+	}
 	if e.total == 0 {
-		e.total = sched.MemBudget()
+		e.rereadHostLocked()
 	}
 	return e.total
+}
+
+// rereadHostLocked asks the host again, at a load: sched.MemBudget is the
+// smallest of the cgroup, the bound NUMA nodes and what is available now, so
+// memory other processes took since the last load is no longer counted as
+// ours. What this engine's models hold is added back -- MemBudget reads it as
+// taken, and it is the engine's to divide. e.mu held.
+func (e *Engine) rereadHostLocked() {
+	e.total = e.availNow() + e.heldLocked()
+}
+
+// heldLocked is the host memory this engine's models hold: resident weights,
+// the memory caches, and every session's and pooled State's history. e.mu
+// held.
+func (e *Engine) heldLocked() uint64 {
+	var n uint64
+	for _, lm := range e.models {
+		n += lm.m.HostBytes() + lm.idleKV()
+		if st := lm.ttft.store; st != nil {
+			n += st.Bytes()
+		}
+		for _, s := range lm.sessions {
+			n += s.snapKV.Load()
+		}
+	}
+	return n
+}
+
+// availNow is the host budget as the host states it now. A test replaces it
+// (Engine.hostAvail) to hold the host's answer still.
+func (e *Engine) availNow() uint64 {
+	if e.hostAvail != nil {
+		return e.hostAvail()
+	}
+	return sched.MemBudget()
 }
 
 // sharesLocked divides the host budget between the loaded models, plus extra

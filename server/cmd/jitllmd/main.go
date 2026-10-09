@@ -167,7 +167,11 @@ func serve(args []string) {
 	noStore := fs.Bool("no-mem-cache", false,
 		"turn off each model's memory cache: every request prefills its whole prompt")
 	storeMax := fs.String("mem-cache-max", "",
-		"bound each model's memory cache, e.g. 2G (default: an eighth of the model's host share)")
+		"bound each model's memory cache, e.g. 2G (default: an eighth of the model's host share, "+
+			"and no more than an eighth of what the host has free)")
+	hostMem := fs.String("host-mem", "",
+		"host memory the loaded models divide, e.g. 64G (default: re-read at each load, eight tenths "+
+			"of the smallest of the cgroup limit, the bound NUMA nodes' memory and what is available)")
 	pool := fs.Int("session-pool", 0,
 		"reset sessions each model keeps for model_id requests; 0 is -sessions, -1 none")
 	maxQueue := fs.Int("max-queue", 0,
@@ -211,6 +215,15 @@ func serve(args []string) {
 		storeBytes = b
 	}
 
+	var hostBytes uint64
+	if *hostMem != "" {
+		b, err := tier.ParseBytes(*hostMem)
+		if err != nil {
+			fatal("-host-mem: %v", err)
+		}
+		hostBytes = b
+	}
+
 	joint, ok := map[string]server.JointSteps{
 		"auto": server.JointMeasured, "always": server.JointAlways, "never": server.JointNever,
 	}[*jointSteps]
@@ -246,6 +259,7 @@ func serve(args []string) {
 
 		NoMemCache:    *noStore,
 		MemCacheBytes: storeBytes,
+		HostBudget:    hostBytes,
 		SessionPool:   *pool,
 		MaxQueue:      *maxQueue,
 		RetryAfter:    *retry,
