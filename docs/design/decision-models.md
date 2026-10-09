@@ -1,0 +1,261 @@
+# Decision models
+
+The user's term for a family of models that answer typed questions about a
+piece of text (or an image) in one forward pass and generate nothing. Hugging
+Face tags them `decision-model`, `system-one`, `systemone`, `jev`,
+`calibrated-decisions`, `rlcd`; their pipelines read zero-shot-classification
+or text-classification, and several say image-text-to-text because their
+backbone is a vision-language model.
+
+This file is the research the build stands on. It was written before any code,
+from the model cards, the reference code each publisher ships, TypeSafe's SDK
+and llama.cpp's implementation (PR 29818, PR 29831, master at the time of
+writing, `tools/server/server-decision.cpp`, `src/models/modern-bert.cpp`,
+`src/models/clef.cpp`, `src/models/lfm2.cpp`, `conversion/{bert,lev,lfm2,clef}.py`).
+The user decided the family is to be added (recorded in
+`docs/design/model-coverage.md`).
+
+## 1. What JEV, System One and `/v1/systemone` are
+
+**Jev is TypeSafe AI's hosted "System One model"** (closed weights, `jev-latest`
+on `api.typesafe.ai`). It takes a **state** (any string or JSON value) and a map
+of named **questions**, and returns a typed **answer** per question with
+probabilities, from a forward pass rather than generated text. "System One" is
+the Kahneman framing: the fast, non-deliberative decision, as opposed to an
+LLM's System Two.
+
+The wire contract is TypeSafe's OpenAPI (`https://api.typesafe.ai/openapi.json`,
+vendored as `typesafe_sdk/_schemas/models.py` in the PyPI `typesafe-sdk` 0.7.2):
+
+    POST /v1/systemone
+    request  {"model": str, "state": str|object|array,
+              "questions": {id: Question}}                      (>= 1 question)
+    Question  {"type": "noul",   "instructions"?: J, "criteria"?: {"true"?: J, "false"?: J}}
+            | {"type": "choice", "instructions"?: J, "criteria": {name: J|null}}
+            | {"type": "score",  "instructions"?: J, "criteria": [J, ...]}   (level i = index i)
+    response {"model": str, "answers": {id: Answer},
+              "usage": {"input_tokens": int, "output_tokens": int}}
+    Answer    {"type": "noul",   "noul": P(yes)}
+            | {"type": "choice", "choice": name, "confidence": c, "probabilities": {name: p}}
+            | {"type": "score",  "score": E[level], "confidence": c,
+               "legend": {"i": criteria[i]}, "probabilities": {"i": p}}
+    422      {"detail": [{"loc": [...], "msg": str, "type": str}]}
+    GET /v1/models -> {"models": [{"name", "description", "release_date"}]}
+
+`J` is a string, an object or an array. `noul` is TypeSafe's word for a yes/no
+(it reads as "null-or-yes/no"; the answer is one probability). Every open model
+below says it "speaks Jev": it implements this endpoint, or its server does.
+
+**ggmlc** is not a model: it is `monatis/ggmlc`, a compiler that lowers PyTorch
+models to GGML graphs; its GGUFs (`mys/laya-GGUF`, `mys/kev-*-GGUF`) carry
+`general.architecture = ggmlc` and are explicitly not llama.cpp GGUFs. jitllm's
+converter does not read them (it reads llama.cpp's own conversions,
+`ggml-org/*-GGUF`, and the safetensors releases).
+
+**`ggml-org/convert`** is the automated converter that produced
+`ggml-org/Laya-GGUF`, `ggml-org/Clef-Flash-GGUF`, `ggml-org/lev-GGUF`.
+
+## 2. How a decision is read out -- the four mechanisms
+
+Every model maps (state, question) to one score per option, then
+`softmax(score / T)` per question with a fitted temperature `T`, then the
+answer arithmetic of section 4. They differ in where the scores come from:
+
+| readout | models | the score of option i |
+|---|---|---|
+| **marker head** (encoder) | Laya, Julia-1, Von | a [MASK] token precedes each option's text; after the encoder, a type embedding is added to every row, a small head (2 pre-norm transformer blocks) runs, and a scorer (LayerNorm, Linear, GELU, Linear to 1) reads each marker row |
+| **label-token logits** (decoder) | Lev, d1, OpenJev, Nimble, Decider, SemIf, Rizzo | each option is shown with a one-token code (A, B, ...; yes/no; digits); the next-token logit of that code at the prompt's last position |
+| **pointer head** (decoder) | Kev | the hidden state at each option's end token dotted with the question's last-token state, both through a learned projection |
+| **joint span head** (decoder) | Clef, Clef-Flash | mean-pooled spans of every question and option over the backbone's last hidden states, a small transformer head over those summaries, all questions in one pass |
+
+Only the first and last need weights beyond the backbone. The label-token
+readout is the backbone's own LM head read at a handful of ids, which is why
+it covers most of the family with no new architecture.
+
+## 3. The models
+
+### Laya (convaiinnovations/laya; GGUF ggml-org/Laya-GGUF BF16, Q8_0)
+
+- **Backbone**: ModernBERT-large, 28 blocks, d=1024, 16 heads, GeGLU FFN 2624,
+  LayerNorm without bias (eps 1e-5), no biases anywhere, rotary everywhere,
+  every third layer global (theta 160000) and the rest local (theta 10000,
+  symmetric window 128: a token sees 64 either side), layer 0's attention norm
+  the identity, a final norm. Tokenizer: GPT-2 byte-level BPE (`modern-bert`
+  pre-tokenizer, which jitllm already has), [CLS]=50281, [SEP]=50282,
+  [MASK]=50284. Multilingual variant: mmBERT-base (22 blocks, 256k vocab), same
+  graph. ModernBERT is a NEW encoder architecture for jitllm: the bert and
+  nomic-bert encoders are post-norm with learned or plain rotary.
+- **Head** (`rl_common.DecisionModel`): `h = encoder(x) + type_emb[qtype]` on
+  every row; two `nn.TransformerEncoderLayer(d, 16 heads, 4d, norm_first=True)`
+  (LayerNorm with bias, biased fused qkv and out, ReLU FFN, no positions,
+  bidirectional); scorer `Linear(1,d) . GELU(erf) . Linear(d,d) . LayerNorm(d)`
+  on the marker rows. An `act_head` exists and is unused for the answer (the
+  card says it carries no signal; llama.cpp drops it).
+- **Prompt**: `[CLS] "<type> question: <instructions>" [SEP] ([MASK] " <option>")* [SEP] <state> [SEP]`,
+  option texts `key: description` (choice), `level i: description` (score),
+  `false: ...` / `true: ...` (noul, with defaults "no, the statement does not
+  hold" / "yes, the statement holds"); each option cut to 48 tokens, all
+  options shrunk evenly when they leave the question under 16 of
+  `head_max_len` (192), the question cut to the rest, the state cut to
+  `max_len` (512). One sequence per question.
+- **Readout**: the scorer at the markers; one forward per question.
+- **Calibration**: `temperature` per type (choice 1.637, score 1.251, noul
+  1.983) and `temperature_by_options` per (type, option-count band 2 / 3-5 /
+  6-10 / 11+), which wins when present.
+- **Confidence**: Laya's own code returns `1 - H(p)/log k`; llama.cpp returns
+  TypeSafe's formula (section 4). A divergence (RULE 7m), recorded below.
+- **llama.cpp**: `modern-bert` arch with `decision.block_count` trailing head
+  blocks, `token_types` (3 rows), `cls`/`cls.norm`/`cls.output` the scorer;
+  `decision.type = laya`, `decision.max_head_tokens`, temperatures as
+  `decision.temperature.<type>[.<band>]`; the prompt is the GGUF's
+  `tokenizer.chat_template.systemone`. The graph runs the head three times (one
+  per type) because the type is not a graph input; only the asked type is
+  needed.
+
+### Clef-Flash (Cloudflare/clef-flash; GGUF ggml-org/Clef-Flash-GGUF Q8_0)
+
+- **Backbone**: Qwen3.5-9B (jitllm's `qwen35`, a hybrid of gated delta rule and
+  attention), with its vision tower.
+- **Head** (`joint_schema_model.py`, `joint_head.safetensors`): the backbone's
+  final hidden states, mean-pooled over each question's instruction span and
+  each option's span (the prompt marks them; llama.cpp passes the spans as a
+  per-token "decision order": 0 text, 1/2/3 a noul/choice/score question, 4 an
+  option), then "routing" blocks and head blocks (`decision.routing_block_count`,
+  `decision.block_count`), projections (memory, question, option-question,
+  global, option-context, option-lexical), norms and a scorer -- one logit per
+  option of every question, jointly, in one pass.
+- **Prompt**: a system prompt ("Read the complete state and schema. Decide
+  every field jointly...") and the whole schema with JSON keys sorted, choice
+  options sorted by key, noul shown true first.
+- **llama.cpp**: arch `clef` (PR 29831), text only, one sequence per batch.
+- jitllm needs: a container for the head, the span pooling and the head
+  blocks as generated kernels, and the order map through prefill.
+
+### d1-3B (LiquidAI/d1-3B; GGUF LiquidAI/d1-3B-GGUF Q4_K_M/Q8_0/BF16 + mmproj)
+
+- **Backbone**: LFM2.5-VL-3B: LFM2 (short convolutions beside attention; jitllm
+  has `lfm2`) and a SigLIP2 NaFlex tower (no projector entry in jitllm yet).
+- **Readout**: label-token logits (`decision.type = lfm2-d1`). Codes: the
+  option keys themselves when every key is one letter, else A, B, ... (<= 26)
+  or 00..99, falling back through a pool, each code required to be one token;
+  a group per option of that token and the token of " "+code, scored by the
+  max logit in the group. noul reads {yes, Yes, YES} against {no, No, NO};
+  score reads the digit keys. noul is shown true first.
+- **Prompt**: `<|startoftext|><|im_start|>user\n<state>\n\n\nQUESTION:\n<instructions>`
+  + the options block + `<|im_end|>\n<|im_start|>assistant\n`; state may be
+  null when images are the state.
+- "d1-3B-AD" in the user's table is a file name, not a different release found
+  on the Hub; LiquidAI's GGUFs are the publisher's.
+
+### Lev 4B (interfaze-ai/lev; GGUF ggml-org/lev-GGUF)
+
+- **Backbone**: Qwen3.5-4B + a LoRA (r=32, alpha=64, q/k/v/o and MLP), PEFT
+  safetensors. Merged at conversion (`scale * B @ A` added to the base weight),
+  which is what llama.cpp's converter does and what the reference computes:
+  the adapter is static, nothing switches it at run time, so a runtime adapter
+  would spend a matmul per projection per token on a constant (house rule:
+  precompute at conversion).
+- **Readout**: label-token logits ("mode A"). Codes A..Z then AA..ZZ, only
+  those that are one token, at most 255. A choice is rendered twice, options in
+  forward and in reverse order, and the two softmaxes averaged (cancels
+  position bias). A noul is a 9-level scale "0 = certainly no ... 8 = certainly
+  yes", read at the first nine codes, `noul = sum_i p_i * i/8`.
+- **Mode B** (`mode_b_head.pt`, a candidate-path head for large option sets) is
+  not converted by llama.cpp; lev's server routes choice sets over the tokenizer
+  limit to it. Not in scope until mode A is done.
+- **Prompt**: Qwen chat format, system prompt "You are a System One decision
+  model...", `# Evidence`, `# Criterion`, `# Options` / `# Scale`, an empty
+  `<think>` block, JSON keys sorted.
+- **Calibration**: `calibration.json`, per (type, mode, band) with bands small
+  <= 8, mid <= 26, large.
+- **Reference server**: `lev serve` (FastAPI): `POST /v1/systemone`,
+  `GET /health`, 422 on a malformed question.
+
+### Coordinator additions (named, not all built)
+
+| model | backbone | readout | notes |
+|---|---|---|---|
+| Kev (jaredpalmer/kev-0.8b/4b/9b) | Qwen3.5 + LoRA r16 | pointer head | state reused across questions |
+| Nimble (bespokelabs/Bespoke-Nimble-9B) | Qwen3.5-9B + LoRA r16 | label-token logits; the prompt lists every question | |
+| OpenJev (ggml-org/OpenJev-GGUF) | 27B VL | label-token logits, letters A..z | |
+| SemIf | any instruct LLM, e.g. Qwen3.5-4B | label-token logits; no checkpoint | a readout mode, not a model |
+| Rizzo Flow (Spark-X2.5 1.7B-4B) | via llama.cpp | label-token logits A/B/C | KV reuse across questions |
+| Von (wfzyx/von-1.0) | ModernBERT 395M | marker head (OptionMarker) | Laya's graph |
+| NanoJev (C-Tianyu/NanoJev) | Qwen3-0.6B | per-type heads (set attention, sigmoid, ordinal) | |
+
+## 4. The answer arithmetic (shared)
+
+Per question, per variant: `p = softmax((s - max s) / T)`; variants (Lev's
+reversed order) averaged in the original order. Then:
+
+- noul: `P(true)`; Lev: the expected rating `sum p_i i/8`.
+- choice: argmax key, `probabilities`, `confidence`.
+- score: `score = sum i p_i`, `legend`, `probabilities`, `confidence`.
+
+Confidence, as llama.cpp implements it ("the ones published by TypeSafe"):
+choice `max(0, (p_max - 1/k) / (1 - 1/k))`; score `max(0, 1 - E|i - mode| /
+E_uniform|i - (k-1)/2|)`. Laya's own code uses `1 - H(p)/log k` for both.
+
+Temperature lookup: `<type>.<band>` then `<type>` then 1. Bands are 2 / 3-5 /
+6-10 / 11+ except Lev (small <= 8, mid <= 26, large).
+
+## 5. What "per word" means in the user's benchmark
+
+The user's table (per-word p50 latency, words processed in 32 s, accuracy,
+"centipede names caught", "wrong picks") was not found published. Its shape is
+a stream of words, each one a `/v1/systemone` request whose state is the word
+(or the word in context) and whose question is a noul ("is this a centipede
+name?") or a choice. So:
+
+- **per-word p50**: the median wall time of one request, request to answer.
+- **words in 32 s**: requests completed in a 32-second window, serially.
+- **accuracy**: argmax answer equal to the label, over the labelled words.
+- **caught**: positives answered positive (recall's numerator).
+- **wrong picks**: negatives answered positive (false positives).
+
+`dev/decisionbench` reproduces it from a labelled file (one word and its label
+per line) against any server speaking `/v1/systemone` -- jitllm's, llama.cpp's,
+`lev serve` -- so the same harness measures every engine in the table. Its
+correctness (the counting, not the speed) is gated on a small labelled file
+against a scripted server.
+
+## 6. llama.cpp's coverage (b11514, the build fetched here)
+
+`llama-server` serves `POST /v1/systemone` when the GGUF carries
+`<arch>.decision.type` (`laya`, `julia-1`, `lev`, `openjev`, `kev`, `nimble`,
+`pplx-decider`, `clef`, `lfm2-d1`, `lfm2-d1-omni`), with the prompt from the
+GGUF's `tokenizer.chat_template.systemone` rendered by its jinja engine and the
+temperatures from the metadata. One task per question (one per variant for
+Lev), the shared prompt prefix of a request's tasks evaluated once on causal
+models. Requires `instructions` (TypeSafe makes it optional: a divergence of
+llama.cpp from the protocol, and jitllm follows the protocol, rendering the
+question id when it is absent as Clef's code does).
+
+## 7. Where jitllm stands, and the order
+
+What exists: `qwen35` (Lev's and Clef's backbone), `lfm2` (d1's), the GGUF
+chat templates carried by name into the container (so `systemone` arrives
+already), `tok/jinja` to render it, the prefix cache to reuse a state's rows
+across questions, the bert/nomic-bert encoder on the host (no device tier).
+
+Order, by what each unlocks (coordinator's priorities):
+
+1. **The protocol and the label-token readout**: the decision metadata in the
+   container (kind, temperatures, head budget), the systemone template rendered
+   with `tok/jinja`, the logits read at label ids at the last row, the answer
+   arithmetic, `POST /v1/systemone` on the server, `jitllm decide` on the CLI,
+   and `dev/decisionbench`. Covers Lev and d1 (text) on every tier the backbone
+   already runs on, and SemIf/Rizzo/Nimble/OpenJev as readout modes.
+2. **Laya**: ModernBERT as a new encoder architecture to RULE 7's bar, plus the
+   marker head and scorer as generated kernels; host first (the encoder path has
+   no device tier today, which is the larger missing piece).
+3. **Clef-Flash**: the joint head on qwen35.
+4. Kev's pointer head, NanoJev, d1's vision tower.
+
+## 8. Divergences to record (RULE 7m)
+
+| where | llama.cpp | the reference | jitllm |
+|---|---|---|---|
+| `instructions` absent | refused (400) | TypeSafe: optional; Clef: the question id | the protocol: the id is rendered |
+| Laya confidence | TypeSafe's formula | `1 - H(p)/log k` | per model, the publisher's code (decided when Laya lands) |
+| Laya head per type | runs all three types | runs the asked type | the asked type (same answer, a third of the head's work) |
