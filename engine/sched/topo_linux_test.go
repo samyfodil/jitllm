@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"syscall"
 	"testing"
 	"unsafe"
@@ -174,5 +175,70 @@ func TestPCoresTakesTheThreadTheMaskAllows(t *testing.T) {
 	}
 	if got := DecodeCores(); len(got) != 4 {
 		t.Fatalf("DecodeCores = %v: four cores are in the mask", got)
+	}
+}
+
+// TestPoolWidthWithoutAnAffinityMask stands in for a sandbox (Modal's gVisor)
+// that answers neither sched_getaffinity nor /sys topology. PCores once returned
+// nothing there and DecodeCores fell back to one CPU, so the shipped engine
+// decoded on one worker. The pool now takes the online list, cut to the cgroup
+// quota, and with a mask and no topology the mask.
+func TestPoolWidthWithoutAnAffinityMask(t *testing.T) {
+	oldRoot, oldAff := sysRoot, affinity
+	defer func() { sysRoot, affinity = oldRoot, oldAff }()
+	affinity = func() map[int]bool { return nil }
+
+	tree := func(online, cpuMax string, sibs []string) string {
+		root := t.TempDir()
+		write := func(rel, s string) {
+			p := filepath.Join(root, rel)
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(s+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if online != "" {
+			write("devices/system/cpu/online", online)
+		}
+		if cpuMax != "" {
+			write("fs/cgroup/cpu.max", cpuMax)
+		}
+		for cpu, s := range sibs {
+			write(fmt.Sprintf("devices/system/cpu/cpu%d/topology/thread_siblings_list", cpu), s)
+		}
+		return root
+	}
+	for _, c := range []struct {
+		name   string
+		root   string
+		mask   map[int]bool
+		want   int
+		source string
+	}{
+		{"online list, no quota", tree("0-7", "", nil), nil, 8, "no affinity mask"},
+		{"online list, quota of 3.5", tree("0-7", "350000 100000", nil), nil, 4, "cgroup quota 4"},
+		{"unlimited quota", tree("0-5", "max 100000", nil), nil, 6, "no affinity mask"},
+		{"topology, quota of 2", tree("", "200000 100000", []string{"0,4", "1,5", "2,6", "3,7", "0,4", "1,5", "2,6", "3,7"}), nil, 2, "sysfs topology"},
+		{"no topology, a mask", tree("0-7", "", nil), map[int]bool{1: true, 3: true, 5: true}, 3, "affinity mask"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sysRoot = c.root
+			affinity = func() map[int]bool { return c.mask }
+			d := DecodeCores()
+			if len(d) != c.want {
+				t.Fatalf("DecodeCores = %v, want %d CPUs (source: %s)", d, c.want, CoreSource())
+			}
+			p := New(d)
+			defer p.Close()
+			if p.N() != c.want {
+				t.Fatalf("pool of %d participants, want %d", p.N(), c.want)
+			}
+			if src := CoreSource(); !strings.Contains(src, c.source) {
+				t.Fatalf("CoreSource = %q, want it to name %q", src, c.source)
+			}
+			t.Logf("%d workers from %s", p.N(), CoreSource())
+		})
 	}
 }
