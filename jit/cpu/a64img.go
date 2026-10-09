@@ -106,3 +106,12 @@ func ld1bLane(lane uint8) uint32 {
 	l := uint32(lane)
 	return (l>>3)<<30 | (l>>2&1)<<12 | (l&3)<<10
 }
+
+// FCVTN4h is fcvtn vd.4h, vn.4s: four float32 to binary16 under FPCR's
+// rounding (nearest-even as Go runs), the upper half of vd cleared.
+func (a *A64) FCVTN4h(vd, vn VReg) { a.w(0x0E216800 | uint32(vn)<<5 | uint32(vd)) }
+
+// CMGT8h is cmgt vd.8h, vn.8h, vm.8h: the signed int16 greater-than.
+func (a *A64) CMGT8h(vd, vn, vm VReg) {
+	a.w(0x4E603400 | uint32(vm)<<16 | uint32(vn)<<5 | uint32(vd))
+}
