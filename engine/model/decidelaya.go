@@ -231,15 +231,10 @@ func (d *Decider) layaRun(state jinja.Value, q *DecisionQuestion) ([]float32, er
 }
 
 // layaConfidence is Laya's own (rl_common.confidence_from_probs): one minus
-// the answer's entropy over log k. llama.cpp gives TypeSafe's formula instead.
-func layaConfidence(p []float64) float64 {
-	k := len(p)
-	if k < 2 {
+// the answer's entropy h over log n. llama.cpp gives TypeSafe's formula instead.
+func layaConfidence(h float64, n int) float64 {
+	if n < 2 {
 		return 1
 	}
-	h := 0.0
-	for _, x := range p {
-		h -= x * math.Log(min(max(x, 1e-12), 1))
-	}
-	return 1 - h/math.Log(float64(k))
+	return 1 - h/math.Log(float64(n))
 }

@@ -6,9 +6,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"github.com/samyfodil/jitllm/engine/nn"
 	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/samyfodil/jitllm/format/quant"
 	"github.com/samyfodil/jitllm/tok/jinja"
 )
 
@@ -82,6 +84,10 @@ type Decider struct {
 
 	scores []float32
 	input  int
+
+	// The answer's scratch: the averaged probabilities, one variant's, a
+	// working row, and the ramp 0..n-1 (answer).
+	acc, prob, row, ramp []float32
 
 	// emb is the encoder's working memory, for a readout that runs on an
 	// encoder (Laya); st is nil then.
@@ -501,9 +507,12 @@ func containsID(s []int32, id int32) bool {
 }
 
 // answer calibrates and averages a question's variants and forms the answer
-// (server-decision.cpp: format_answer, which is TypeSafe's arithmetic). The
-// softmax over the scaled scores is generated code; what follows is a few
-// scalars per question.
+// (server-decision.cpp: format_answer, which is TypeSafe's arithmetic). Every
+// operation over the option scores is generated code: the scale and softmax,
+// the variants' mean (axpy), the expected level and the distance to the mode
+// (f32 matvecs against a ramp and a distance row, tables of whole numbers),
+// the mode (argmax) and Laya's entropy (log-softmax and a matvec). What is
+// left in Go is a handful of scalars per question.
 func (d *Decider) answer(q *DecisionQuestion, variants [][]float32) (DecisionAnswer, error) {
 	shown := d.order(q)
 	n := len(variants[0])
@@ -511,100 +520,162 @@ func (d *Decider) answer(q *DecisionQuestion, variants [][]float32) (DecisionAns
 	if d.violation == "uncalibrated" {
 		t = 1
 	}
-	probs := make([]float64, n)
-	if cap(d.scores) < n {
-		d.scores = make([]float32, n)
-	}
+	d.growAnswer(n)
+	acc, p, row := d.acc[:n], d.prob[:n], d.row[:n]
+	clear(acc)
 	for v, s := range variants {
 		if len(s) != n {
 			return DecisionAnswer{}, fmt.Errorf("variant %d has %d scores, want %d", v, len(s), n)
 		}
-		p := d.scores[:n]
-		copy(p, s)
-		for _, x := range p {
+		for _, x := range s {
 			if x != x {
 				return DecisionAnswer{}, fmt.Errorf("the model could not evaluate the decision (a score is NaN)")
 			}
 		}
-		nn.Scale32JIT(p, 1/t)
-		nn.Softmax32JIT(p, n)
-		for i := range p {
-			j := i
-			if v == 1 {
-				j = n - 1 - i
+		// The second variant shows the options reversed: its scores go back
+		// to the request's order before they are averaged in.
+		if v == 1 && d.violation != "unreversed" {
+			for i := range p {
+				p[i] = s[n-1-i]
 			}
-			probs[j] += float64(p[i]) / float64(len(variants))
+		} else {
+			copy(p, s)
 		}
+		nn.Scale32JIT(p, 1/t)
+		if d.kind == jlm.DecisionLaya {
+			copy(row, p) // the scaled scores, for the entropy below
+		}
+		nn.Softmax32JIT(p, n)
+		w := 1 / float32(len(variants))
+		if d.violation == "summed" {
+			w = 1
+		}
+		nn.Axpy32JIT(acc, p, w)
 	}
 	a := DecisionAnswer{Type: q.Type}
 	if q.Type == jlm.QuestionNoul {
 		if d.kind == jlm.DecisionLev {
-			for i, p := range probs {
-				a.Noul += p * float64(i) / float64(n-1)
+			// The expected rating over 0..n-1, as a probability of yes.
+			e, err := d.dot(acc, d.ramp[:n])
+			if err != nil {
+				return a, err
 			}
+			a.Noul = float64(e) / float64(n-1)
 			return a, nil
 		}
 		for i, o := range shown {
 			if o.Key == "true" {
-				a.Noul = probs[i]
+				a.Noul = float64(acc[i])
 			}
 		}
 		return a, nil
 	}
 	// Choice and score options were shown in the request's order.
-	a.Probs = probs
-	best := 0
-	for i := range probs {
-		if probs[i] > probs[best] {
-			best = i
-		}
+	a.Probs = make([]float64, n)
+	for i, x := range acc {
+		a.Probs[i] = float64(x)
 	}
+	best, ok := nn.Argmax32JIT(acc)
+	if !ok {
+		return a, fmt.Errorf("model: no generated argmax on this host")
+	}
+	top := float64(acc[best])
 	if q.Type == jlm.QuestionChoice {
 		a.Choice = q.Options[best].Key
-		a.Confidence = confidenceChoice(probs)
+		a.Confidence = confidenceChoice(top, n)
 	} else {
-		for i, p := range probs {
-			a.Score += float64(i) * p
+		e, err := d.dot(acc, d.ramp[:n])
+		if err != nil {
+			return a, err
 		}
-		a.Confidence = confidenceScore(probs)
+		a.Score = float64(e)
+		// The mean distance to the mode, against a uniform distribution's
+		// mean distance to its centre: sum |i - (n-1)/2| / n, which is n/4
+		// for an even count and (n*n-1)/(4n) for an odd one.
+		// p is free once the variants are in acc; row keeps Laya's scores.
+		for i := range p {
+			p[i] = float32(abs(i - int(best)))
+			if d.violation == "from-zero" {
+				p[i] = float32(i)
+			}
+		}
+		dist, err := d.dot(acc, p)
+		if err != nil {
+			return a, err
+		}
+		uni := float64(n) / 4
+		if n%2 == 1 {
+			uni = float64(n*n-1) / float64(4*n)
+		}
+		a.Confidence = confidenceScore(float64(dist), uni, n)
 	}
 	if d.kind == jlm.DecisionLaya {
-		a.Confidence = layaConfidence(probs)
+		// One minus the entropy over log n: -sum p log p, with log p the
+		// log-softmax of the same scaled scores (one variant on Laya).
+		nn.LogSoftmax32JIT(row, n)
+		h, err := d.dot(acc, row)
+		if err != nil {
+			return a, err
+		}
+		a.Confidence = layaConfidence(-float64(h), n)
 	}
 	return a, nil
 }
 
+func abs(i int) int {
+	if i < 0 {
+		return -i
+	}
+	return i
+}
+
+// growAnswer sizes the answer's scratch for n options, and the ramp 0..n-1
+// a level's expectation is read against.
+func (d *Decider) growAnswer(n int) {
+	if len(d.acc) >= n {
+		return
+	}
+	d.acc, d.prob, d.row = make([]float32, n), make([]float32, n), make([]float32, n)
+	d.ramp = make([]float32, n)
+	for i := range d.ramp {
+		d.ramp[i] = float32(i)
+	}
+}
+
+// dot is x . w over len(x) on the generated f32 matvec, w a one-row weight.
+func (d *Decider) dot(x, w []float32) (float32, error) {
+	j := d.jit()
+	var out [1]float32
+	b := unsafe.Slice((*byte)(unsafe.Pointer(&w[0])), 4*len(w))
+	if !j.MatVecHost(out[:], quant.F32, b, x, 1, len(x)) {
+		return 0, fmt.Errorf("model: no generated f32 matvec of width %d on this host", len(x))
+	}
+	return out[0], nil
+}
+
+// jit is the code generator the Decider's model runs on.
+func (d *Decider) jit() *nn.JIT {
+	if d.emb != nil {
+		return d.emb.jit
+	}
+	return d.st.jit
+}
+
 // confidenceChoice is TypeSafe's choice confidence: how far the top
 // probability stands above uniform, on [0, 1].
-func confidenceChoice(p []float64) float64 {
-	if len(p) < 2 {
+func confidenceChoice(top float64, n int) float64 {
+	if n < 2 {
 		return 1
 	}
-	u := 1 / float64(len(p))
-	top := 0.0
-	for _, x := range p {
-		top = max(top, x)
-	}
+	u := 1 / float64(n)
 	return max(0, (top-u)/(1-u))
 }
 
 // confidenceScore is TypeSafe's score confidence: one minus the mean distance
 // to the mode, relative to that of a uniform distribution about its centre.
-func confidenceScore(p []float64) float64 {
-	n := len(p)
+func confidenceScore(dist, uni float64, n int) float64 {
 	if n < 2 {
 		return 1
-	}
-	mode := 0
-	for i := range p {
-		if p[i] > p[mode] {
-			mode = i
-		}
-	}
-	var dist, uni float64
-	for i := range p {
-		dist += p[i] * math.Abs(float64(i-mode))
-		uni += math.Abs(float64(i)-float64(n-1)/2) / float64(n)
 	}
 	return max(0, 1-dist/uni)
 }
