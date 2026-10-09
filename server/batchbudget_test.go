@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -10,43 +11,54 @@ import (
 )
 
 // TestStepBudgetFollowsTheMeasurement drives the prompt budget with step
-// times it is told: it starts small; prompt tokens that cost nothing beside
-// a 10 ms decode step double it a step up to the ceiling; at 0.5 ms a token
-// it settles at the 20 tokens that cost one decode step; slower tokens take
-// it to its floor; a step the budget did not limit does not raise it; and a
+// times it is told, a line of the prompt tokens a step carries: it starts
+// small; prompt tokens that cost nothing double it a step up to the ceiling;
+// at 0.5 ms a token beside a 10 ms decode step it settles where the tokens
+// cost cost-1 decode steps (20 at a cost of 2, 60 at 4); a step the budget
+// did not limit does not raise it; slow tokens take it to its floor; and a
 // fixed budget ignores the clock. Against a budget that never reads its
 // measurements, every case after the first reads budgetStart.
 func TestStepBudgetFollowsTheMeasurement(t *testing.T) {
 	const ms = time.Millisecond
-	b := newStepBudget(0, 512)
+	line := func(per time.Duration) func(int) time.Duration {
+		return func(p int) time.Duration { return 10*ms + time.Duration(p)*per }
+	}
+	drive := func(b *stepBudget, steps int, cost func(int) time.Duration) []int {
+		var seen []int
+		for range steps {
+			p := b.tokens()
+			b.observe(4, p, cost(p))
+			seen = append(seen, b.tokens())
+		}
+		return seen
+	}
+	b := newStepBudget(0, 512, 2)
 	if got := b.tokens(); got != budgetStart {
 		t.Fatalf("unmeasured budget %d, want %d", got, budgetStart)
 	}
-	b.observe(4, 0, 10*ms)
-	var seen []int
-	for range 6 {
-		b.observe(4, b.tokens(), 10*ms) // prompt tokens free
-		seen = append(seen, b.tokens())
-	}
-	if seen[0] != 2*budgetStart || seen[len(seen)-1] != 512 {
+	if seen := drive(b, 6, line(0)); seen[0] != 2*budgetStart || seen[len(seen)-1] != 512 {
 		t.Fatalf("free prompt tokens grew the budget %v, want doubling to 512", seen)
 	}
-	for range 4 {
-		p := b.tokens()
-		b.observe(4, p, 10*ms+time.Duration(p)*ms/2) // 0.5 ms a token
+	for _, c := range []struct {
+		cost float64
+		want int
+	}{{2, 20}, {4, 60}} {
+		f := newStepBudget(0, 512, c.cost)
+		seen := drive(f, 40, line(ms/2))
+		if got := f.tokens(); got < c.want-1 || got > c.want+1 {
+			t.Fatalf("cost %.0f: budget %v, want it at %d (10 ms / 0.5 ms x %.0f)", c.cost, seen, c.want, c.cost-1)
+		}
+		f.observe(4, 2, line(ms/2)(2)) // under the budget: says nothing about more
+		if got := f.tokens(); got < c.want-1 || got > c.want+1 {
+			t.Fatalf("cost %.0f: an unlimited step moved the budget to %d", c.cost, got)
+		}
 	}
-	if got := b.tokens(); got != 20 {
-		t.Fatalf("budget %d, want 20 (10 ms / 0.5 ms)", got)
+	slow := newStepBudget(0, 512, 2)
+	drive(slow, 40, line(ms/2))
+	if seen := drive(slow, 60, line(100*ms)); seen[len(seen)-1] != budgetFloor {
+		t.Fatalf("slow prompt tokens took the budget %v, want the floor %d", seen, budgetFloor)
 	}
-	b.observe(4, 5, 10*ms) // under the budget: says nothing about more
-	if got := b.tokens(); got != 20 {
-		t.Fatalf("an unlimited step moved the budget to %d", got)
-	}
-	b.observe(4, 20, 10*ms+2000*ms)
-	if got := b.tokens(); got != budgetFloor {
-		t.Fatalf("budget %d, want the floor %d", got, budgetFloor)
-	}
-	if got := newStepBudget(16, 512).tokens(); got != 16 {
+	if got := newStepBudget(16, 512, 2).tokens(); got != 16 {
 		t.Fatalf("a fixed budget reads %d", got)
 	}
 }
@@ -62,7 +74,9 @@ func TestStepBudgetFollowsTheMeasurement(t *testing.T) {
 func TestHostBatchPromptBesideDecodeIsBounded(t *testing.T) {
 	const bound = 16
 	e, lm, c := hostBatchEngine(t, "Llama-3.2-1B-Instruct-Q4_K_M.jlm",
-		Config{JointSteps: JointAlways, PromptChunk: 64, StepPromptTokens: bound, DefaultMaxSeq: 1024})
+		Config{JointSteps: JointAlways, PromptChunk: 64, StepPromptTokens: bound, DefaultMaxSeq: 1024,
+			// Each run sends the same prompts: the memory cache would restore them.
+			NoMemCache: true})
 	long := strings.Repeat("The little dog ran to the park and played with a red ball. ", 12)
 	reqs := []*v1.GenerateRequest{
 		{ModelId: "dev", Prompt: text(hostPrompts[0]), MaxTokens: 40},
@@ -108,19 +122,66 @@ func TestHostBatchPromptBesideDecodeIsBounded(t *testing.T) {
 		t.Fatalf("%d prompt tokens in one step beside decoding rows, want 1..%d", most, bound)
 	}
 
-	lm.loop.budget = newStepBudget(0, 64)
+	lm.loop.budget = newStepBudget(0, 64, 0)
 	_, most = run()
-	t.Logf("measured: at most %d prompt tokens beside decoding rows; budget now %d (decode step %.1f ms)",
-		most, lm.loop.budget.tokens(), lm.loop.budget.decode/1e6)
+	t.Logf("measured: at most %d prompt tokens beside decoding rows; budget now %d",
+		most, lm.loop.budget.tokens())
 	if most == 0 || most > 64 {
 		t.Fatalf("measured budget: %d prompt tokens beside decoding rows", most)
 	}
 
-	lm.loop.budget = newStepBudget(64, 64)
+	lm.loop.budget = newStepBudget(64, 64, 0)
 	_, most = run()
 	if most <= bound {
 		t.Fatalf("the bound lifted to 64, a step still carried at most %d beside decoding rows: "+
 			"this gate cannot see the bound", most)
 	}
 	t.Logf("violation: the bound lifted, %d prompt tokens beside decoding rows", most)
+}
+
+// TestHostBatchBudgetTrajectoryUnderArrivals is not a timing gate: it runs a
+// closed loop of sixteen clients on the host, each sending a fresh prompt of
+// about 128 tokens for 64 tokens as soon as its last ends, and logs the
+// measured budget's trajectory over the steps beside decoding rows (the
+// deterministic counters: steps, least, mean, most), so a controller stuck
+// at its floor shows. It holds the budget off the floor on average and every
+// request to its 64 tokens.
+func TestHostBatchBudgetTrajectoryUnderArrivals(t *testing.T) {
+	_, lm, c := hostBatchEngine(t, "Llama-3.2-1B-Instruct-Q4_K_M.jlm", Config{DefaultMaxSeq: 512})
+	const clients, each = 16, 3
+	base := strings.Repeat("The little dog ran to the park and played with a red ball. ", 10)
+	var wg sync.WaitGroup
+	errs := make(chan error, clients*each)
+	for i := range clients {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range each {
+				r := complete(c, &v1.GenerateRequest{ModelId: "dev", Prompt: text(fmt.Sprintf("%d.%d %s", i, j, base)),
+					MaxTokens: 64, IgnoreEos: true})
+				if r.err == nil && len(r.ids) != 64 {
+					r.err = fmt.Errorf("client %d request %d: %d tokens", i, j, len(r.ids))
+				}
+				if r.err != nil {
+					errs <- r.err
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	st := &lm.loop.stats
+	n := st.budgetSteps.Load()
+	if n == 0 {
+		t.Fatal("no step ran beside decoding rows: the trajectory measured nothing")
+	}
+	mean := float64(st.budgetSum.Load()) / float64(n)
+	t.Logf("budget over %d steps beside decoding rows: least %d, mean %.1f, most %d; at most %d prompt tokens beside them",
+		n, st.budgetMin.Load(), mean, st.budgetMax.Load(), st.maxPromptBeside.Load())
+	if mean <= budgetFloor {
+		t.Fatalf("the budget sat at its floor (mean %.1f): the controller is stuck low", mean)
+	}
 }

@@ -59,6 +59,13 @@ type Config struct {
 	// step with no decoding row takes PromptChunk whole.
 	StepPromptTokens int
 
+	// StepCost is how many decode steps' time a step carrying prompt tokens
+	// beside decoding rows may take, when StepPromptTokens measures the
+	// budget: the decoding rows' worst inter-token gap against an arriving
+	// prompt's time to its first token. Zero (or up to 1) takes
+	// DefaultStepCost.
+	StepCost float64
+
 	// JointSteps is how a decode step whose rows could run as one joint step
 	// does run: measured per row count (the default), always joint, or never.
 	JointSteps JointSteps

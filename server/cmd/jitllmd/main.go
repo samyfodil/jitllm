@@ -162,6 +162,9 @@ func serve(args []string) {
 	stepPrompt := fs.Int("step-prompt-tokens", 0,
 		"prompt tokens one step carries beside decoding rows. 0 measures it: the tokens "+
 			"that cost one decode step's time")
+	stepCost := fs.Float64("step-cost", 0,
+		"with -step-prompt-tokens 0, how many decode steps' time a step carrying prompt "+
+			"tokens may take (0: the engine's default)")
 	jointSteps := fs.String("joint-steps", "auto",
 		"how a batch's decode step runs: auto (time joint against one session after another, "+
 			"per row count, and run the faster), always (one joint step) or never (each session alone)")
@@ -244,6 +247,7 @@ func serve(args []string) {
 		MaxBatchRows:     *maxBatch,
 		PromptChunk:      *promptChunk,
 		StepPromptTokens: *stepPrompt,
+		StepCost:         *stepCost,
 		JointSteps:       joint,
 		DefaultMaxSeq:    *maxSeq,
 		Version:          *version,

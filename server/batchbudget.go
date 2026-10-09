@@ -10,24 +10,38 @@ import "time"
 // at their next token. Fed at the step's full width (a device or host chunk,
 // 512 rows) that is a whole prefill chunk between two tokens, and the decoding
 // rows' inter-token tail grows by it at every admission. So the loop feeds a
-// prompt in pieces sized to cost about one decode step more: it times the
-// steps it runs anyway -- a decode-only step gives a decode step's time, a
-// step that carries prompt tokens the extra those tokens cost -- and scales the
-// budget so the extra comes to one decode step. Under the compute crossover a
-// prompt token is nearly free beside decoding rows (the step is bound by the
-// weight read either way), so the budget grows, at most doubling a step; past
-// it, it shrinks in proportion. Prompts are fed oldest first (promptUnits), so
-// a long one still finishes, a budget a step.
+// prompt in pieces sized so a step costs at most cost decode steps
+// (Config.StepCost). It fits the steps it runs anyway, a step's time against
+// the prompt tokens it carried beside decoding rows, as a line: the intercept
+// is a decode step's time, the slope a prompt token's. The budget is the
+// tokens whose slope comes to cost-1 intercepts. Steps under arrivals nearly
+// always carry some prompt, so the intercept cannot wait for decode-only
+// steps; and until the steps' widths spread enough to give a slope, or while
+// prompt tokens measure free (under the compute crossover the step is bound
+// by the weight read either way), the budget doubles, which spreads them.
+// Once a fit has given a budget, steps that settle on it keep it.
+//
+// The factor is the policy between two axes: a decoding row's worst
+// inter-token gap is about cost decode steps, and a waiting prompt's time to
+// its first token falls as the factor rises. Prompts are fed oldest first
+// (promptUnits), so a long one still finishes, a budget a step.
 //
 // Config.StepPromptTokens fixes the budget instead. Only the loop goroutine
 // touches it.
 type stepBudget struct {
 	fixed, ceiling int
+	// cost is how many decode steps' time a step carrying prompt tokens may
+	// take.
+	cost float64
 	// cur is the measured budget.
 	cur int
-	// decode is a decode-only step's time, a moving average; zero until
-	// measured.
-	decode float64
+	// The line's moving sums: weight, x (prompt tokens), y (step time), xx
+	// and xy, each decayed by budgetAlpha a step.
+	n, x, y, xx, xy float64
+	// fitted says the fit has given a budget, and icept is its last decode
+	// step's time.
+	fitted bool
+	icept  float64
 }
 
 const (
@@ -36,13 +50,19 @@ const (
 	budgetStart = 32
 	// budgetFloor keeps a prompt moving however slow a token measures.
 	budgetFloor = 8
-	// budgetAlpha weighs a new decode step in the moving average.
-	budgetAlpha = 0.2
+	// budgetAlpha is how fast the fit forgets: the decoding rows and their
+	// contexts move under it.
+	budgetAlpha = 0.1
+	// DefaultStepCost is Config.StepCost's default.
+	DefaultStepCost = 4.0
 )
 
-func newStepBudget(fixed, ceiling int) *stepBudget {
+func newStepBudget(fixed, ceiling int, cost float64) *stepBudget {
 	ceiling = max(ceiling, 1)
-	return &stepBudget{fixed: fixed, ceiling: ceiling, cur: min(budgetStart, ceiling)}
+	if cost <= 1 {
+		cost = DefaultStepCost
+	}
+	return &stepBudget{fixed: fixed, ceiling: ceiling, cost: cost, cur: min(budgetStart, ceiling)}
 }
 
 // tokens is the prompt tokens the next step beside decoding rows may carry.
@@ -58,27 +78,50 @@ func (b *stepBudget) observe(decoding, prompt int, d time.Duration) {
 	if decoding == 0 || b.fixed > 0 {
 		return
 	}
-	t := float64(d)
-	if prompt == 0 {
-		if b.decode == 0 {
-			b.decode = t
-		} else {
-			b.decode += budgetAlpha * (t - b.decode)
+	x, y := float64(prompt), float64(d)
+	k := 1 - budgetAlpha
+	b.n, b.x, b.y = k*b.n+1, k*b.x+x, k*b.y+y
+	b.xx, b.xy = k*b.xx+x*x, k*b.xy+x*y
+	if prompt < b.cur {
+		// A step the budget did not limit can lower it, never raise it.
+		if w, ok := b.want(); ok && w < b.cur {
+			b.cur = max(w, budgetFloor)
 		}
 		return
 	}
-	if b.decode == 0 {
+	w, ok := b.want()
+	switch {
+	case ok:
+		b.fitted = true
+	case b.fitted && y <= b.cost*b.icept:
+		// The widths settled on the budget and stopped spreading, and the
+		// step is within its cost: the last fit stands. Steps the budget
+		// does not limit spread them again.
 		return
+	case b.fitted:
+		// Settled, and over its cost: the prompt tokens cost more than
+		// the fit said. Against the last decode step's time, the tokens
+		// that would have cost cost-1 of them.
+		w = int(x * (b.cost - 1) * b.icept / (y - b.icept))
+	default:
+		w = 2 * b.cur
 	}
-	// The prompt tokens that would have cost one decode step, at this
-	// step's rate; a step the budget did not limit says nothing about more.
-	extra := t - b.decode
-	want := 2 * prompt
-	if extra > 0 {
-		want = min(want, int(float64(prompt)*b.decode/extra))
+	b.cur = min(max(min(w, 2*b.cur), budgetFloor), b.ceiling)
+}
+
+// want is the budget the fit gives, and whether it gives one: the spread of
+// the widths is wide enough for a slope, and the slope is positive.
+func (b *stepBudget) want() (int, bool) {
+	mx, my := b.x/b.n, b.y/b.n
+	vx := b.xx/b.n - mx*mx
+	if vx < 4 {
+		return 0, false
 	}
-	if prompt < b.cur && want >= prompt {
-		return
+	slope := (b.xy/b.n - mx*my) / vx
+	icept := my - slope*mx
+	if slope <= 0 || icept <= 0 {
+		return 0, false
 	}
-	b.cur = min(max(want, budgetFloor), b.ceiling)
+	b.icept = icept
+	return int((b.cost - 1) * icept / slope), true
 }

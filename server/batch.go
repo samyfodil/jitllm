@@ -123,7 +123,10 @@ type batchCounters struct {
 	// maxPromptBeside is the most prompt tokens one step carried beside a
 	// decoding row: the bound stepBudget keeps.
 	maxPromptBeside atomic.Int64
-	lastRefusal     atomic.Pointer[string]
+	// The budget's trajectory over the steps beside decoding rows: how many,
+	// its sum, least and most.
+	budgetSteps, budgetSum, budgetMin, budgetMax atomic.Int64
+	lastRefusal                                  atomic.Pointer[string]
 }
 
 // errUnloaded ends a request still waiting for a row when its model goes.
@@ -151,7 +154,7 @@ func newStepLoop(e *Engine, lm *LoadedModel) *stepLoop {
 		width:       batchWidth(e.cfg.MaxBatchRows),
 		promptChunk: e.cfg.PromptChunk,
 		choice:      newJointChoice(e.cfg.JointSteps),
-		budget:      newStepBudget(e.cfg.StepPromptTokens, e.cfg.PromptChunk),
+		budget:      newStepBudget(e.cfg.StepPromptTokens, e.cfg.PromptChunk, e.cfg.StepCost),
 		ctx:         ctx,
 		quit:        quit,
 		done:        make(chan struct{}),
@@ -449,6 +452,7 @@ func (lp *stepLoop) iterate() {
 	budget := lp.promptChunk
 	if decoding > 0 {
 		budget = lp.budget.tokens()
+		lp.stats.noteBudget(budget)
 	}
 	units = lp.promptUnits(units, min(budget, model.MaxStepRows-decoding))
 	lp.units = units
@@ -1032,4 +1036,14 @@ func (lp *stepLoop) pb() *v1.BatchStats {
 		out.LastRefusal = *why
 	}
 	return out
+}
+
+// noteBudget records the budget of one step beside decoding rows.
+func (c *batchCounters) noteBudget(b int) {
+	n := int64(b)
+	if c.budgetSteps.Add(1) == 1 || n < c.budgetMin.Load() {
+		c.budgetMin.Store(n)
+	}
+	c.budgetMax.Store(max(c.budgetMax.Load(), n))
+	c.budgetSum.Add(n)
 }
