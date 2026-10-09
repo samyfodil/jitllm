@@ -31,6 +31,10 @@ type turn struct {
 // uncontended turn pays nothing for it.
 var onTurnQueue func(wake chan struct{})
 
+// onTurnGrant, set only by a test, is told under t.mu each time Unlock hands
+// the turn to a queued caller.
+var onTurnGrant func(wake chan struct{})
+
 const (
 	turnFree int32 = iota
 	turnHeld
@@ -80,6 +84,9 @@ func (t *turn) Unlock() {
 	t.q = t.q[:n]
 	if n == 0 {
 		t.state.Store(turnHeld)
+	}
+	if onTurnGrant != nil {
+		onTurnGrant(next)
 	}
 	t.mu.Unlock()
 	next <- struct{}{}

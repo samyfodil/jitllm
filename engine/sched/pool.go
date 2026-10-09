@@ -158,8 +158,13 @@ type Pool struct {
 	// decide whether to participate without reading p.j.
 	limit atomic.Int64
 
-	seq     atomic.Uint64 // bumped by Do to publish a job
-	active  atomic.Int64  // participants still draining
+	seq atomic.Uint64 // bumped by Do to publish a job
+	// gate is the current region's door: its epoch (the seq that published
+	// it) above gateEpochShift, gateClosed, and how many workers joined. A
+	// worker touches p.j only after joining an open gate of the epoch it saw;
+	// left counts the joined workers that are done.
+	gate    atomic.Uint64
+	left    atomic.Int64
 	parked  []atomic.Bool // spawned worker i is blocked on start[i]
 	stopped atomic.Bool
 	// spin is how long a worker spins before parking, in nanoseconds, read on
@@ -288,15 +293,43 @@ func (p *Pool) worker(id int) {
 			return
 		}
 		seen = s
-		// Every woken worker acknowledges, participant or not: that is what
-		// makes p.j safe to overwrite. A capped-out worker that skipped the
-		// decrement could still be reading p.j while Do wrote the next job (it
-		// crashed with a negative index under MoE, whose participant limit
-		// swings per region). Answering is only a load and an atomic add.
-		if id+1 < int(p.limit.Load()) {
+		// A participant joins the region before it reads p.j, and only while
+		// the region's gate is open: the caller closes it once it has no chunk
+		// left to claim and waits only for the workers that joined. A worker
+		// the OS or the Go scheduler kept off a CPU past that point finds the
+		// gate closed and touches nothing, so a region never waits on a worker
+		// that was not running (it once waited on every worker, participant
+		// or not, and an oversubscribed host stalled a region per scheduling
+		// slice of the slowest one). A capped-out worker never joins, so it
+		// cannot be reading p.j while Do writes the next job (it once crashed
+		// with a negative index under MoE, whose participant limit swings per
+		// region).
+		workerWake(p, id)
+		if id+1 < int(p.limit.Load()) && p.join(s) {
 			p.run(id + 1)
+			p.left.Add(1)
 		}
-		p.active.Add(-1)
+	}
+}
+
+// Layout of Pool.gate.
+const (
+	gateEpochShift = 17
+	gateClosed     = 1 << 16
+	gateCount      = gateClosed - 1
+)
+
+// join enters the region published at seq s, reporting false when its gate is
+// already closed or belongs to another region.
+func (p *Pool) join(s uint64) bool {
+	for {
+		g := p.gate.Load()
+		if g>>gateEpochShift != s&(1<<(64-gateEpochShift)-1) || g&gateClosed != 0 {
+			return false
+		}
+		if p.gate.CompareAndSwap(g, g+1) {
+			return true
+		}
 	}
 }
 
@@ -610,8 +643,7 @@ func (p *Pool) dispatch(j job) {
 		c.publish(j, part)
 		return
 	}
-	// A stopped pool runs the region inline: a worker that observes the stop
-	// returns without acknowledging, so waiting on active would spin forever.
+	// A stopped pool runs the region inline: its workers have returned.
 	if p.stopped.Load() {
 		p.nSerial.Add(1)
 		j.call(0, 0, total)
@@ -639,11 +671,13 @@ func (p *Pool) publish(j job, part int) {
 	for i := range p.nnext {
 		p.nnext[i].Store(0)
 	}
-	// Every worker answers, not just the participants -- see the worker loop for
-	// why that is what makes p.j safe to overwrite next time round.
-	p.active.Store(int64(len(p.parked)))
+	// The gate opens for the new epoch before the sequence bump publishes it;
+	// see the worker loop.
+	p.left.Store(0)
+	p.gate.Store((p.seq.Load() + 1) << gateEpochShift)
 	p.seq.Add(1)
-	for i := range p.parked {
+	// Only participants are woken: the rest never join.
+	for i := range min(len(p.parked), limit-1) {
 		if p.parked[i].Load() {
 			select {
 			case p.start[i] <- struct{}{}:
@@ -653,7 +687,10 @@ func (p *Pool) publish(j job, part int) {
 	}
 	// The caller is participant 0 and claims chunks like everyone else.
 	p.run(0)
-	for p.active.Load() != 0 {
+	// No chunk is left to claim, so a worker that has not joined has nothing
+	// to do: close the gate and wait for the ones that did.
+	joined := int64(p.gate.Or(gateClosed) & gateCount)
+	for p.left.Load() != joined {
 		runtime.Gosched()
 	}
 }
