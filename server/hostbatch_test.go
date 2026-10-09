@@ -259,7 +259,9 @@ func TestHostBatchSampledRowsEqualAlone(t *testing.T) {
 // comes out as it does alone.
 func TestHostBatchLongPromptTakesItsPipelinedChunk(t *testing.T) {
 	e, lm, c := hostBatchEngine(t, "Llama-3.2-1B-Instruct-Q4_K_M.jlm",
-		Config{JointSteps: JointAlways, PromptChunk: 64, DefaultMaxSeq: 1024})
+		Config{JointSteps: JointAlways, PromptChunk: 64, DefaultMaxSeq: 1024,
+			// Each run sends the same prompts: the memory cache would restore them.
+			NoMemCache: true})
 	long := strings.Repeat("The little dog ran to the park and played with a red ball. ", 12)
 	nlong := len(lm.m.Vocab.Encode(long, true))
 	reqs := []*v1.GenerateRequest{
