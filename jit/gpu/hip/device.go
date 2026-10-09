@@ -305,7 +305,7 @@ func (d *Device) WriteOn(s *Stream, p *Ptr, off int, src []byte) error {
 	if len(src) == 0 {
 		return nil
 	}
-	return d.r.h.check(d.r.h.copyStream(unsafe.Pointer(p.p+uintptr(off)), unsafe.Pointer(&src[0]),
+	return d.r.h.check(d.r.h.htodStream(p.p+uintptr(off), unsafe.Pointer(&src[0]),
 		uint64(len(src)), hipMemcpyDefault, s.s), "hipMemcpyWithStream")
 }
 
@@ -313,7 +313,7 @@ func (d *Device) ReadOn(s *Stream, p *Ptr, dst []byte) error {
 	if len(dst) == 0 {
 		return nil
 	}
-	return d.r.h.check(d.r.h.copyStream(unsafe.Pointer(&dst[0]), unsafe.Pointer(p.p),
+	return d.r.h.check(d.r.h.dtohStream(unsafe.Pointer(&dst[0]), p.p,
 		uint64(len(dst)), hipMemcpyDefault, s.s), "hipMemcpyWithStream")
 }
 
@@ -381,4 +381,11 @@ func (d *Device) LaunchArgs(s *Stream, m *Module, groups, width int, args []*Ptr
 	}
 	return d.r.h.check(d.r.h.launch(m.f, uint32(groups), 1, 1, uint32(width), 1, 1, 0, st,
 		unsafe.Pointer(&ptrs[0]), nil), "hipModuleLaunchKernel")
+}
+
+// Loaded reports whether both ROCm libraries load under a config, whether or
+// not any device is present.
+func Loaded(c Config) bool {
+	l := load(c)
+	return l.hipErr == nil && l.comgrErr == nil
 }

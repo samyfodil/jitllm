@@ -57,7 +57,10 @@ type hipAPI struct {
 	htod           func(uintptr, unsafe.Pointer, uint64) hipError
 	dtoh           func(unsafe.Pointer, uintptr, uint64) hipError
 	dtod           func(uintptr, uintptr, uint64) hipError
-	copyStream     func(unsafe.Pointer, unsafe.Pointer, uint64, int32, uintptr) hipError
+	// hipMemcpyWithStream bound twice, by direction, so a device address is
+	// never made into an unsafe.Pointer the collector would inspect.
+	htodStream     func(uintptr, unsafe.Pointer, uint64, int32, uintptr) hipError
+	dtohStream     func(unsafe.Pointer, uintptr, uint64, int32, uintptr) hipError
 	sync           func() hipError
 	streamCreate   func(*uintptr, uint32) hipError
 	streamDestroy  func(uintptr) hipError
@@ -96,7 +99,8 @@ func bindHIP(names []string) (*hipAPI, error) {
 		a.htod = ffi.Fn3[hipError, uintptr, unsafe.Pointer, uint64](l, "hipMemcpyHtoD")
 		a.dtoh = ffi.Fn3[hipError, unsafe.Pointer, uintptr, uint64](l, "hipMemcpyDtoH")
 		a.dtod = ffi.Fn3[hipError, uintptr, uintptr, uint64](l, "hipMemcpyDtoD")
-		a.copyStream = ffi.Fn5[hipError, unsafe.Pointer, unsafe.Pointer, uint64, int32, uintptr](l, "hipMemcpyWithStream")
+		a.htodStream = ffi.Fn5[hipError, uintptr, unsafe.Pointer, uint64, int32, uintptr](l, "hipMemcpyWithStream")
+		a.dtohStream = ffi.Fn5[hipError, unsafe.Pointer, uintptr, uint64, int32, uintptr](l, "hipMemcpyWithStream")
 		a.sync = ffi.Fn0[hipError](l, "hipDeviceSynchronize")
 		a.streamCreate = ffi.Fn2[hipError, *uintptr, uint32](l, "hipStreamCreateWithFlags")
 		a.streamDestroy = ffi.Fn1[hipError, uintptr](l, "hipStreamDestroy")

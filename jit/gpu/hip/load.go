@@ -166,3 +166,12 @@ func openFirst(what string, names []string) (*ffi.Lib, error) {
 	}
 	return l, nil
 }
+
+// Searched is where a config looks for ROCm, for a report: the named
+// directory, or the loader's search path and every default directory.
+func Searched(c Config) string {
+	if c.Path != "" {
+		return c.Path
+	}
+	return "the loader's path, " + strings.Join(DefaultDirs(), ", ")
+}

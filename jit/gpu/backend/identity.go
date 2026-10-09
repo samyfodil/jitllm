@@ -94,8 +94,12 @@ func UUIDIdentity(uuid []byte, ok bool, source string) Identity {
 func APIRank(api string) int {
 	switch strings.ToLower(api) {
 	case "ptx", "cuda":
-		return 3
+		return 4
 	case "msl", "metal":
+		return 3
+	case "amdgcn", "hip":
+		// AMD's own compute stack over Vulkan on the same card: a decision
+		// until a same-card A/B decides it (docs/design/amd-hip.md).
 		return 2
 	case "spirv", "vulkan":
 		return 1
