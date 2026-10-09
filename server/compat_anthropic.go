@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,6 +47,8 @@ type anRequest struct {
 	ToolChoice json.RawMessage `json:"tool_choice"`
 
 	JitllmSession string `json:"jitllm_session,omitempty"`
+	// JitllmPriority is "high" or "normal" (Engine.prioritise).
+	JitllmPriority string `json:"jitllm_priority,omitempty"`
 }
 
 type anContentBlock struct {
@@ -57,6 +60,8 @@ type anTool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	InputSchema json.RawMessage `json:"input_schema"`
+	// CacheControl marks a cache breakpoint (anCachePrompt).
+	CacheControl json.RawMessage `json:"cache_control,omitempty"`
 }
 
 // anInBlock is a request content block: text, tool_use (an assistant's call)
@@ -84,6 +89,46 @@ type anOutBlock struct {
 type anUsage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
+	// CacheReadInputTokens is how many input tokens the memory cache
+	// restored; CacheCreationInputTokens how many it computed and kept, for
+	// a request that marked a cache_control breakpoint.
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+}
+
+// anCachePrompt says whether a request marks any cache_control breakpoint.
+//
+// The memory cache keeps every prompt's prefix, so a breakpoint is not
+// needed for a later request to restore one; what it maps onto is the usage
+// report, cache_creation_input_tokens. Where the breakpoint sits is not read:
+// the store keeps pages up to the whole prompt, a superset of any
+// breakpoint's prefix.
+func anCachePrompt(req *anRequest) bool {
+	marked := func(raw json.RawMessage) bool { return bytes.Contains(raw, []byte(`"cache_control"`)) }
+	if marked(req.System) {
+		return true
+	}
+	for _, m := range req.Messages {
+		if marked(m.Content) {
+			return true
+		}
+	}
+	for _, t := range req.Tools {
+		if len(t.CacheControl) > 0 && string(t.CacheControl) != "null" {
+			return true
+		}
+	}
+	return false
+}
+
+// anUsageOf is a finished generate's usage.
+func anUsageOf(fin *Finished, cache bool) anUsage {
+	u := anUsage{InputTokens: fin.PromptTokens, OutputTokens: fin.CompletionTokens,
+		CacheReadInputTokens: fin.Restored}
+	if cache {
+		u.CacheCreationInputTokens = fin.PromptTokens - fin.Restored
+	}
+	return u
 }
 
 type anResponse struct {
@@ -190,9 +235,11 @@ func (e *compat) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	tt := newToolText(chat.Tools)
 
 	o := GenerateOptions{
-		Prompt:    Prompt{Kind: PromptChat, Chat: chat},
-		MaxTokens: req.MaxTokens,
-		Stop:      req.StopSequences,
+		Prompt:      Prompt{Kind: PromptChat, Chat: chat},
+		MaxTokens:   req.MaxTokens,
+		Stop:        req.StopSequences,
+		CachePrompt: anCachePrompt(&req),
+		Priority:    req.JitllmPriority,
 	}
 	// Anthropic's default temperature is 1, as OpenAI's is (oaSampling).
 	q := oaSampling{Temperature: req.Temperature, TopP: req.TopP, TopK: req.TopK}
@@ -250,7 +297,7 @@ func (e *compat) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			ID: id, Type: "message", Role: "assistant", Model: req.Model,
 			Content:    blocks,
 			StopReason: &reason,
-			Usage:      anUsage{InputTokens: fin.PromptTokens, OutputTokens: fin.CompletionTokens},
+			Usage:      anUsageOf(fin, o.CachePrompt),
 			Jitllm:     jitllmExtra(started, fin),
 		}
 		if fin.StopMatched != "" {
@@ -261,6 +308,10 @@ func (e *compat) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := admits(e.b, o); err != nil {
+		anFailErr(w, err)
+		return
+	}
 	sse, err := newSSE(w)
 	if err != nil {
 		anFail(w, http.StatusInternalServerError, "api_error", err.Error())
@@ -280,7 +331,8 @@ func (e *compat) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				"message": anResponse{
 					ID: id, Type: "message", Role: "assistant", Model: req.Model,
 					Content: []anOutBlock{},
-					Usage:   anUsage{InputTokens: ev.Started.PromptTokens},
+					Usage: anUsage{InputTokens: ev.Started.PromptTokens,
+						CacheReadInputTokens: ev.Started.Restored},
 				},
 			}); err != nil {
 				return err
@@ -364,6 +416,9 @@ func anFailErr(w http.ResponseWriter, err error) {
 		// A 5xx tells a client to retry the identical request.
 		status, typ = http.StatusBadRequest, "invalid_request_error"
 	case errors.Is(err, ErrQueueTimeout):
+		status, typ = http.StatusTooManyRequests, "overloaded_error"
+	case errors.Is(err, ErrOverloaded):
+		retryAfter(w, err)
 		status, typ = http.StatusTooManyRequests, "overloaded_error"
 	}
 	anFail(w, status, typ, err.Error())

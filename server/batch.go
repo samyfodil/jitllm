@@ -180,6 +180,11 @@ type row struct {
 	stream   *streamText
 	enqueued time.Time
 	depth    int32
+	// restored is the prompt positions the memory cache gave the row before
+	// it was queued (State.RestorePrefix); its prompt is fed from there. seal
+	// has the row's prompt offered to the store once it has run.
+	restored int
+	seal     bool
 
 	// admitted closes when the loop takes the row; done when it lets go of
 	// the row for good, after its last event is in the outbox.
@@ -191,6 +196,7 @@ type row struct {
 	// and read by the request goroutine only after.
 	waited      time.Duration
 	fed         int
+	begun       bool
 	logits      []float32
 	next        [1]int32
 	out         []int32
@@ -407,6 +413,7 @@ func (r *row) started() {
 		ModelID:      lm.id,
 		Ephemeral:    r.ephemeral,
 		PromptTokens: len(r.ids),
+		Restored:     r.restored,
 		QueuedFor:    r.waited,
 		QueueDepth:   r.depth,
 		DeviceBlocks: devBlocks,
@@ -559,7 +566,7 @@ func (lp *stepLoop) promptUnits(units []unit, budget int) []unit {
 		// A request that left mid-prompt is not fed the rest: it ends here,
 		// its history holding what was fed, as a cancel mid-decode leaves it.
 		if r.cancelled.Load() {
-			if r.fed > 0 {
+			if r.begun {
 				r.prefill = time.Since(r.promptStart)
 			}
 			r.started()
@@ -571,11 +578,11 @@ func (lp *stepLoop) promptUnits(units []unit, budget int) []unit {
 		if budget <= 0 && !pipelined {
 			continue
 		}
-		if r.fed == 0 {
+		if !r.begun {
 			if r.reset {
 				r.s.st.Reset()
 			}
-			r.promptStart = time.Now()
+			r.begun, r.promptStart = true, time.Now()
 		}
 		var k int
 		if pipelined {
@@ -751,9 +758,19 @@ func (lp *stepLoop) ran(u unit, logits []float32) {
 		return
 	}
 	r.logits = logits
+	if r.seal {
+		// The store gets this prompt as PrefillCached would have left it.
+		if err := r.s.st.SealPrompt(logits); err != nil {
+			r.started()
+			lp.finish(r, FinishError, "", err)
+			return
+		}
+	}
 	r.prefill = time.Since(r.promptStart)
 	r.s.prefilled.Add(int64(len(r.ids)))
 	lp.lm.tokensPrefilled.Add(int64(len(r.ids)))
+	lp.lm.ttft.restored.Add(int64(r.restored))
+	lp.lm.ttft.computed.Add(int64(len(r.ids) - r.restored))
 	r.started()
 }
 
@@ -787,7 +804,7 @@ func (lp *stepLoop) finish(r *row, reason FinishReason, stop string, err error) 
 // generateBatched is Generate's arm for a session that runs as a row. The
 // caller holds s.mu, so nothing but the loop touches s.st until r.done.
 func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, o GenerateOptions,
-	ids []int32, ephemeral bool, emit func(Event) error) error {
+	ids []int32, ephemeral, store bool, emit func(Event) error) error {
 	lm := s.lm
 	sampler := s.sampling
 	if o.Sampling != nil {
@@ -799,10 +816,25 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 		start = s.st.Pos()
 	}
 	maxTokens := tokenLimit(o.MaxTokens, s.st.MaxSeq()-start-len(ids))
+	// The memory cache restores before the row is queued, on this goroutine
+	// (the caller reset the State and attached the store), so the loop feeds
+	// only what it did not hold. It leaves at least one token to run: the row
+	// needs that token's logits.
+	restored := 0
+	if store {
+		n, err := s.st.RestorePrefix(ids)
+		if err != nil {
+			return err
+		}
+		restored = n
+	}
 	r := &row{
 		s:         s,
 		ids:       ids,
-		reset:     !o.Continue,
+		restored:  restored,
+		fed:       restored,
+		seal:      store,
+		reset:     !o.Continue && restored == 0,
 		echo:      o.Echo,
 		ephemeral: ephemeral,
 		sampler:   sampler,
@@ -901,6 +933,7 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 		TokensPerSecond:  rate,
 		BytesPerToken:    lm.m.BytesPerToken(),
 		Position:         s.st.Pos(),
+		Restored:         r.restored,
 	}})
 }
 

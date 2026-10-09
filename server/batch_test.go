@@ -320,7 +320,9 @@ func concurrentGreedy(t *testing.T, name string, n int) {
 func TestBatchARequestJoinsWhileOthersDecode(t *testing.T) {
 	eachBatchModel(t, func(t *testing.T, name string) {
 		const chunk = 4
-		e, lm, c := batchEngine(t, name, Config{PromptChunk: chunk}, 4, nil)
+		// No prompt store: the "alone" pass would store the long prompt and
+		// the joined one restore it, leaving no chunks to count.
+		e, lm, c := batchEngine(t, name, Config{PromptChunk: chunk, NoMemCache: true}, 4, nil)
 		const gen = 32
 		long := strings.Repeat("The sun was warm and the birds sang in the tall green trees. ", 3)
 		reqs := []*v1.GenerateRequest{

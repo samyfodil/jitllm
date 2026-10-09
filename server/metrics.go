@@ -24,6 +24,20 @@ func (e *Engine) serveMetrics(w http.ResponseWriter, r *http.Request) {
 
 	family(&b, "jitllm_models_loaded", "gauge", "Models loaded.")
 	fmt.Fprintf(&b, "jitllm_models_loaded %d\n", len(models))
+	// Preemption (preempt.go) counts across the engine.
+	parks, resumes, out, in := e.PreemptCounts()
+	for _, m := range []struct {
+		name, help string
+		v          int64
+	}{
+		{"jitllm_preempt_parks_total", "Sessions parked to fit a model's KV budget.", parks},
+		{"jitllm_preempt_resumes_total", "Parked sessions resumed.", resumes},
+		{"jitllm_preempt_pages_out_total", "KV pages a park sent to a store.", out},
+		{"jitllm_preempt_pages_in_total", "KV pages a resume brought back.", in},
+	} {
+		family(&b, m.name, "counter", m.help)
+		fmt.Fprintf(&b, "%s %d\n", m.name, m.v)
+	}
 	family(&b, "jitllm_sessions", "gauge", "Open sessions, per model.")
 	perModel := map[string]int{}
 	for _, s := range sessions {
@@ -54,6 +68,33 @@ func (e *Engine) serveMetrics(w http.ResponseWriter, r *http.Request) {
 			func(lm *LoadedModel) float64 { _, _, out := lm.m.PageStats(); return float64(out) }},
 		{"jitllm_page_read_bytes_total", "counter", "Bytes the pager read from the container.",
 			func(lm *LoadedModel) float64 { return float64(lm.m.BytesRead()) }},
+		// The memory cache, the State pool and admission (ttft.go).
+		{"jitllm_mem_cache_hits_total", "counter", "Pages the model's memory cache served.",
+			func(lm *LoadedModel) float64 { return float64(e.MemCacheStats(lm).Store.Hits) }},
+		{"jitllm_mem_cache_misses_total", "counter", "Pages asked of the model's memory cache that it did not hold.",
+			func(lm *LoadedModel) float64 { return float64(e.MemCacheStats(lm).Store.Misses) }},
+		{"jitllm_mem_cache_evictions_total", "counter", "Pages the memory cache dropped to stay inside its bound.",
+			func(lm *LoadedModel) float64 { return float64(e.MemCacheStats(lm).Store.Evicted) }},
+		{"jitllm_mem_cache_bytes", "gauge", "Bytes the model's memory cache holds.",
+			func(lm *LoadedModel) float64 { return float64(e.MemCacheStats(lm).Store.Bytes) }},
+		{"jitllm_mem_cache_limit_bytes", "gauge", "The memory cache's bound.",
+			func(lm *LoadedModel) float64 { return float64(e.MemCacheStats(lm).Store.Limit) }},
+		{"jitllm_prompt_positions_restored_total", "counter", "Prompt positions restored rather than computed.",
+			func(lm *LoadedModel) float64 { return float64(lm.ttft.restored.Load()) }},
+		{"jitllm_prompt_positions_computed_total", "counter", "Prompt positions computed.",
+			func(lm *LoadedModel) float64 { return float64(lm.ttft.computed.Load()) }},
+		{"jitllm_states_built_total", "counter", "model.States built for sessions.",
+			func(lm *LoadedModel) float64 { return float64(lm.ttft.statesCreated.Load()) }},
+		{"jitllm_states_reused_total", "counter", "model.States handed out again from the pool.",
+			func(lm *LoadedModel) float64 { return float64(lm.ttft.statesReused.Load()) }},
+		{"jitllm_states_pooled", "gauge", "Reset States waiting in the pool.",
+			func(lm *LoadedModel) float64 { return float64(e.MemCacheStats(lm).Pooled) }},
+		{"jitllm_requests_in_flight", "gauge", "Requests the model holds, running or waiting (its queue depth).",
+			func(lm *LoadedModel) float64 { return float64(lm.ttft.inflight.Load()) }},
+		{"jitllm_requests_refused_total", "counter", "Requests refused with 429 for a full queue.",
+			func(lm *LoadedModel) float64 { return float64(lm.ttft.refused.Load()) }},
+		{"jitllm_mem_cache_pinned_pages", "gauge", "Pages the memory cache holds for parked sessions, out of eviction.",
+			func(lm *LoadedModel) float64 { return float64(e.MemCacheStats(lm).Store.Pinned) }},
 	} {
 		family(&b, m.name, m.kind, m.help)
 		for _, lm := range models {

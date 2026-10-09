@@ -98,9 +98,11 @@ type State struct {
 	// parked and parkedSeam are Park's: the session is preempted, and the
 	// seam it held on the device. ParkedOut and ParkedIn count the KV pages
 	// Park sent to the store and Resume brought back (park.go).
-	parked              bool
-	parkedSeam          int
-	parkStore           *MemStore
+	parked     bool
+	parkedSeam int
+	parkStore  *MemStore
+	// parkPrev is the store ParkInto swapped out, given back by Resume.
+	parkPrev            KVStore
 	ParkedOut, ParkedIn int64
 	// outNorm and outW are the head this State projects through: the model's
 	// output norm and projection for a trunk, a prediction block's own head
@@ -141,6 +143,9 @@ type State struct {
 	spanTok []int32
 	// kvSkipped is what the last PrefillCached restored rather than computed.
 	kvSkipped int
+	// interrupt, when set, is asked before every prefill chunk
+	// (SetPrefillInterrupt).
+	interrupt func() bool
 
 	x, h, xb []float32 // residual stream and two same-width scratch vectors
 	// hf is a parallel block's FFN input (C6): the block input normed for the

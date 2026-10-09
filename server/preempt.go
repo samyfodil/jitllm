@@ -3,6 +3,8 @@ package server
 import (
 	"fmt"
 	"sync/atomic"
+
+	"github.com/samyfodil/jitllm/engine/model"
 )
 
 // Preemption under memory pressure. A model may carry a KV budget
@@ -53,14 +55,20 @@ func (e *Engine) PreemptCounts() (parks, resumes, pagesOut, pagesIn int64) {
 	return p.parks.Load(), p.resumes.Load(), p.pagesOut.Load(), p.pagesIn.Load()
 }
 
-// admit makes room for s to generate grow more positions: it resumes s if it
+// admitKV makes room for s to generate grow more positions: it resumes s if it
 // is parked, then parks other sessions of its model until the model's
 // histories fit its KV budget with s's grown one. The caller holds s.mu.
-func (e *Engine) admit(s *Session, grow int) error {
+func (e *Engine) admitKV(s *Session, grow int) error {
 	if s.st.Parked() {
 		in, err := s.st.Resume()
 		if err != nil {
 			return fmt.Errorf("server: session %q could not resume: %w", s.id, err)
+		}
+		if s.parkView != nil {
+			// Every page is back in the session: the memory cache may evict
+			// them in their turn from here.
+			s.parkView.Release()
+			s.parkView = nil
 		}
 		s.parked.Store(false)
 		e.preempt.resumes.Add(1)
@@ -115,7 +123,13 @@ func (e *Engine) admit(s *Session, grow int) error {
 
 // park parks v if it is idle, reporting whether it did. An idle session's
 // lock is free; TryLock never waits on one that is stepping, which a later
-// admit may take once it is idle.
+// admitKV may take once it is idle.
+//
+// With a memory cache the session parks into it (model.State.ParkInto), through
+// a view that pins what it is given until the session resumes: the model's
+// one store holds parked histories and cached prompts alike, counted in its
+// bytes and so in the model's budget, and no eviction can take a page a parked
+// session will fault back. Without one the State parks as it would alone.
 func (e *Engine) park(v *Session) (bool, error) {
 	if !v.mu.TryLock() {
 		return false, nil
@@ -125,7 +139,18 @@ func (e *Engine) park(v *Session) (bool, error) {
 		v.snapHist.Store(0)
 		return true, nil
 	}
-	ps, err := v.st.Park()
+	var ps model.ParkStats
+	var err error
+	if store := v.lm.ttft.store; store != nil {
+		view := store.Pinned()
+		if ps, err = v.st.ParkInto(view); err == nil {
+			v.parkView = view
+		} else {
+			view.Release()
+		}
+	} else {
+		ps, err = v.st.Park()
+	}
 	if err != nil {
 		return false, fmt.Errorf("server: parking session %q: %w", v.id, err)
 	}
