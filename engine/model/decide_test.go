@@ -59,10 +59,14 @@ var decisionCases = []struct {
 	// way (Laya: one minus normalised entropy) and jitllm follows it, where
 	// llama.cpp gives TypeSafe's formula (RULE 7m); the field is not compared.
 	ownConfidence bool
+	// tol is how far a probability may sit from llama.cpp's on the same
+	// bytes, on either kv cache and either host architecture; the note
+	// before decisionSeen has the measurements.
+	tol float64
 }{
-	{"d1-3B", "d1/d1-3B-Q8_0.gguf", "d1-3B-Q8_0", jlm.DecisionLFM2D1, false},
-	{"lev", "lev/lev-Q8_0.gguf", "lev-Q8_0", jlm.DecisionLev, false},
-	{"laya", "laya/gguf/Laya-BF16.gguf", "Laya-BF16", jlm.DecisionLaya, true},
+	{"d1-3B", "d1/d1-3B-Q8_0.gguf", "d1-3B-Q8_0", jlm.DecisionLFM2D1, false, 0.03},
+	{"lev", "lev/lev-Q8_0.gguf", "lev-Q8_0", jlm.DecisionLev, false, 0.10},
+	{"laya", "laya/gguf/Laya-BF16.gguf", "Laya-BF16", jlm.DecisionLaya, true, 0.01},
 }
 
 // decisionRequests are the request bodies in testdata/decision: an object
@@ -70,23 +74,24 @@ var decisionCases = []struct {
 // saturated, where a feature's removal shows.
 var decisionRequests = []string{"support", "ambiguous"}
 
-// The tolerances a probability may sit from llama.cpp's on the same bytes.
-// llama-server's kv cache is f16 (its answers did not move with -ctk f32), so
-// the f16 arm is the like-for-like one: worst 0.021 (d1's billing/returns
-// near-tie) and 0.029 (lev's tone, neutral 0.42 against annoyed 0.54). The
-// f32 arm moves lev's tone by 0.09: the two arms' raw logits sit 0.2-0.4 apart
-// on a scale of 20, and the BF16 adapter-merged model in transformers (f32,
-// the reference graph on the same prompt ids) is no nearer either of them --
-// neutral leads annoyed by 1.57 there, 2.00 at f32 and 1.44 at f16 here -- so
-// the spread is Q8_0 rounding meeting a near-tie, not a kv path's fault.
-const (
-	decisionTolF16 = 0.03
-	decisionTolF32 = 0.10
-	// decisionSeen is how far a removed feature must move an answer to count
-	// as seen: twice the worst f32 difference on the questions the
-	// violations ask (0.0044 on d1, 0.0145 on lev's object state).
-	decisionSeen = 0.03
-)
+// Why each decision case's tolerance is what it is. llama-server's kv
+// cache is f16 (its answers did not move with -ctk f32). Measured worst, on
+// the Linux laptop (amd64) and the M4 (arm64), f32 and f16 kv:
+//
+//	d1    0.021 (f16, the billing/returns near-tie) on amd64, 0.022 on arm64
+//	lev   0.090 (f32, amd64) and 0.073 (f16, arm64), both on the ambiguous
+//	      request's tone, neutral 0.42 against annoyed 0.54 at llama.cpp
+//	laya  0.0039 on both
+//
+// lev's spread is Q8_0 rounding meeting a near-tie, not a kv path's fault:
+// the raw logits of the arms sit 0.2-0.4 apart on a scale of 20, and the
+// BF16 adapter-merged model in transformers (f32, the reference graph on the
+// same prompt ids) is no nearer either -- neutral leads annoyed by 1.57 there,
+// 2.00 at f32 kv and 1.44 at f16 kv on amd64.
+// decisionSeen is how far a removed feature must move an answer to count as
+// seen: twice the worst f32 difference on the questions the violations ask
+// (0.0044 on d1, 0.0145 on lev's object state).
+const decisionSeen = 0.03
 
 // openDecision opens a case's model, or skips it as missing.
 func openDecision(t *testing.T, gguf string, kind jlm.DecisionKind) *Model {
@@ -131,10 +136,9 @@ func TestDecisionMatchesLlamaCpp(t *testing.T) {
 			m := openDecision(t, c.gguf, c.kind)
 			defer m.Close()
 			// A decoder runs both kv caches; an encoder keeps none.
-			arms := []decisionArm{{"kv-f32", false, decisionTolF32}, {"kv-f16", true, decisionTolF16}}
+			arms := []decisionArm{{"kv-f32", false, c.tol}, {"kv-f16", true, c.tol}}
 			if m.IsEncoder() {
-				// Laya: worst 0.0042 on either request.
-				arms = []decisionArm{{"encoder", false, 0.01}}
+				arms = []decisionArm{{"encoder", false, c.tol}}
 			}
 			for _, req := range decisionRequests {
 				gold := readDecisionGold(t, c.gold+"."+req+".llamacpp.json")
