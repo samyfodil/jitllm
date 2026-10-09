@@ -57,14 +57,14 @@ func TestAttnLayoutProbe(t *testing.T) {
 		}
 
 		mk := func(stride int) (sc, ac *cpu.Code) {
-			b, err := cpu.EmitAttnScores2(hd, stride, false)
+			b, err := cpu.EmitAttnScores2(hd, stride, cpu.KVF32)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if sc, err = cpu.Map(b); err != nil {
 				t.Fatal(err)
 			}
-			if b, err = cpu.EmitAttnAcc2(hd, stride, false); err != nil {
+			if b, err = cpu.EmitAttnAcc2(hd, stride, cpu.KVF32); err != nil {
 				t.Fatal(err)
 			}
 			if ac, err = cpu.Map(b); err != nil {

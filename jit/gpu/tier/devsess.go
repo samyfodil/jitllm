@@ -141,6 +141,10 @@ type lane struct {
 	partCap, f16Cap int
 	// argmaxOut is the device argmax's one word (PrepHead).
 	argmaxOut backend.Buf
+	// The device sampler's buffers (sample.go), made the first time a call
+	// in this lane samples: the history, the penalized row, the first
+	// pass's candidates and the k that come home.
+	sampleArgs, samplePen, sampleV1, sampleI1, sampleV, sampleI backend.Buf
 	// recs is a map, not one slot, because a token can issue more than one
 	// sequence (blocks under {0,gl} and a head-only call under {gl,gl}); one
 	// slot would have them evict each other, a capture per call. A recording
@@ -609,6 +613,7 @@ func (g *devTier) dropLane(l *lane) {
 		l.argmaxOut.Free()
 		l.argmaxOut = nil
 	}
+	l.freeSample()
 }
 
 // dropLanes frees every clone: what a device dropping its scratch, or closing,

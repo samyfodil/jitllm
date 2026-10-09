@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/samyfodil/jitllm/jit/cpu"
 )
 
 // TestKVSpansCoverTheWindowExactly: the page walk must visit every position of
@@ -99,7 +100,7 @@ func TestKVPageGeometryFollowsTheLayerKind(t *testing.T) {
 	if hyb.LayerKind(0) != jlm.LayerLinearAttn {
 		t.Fatal("the linear arm is unreachable in this config; the gate proves nothing about it")
 	}
-	kc := newKVCache(hyb, "geom", 1, kvLayout{elem: 4}, nil, 0)
+	kc := newKVCache(hyb, "geom", 1, kvLayout{}, nil, 0)
 	for li, want := range []bool{false, true, false} {
 		got := kvPagePositions(hyb, li, 0) > 0
 		if got != want {
@@ -121,7 +122,7 @@ func TestKVPageGeometryFollowsTheLayerKind(t *testing.T) {
 // must refuse a page trim evicted in place.
 func TestRelocationCrossesPages(t *testing.T) {
 	const p, kvDim, n = 8, 4, 20 // 20 positions over 8 per page = 3 pages
-	l := kvLayout{elem: 4, nKV: 1, headDim: kvDim, maxSeq: p}
+	l := kvLayout{nKV: 1, headDim: kvDim, maxSeq: p}
 	pg := kvPages{p: p, pp: l.slots(1 * p * kvDim)}
 
 	// A history arriving from a device: nothing is resident, every page is new.
@@ -183,7 +184,7 @@ func TestPageKeySeparatesAliasingGeometries(t *testing.T) {
 		kc.layers[0].p = 8
 		return kc.pageKey(0, 0)
 	}
-	l32 := kvLayout{elem: 4, nKV: 4, headDim: 64}
+	l32 := kvLayout{nKV: 4, headDim: 64}
 	want := keyOf(base, 1, l32)
 	if want == "" {
 		t.Fatal("the reference key is empty, so every comparison below is vacuous")
@@ -202,10 +203,10 @@ func TestPageKeySeparatesAliasingGeometries(t *testing.T) {
 		nseq int
 		l    kvLayout
 	}{
-		{"nKV 2 x hd 128 (same kvDim)", &qwen, 1, kvLayout{elem: 4, nKV: 2, headDim: 128}},
-		{"nKV 1 x hd 256 (same kvDim)", &gemma, 1, kvLayout{elem: 4, nKV: 1, headDim: 256}},
-		{"head-major (same bytes, permuted)", base, 1, kvLayout{elem: 4, nKV: 4, headDim: 64, headMajor: true}},
-		{"f16 cache", base, 1, kvLayout{elem: 2, nKV: 4, headDim: 64}},
+		{"nKV 2 x hd 128 (same kvDim)", &qwen, 1, kvLayout{nKV: 2, headDim: 128}},
+		{"nKV 1 x hd 256 (same kvDim)", &gemma, 1, kvLayout{nKV: 1, headDim: 256}},
+		{"head-major (same bytes, permuted)", base, 1, kvLayout{nKV: 4, headDim: 64, headMajor: true}},
+		{"f16 cache", base, 1, kvLayout{fmt: cpu.KVF16, nKV: 4, headDim: 64}},
 		{"nseq 2", base, 2, l32},
 		{"a different vocabulary", &fewer, 1, l32},
 	} {

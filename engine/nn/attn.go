@@ -28,19 +28,19 @@ func (f *JIT) KVWidthPaysOff(hd, kvStride int) bool {
 	}
 	// The tier's own kernels: the SSE tier has no F16C, so its f16 kernels are
 	// much larger and this declines the f16 cache there.
-	a32, err := f.em.AttnScores(hd, kvStride, false)
+	a32, err := f.em.AttnScores(hd, kvStride, cpu.KVF32)
 	if err != nil {
 		return false
 	}
-	a16, err := f.em.AttnScores(hd, kvStride, true)
+	a16, err := f.em.AttnScores(hd, kvStride, cpu.KVF16)
 	if err != nil {
 		return false
 	}
-	b32, err := f.em.AttnAcc(hd, kvStride, false)
+	b32, err := f.em.AttnAcc(hd, kvStride, cpu.KVF32)
 	if err != nil {
 		return false
 	}
-	b16, err := f.em.AttnAcc(hd, kvStride, true)
+	b16, err := f.em.AttnAcc(hd, kvStride, cpu.KVF16)
 	if err != nil {
 		return false
 	}
@@ -49,23 +49,23 @@ func (f *JIT) KVWidthPaysOff(hd, kvStride int) bool {
 }
 
 // AddAttn generates the attention kernels for one (head dimension, KV stride);
-// they are the JIT's default set, which AttnScores and the rest run. f16
-// selects a binary16 KV cache: the same kernels with a widening load and half
-// the stride, baked because the cache's element type is constant for the
-// session. A model whose layers attend at two geometries (Gemma 4) takes a
+// they are the JIT's default set, which AttnScores and the rest run. kv is
+// the KV cache's format (f32, binary16 or q8_0): the same kernels with a
+// widening load and a narrower stride, baked because the cache's format is
+// constant for the session. A model whose layers attend at two geometries (Gemma 4) takes a
 // second set from AttnSetFor.
-func (f *JIT) AddAttn(hd, kvStride int, f16 bool) { f.AddAttnKV(hd, hd, kvStride, f16) }
+func (f *JIT) AddAttn(hd, kvStride int, kv cpu.KVFmt) { f.AddAttnKV(hd, hd, kvStride, kv) }
 
 // AddAttnKV is AddAttn with the key and value widths given separately. They
 // differ only under MLA, where the cached row is KVLoraRank + NRot wide and the
 // value is its first KVLoraRank floats, read from the same buffer at the same
 // stride.
-func (f *JIT) AddAttnKV(hdK, hdV, kvStride int, f16 bool) {
+func (f *JIT) AddAttnKV(hdK, hdV, kvStride int, kv cpu.KVFmt) {
 	if f == nil || hdK <= 0 || hdV <= 0 {
 		return
 	}
-	f.attnF16 = f16
-	f.attn.emit(f, hdK, hdV, kvStride, f16)
+	f.attnKV = kv
+	f.attn.emit(f, hdK, hdV, kvStride, kv)
 }
 
 // AttnSet is one attention geometry's kernels: the single-head score and
@@ -80,32 +80,32 @@ type AttnSet struct {
 
 type attnKey struct {
 	hdK, hdV, stride int
-	f16              bool
+	kv               cpu.KVFmt
 }
 
-func (a *AttnSet) emit(f *JIT, hdK, hdV, kvStride int, f16 bool) {
+func (a *AttnSet) emit(f *JIT, hdK, hdV, kvStride int, kv cpu.KVFmt) {
 	must := func(name string, hd int, b []byte, err error) *cpu.Code {
 		if err != nil {
 			panic(err)
 		}
 		return mustMap(name+"_hd"+itoaN(hd), b)
 	}
-	a.key = attnKey{hdK, hdV, kvStride, f16}
-	b, err := f.em.AttnScores(hdK, kvStride, f16)
+	a.key = attnKey{hdK, hdV, kvStride, kv}
+	b, err := f.em.AttnScores(hdK, kvStride, kv)
 	a.scores = must("attn_scores", hdK, b, err)
-	b, err = f.em.AttnAcc(hdV, kvStride, f16)
+	b, err = f.em.AttnAcc(hdV, kvStride, kv)
 	a.acc = must("attn_acc", hdV, b, err)
 	// The accumulating twin, for a KV cache split into pages: page 0 overwrites
 	// Out and every page after it adds in. See cpu.EmitAttnAccInto for why the
 	// result is bit-identical to one contiguous call rather than merely close.
-	b, err = f.em.AttnAccInto(hdV, kvStride, f16)
+	b, err = f.em.AttnAccInto(hdV, kvStride, kv)
 	a.accInto = must("attn_acc_into", hdV, b, err)
 	// The paired kernels halve the pass over K and V, on both architectures.
-	b, err = f.em.AttnScores2(hdK, kvStride, f16)
+	b, err = f.em.AttnScores2(hdK, kvStride, kv)
 	a.scores2 = must("attn_scores2", hdK, b, err)
-	b, err = f.em.AttnAcc2(hdV, kvStride, f16)
+	b, err = f.em.AttnAcc2(hdV, kvStride, kv)
 	a.acc2 = must("attn_acc2", hdV, b, err)
-	b, err = f.em.AttnAcc2Into(hdV, kvStride, f16)
+	b, err = f.em.AttnAcc2Into(hdV, kvStride, kv)
 	a.acc2Into = must("attn_acc2_into", hdV, b, err)
 }
 
@@ -124,8 +124,8 @@ func (f *JIT) Attn() *AttnSet { return &f.attn }
 // AttnSetFor is the kernel set for one geometry: the default set when it is
 // that geometry, otherwise one emitted on first ask and kept until Close. The
 // set is emitted at placement time, never during a token.
-func (f *JIT) AttnSetFor(hdK, hdV, kvStride int, f16 bool) *AttnSet {
-	k := attnKey{hdK, hdV, kvStride, f16}
+func (f *JIT) AttnSetFor(hdK, hdV, kvStride int, kv cpu.KVFmt) *AttnSet {
+	k := attnKey{hdK, hdV, kvStride, kv}
 	if f.attn.key == k && f.attn.scores != nil {
 		return &f.attn
 	}
@@ -135,7 +135,7 @@ func (f *JIT) AttnSetFor(hdK, hdV, kvStride int, f16 bool) *AttnSet {
 		}
 	}
 	a := &AttnSet{}
-	a.emit(f, hdK, hdV, kvStride, f16)
+	a.emit(f, hdK, hdV, kvStride, kv)
 	f.attnSets = append(f.attnSets, a)
 	return a
 }
@@ -152,18 +152,18 @@ type AttnTiledSet struct {
 
 type tiledKeyA struct {
 	hd, kvStride, qStride, scoreStride, qt int
-	f16                                    bool
+	kv                                     cpu.KVFmt
 }
 
 // AttnTiledFor is the tiled set for one geometry, emitted on first ask and
 // kept until Close; nil when the tier has no such kernel (qt < 2, or the
 // emitter declines the tile), which a caller treats as "run the paired
 // kernels". A refusal is kept too, so it is asked once.
-func (f *JIT) AttnTiledFor(hd, kvStride, qStride, scoreStride, qt int, f16 bool) *AttnTiledSet {
+func (f *JIT) AttnTiledFor(hd, kvStride, qStride, scoreStride, qt int, kv cpu.KVFmt) *AttnTiledSet {
 	if f == nil || qt < 2 {
 		return nil
 	}
-	k := tiledKeyA{hd, kvStride, qStride, scoreStride, qt, f16}
+	k := tiledKeyA{hd, kvStride, qStride, scoreStride, qt, kv}
 	for _, a := range f.attnTiled {
 		if a.key == k {
 			if a.scores == nil {
@@ -174,7 +174,7 @@ func (f *JIT) AttnTiledFor(hd, kvStride, qStride, scoreStride, qt int, f16 bool)
 	}
 	a := &AttnTiledSet{key: k}
 	f.attnTiled = append(f.attnTiled, a)
-	b, err := f.em.AttnScoresTiled(hd, kvStride, qStride, scoreStride, qt, f16)
+	b, err := f.em.AttnScoresTiled(hd, kvStride, qStride, scoreStride, qt, kv)
 	if err != nil {
 		return nil
 	}
@@ -211,11 +211,11 @@ func (a *AttnTiledSet) Scores(scores, k, q []float32, npos int) bool {
 
 // AddAttnTiled makes the tiled set for this geometry the JIT's default, the
 // one AttnTiledQt and AttnScoresTiled run.
-func (f *JIT) AddAttnTiled(hd, kvStride, qStride, scoreStride, qt int, f16 bool) {
+func (f *JIT) AddAttnTiled(hd, kvStride, qStride, scoreStride, qt int, kv cpu.KVFmt) {
 	if f == nil {
 		return
 	}
-	f.attnT = f.AttnTiledFor(hd, kvStride, qStride, scoreStride, qt, f16)
+	f.attnT = f.AttnTiledFor(hd, kvStride, qStride, scoreStride, qt, kv)
 }
 
 // AttnTiledQt is the query tile the JIT's default tiled set holds, 0 when it

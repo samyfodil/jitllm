@@ -6,6 +6,7 @@ import (
 
 	"github.com/samyfodil/jitllm/engine/nn"
 	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/samyfodil/jitllm/jit/cpu"
 )
 
 // MiniCPM-V's projector: a perceiver resampler.
@@ -135,7 +136,7 @@ type rsState struct {
 func newRsState(r *resampler, jit *nn.JIT, maxSeq int) *rsState {
 	st := &rsState{
 		r:      r,
-		attn:   jit.AttnSetFor(rsHeadDim, rsHeadDim, r.d, false),
+		attn:   jit.AttnSetFor(rsHeadDim, rsHeadDim, r.d, cpu.KVF32),
 		qp:     make([]float32, r.queries*r.d),
 		v:      make([]float32, maxSeq*r.d),
 		k:      make([]float32, maxSeq*r.d),

@@ -50,6 +50,19 @@ type File struct {
 	// reads counts readAt calls, the quantity the pager is priced in. Atomic
 	// because EnsureRanges' run goroutines call it unlocked.
 	reads int64
+	// inIO, peakIO and readBytes are ReadConcurrency's and ReadBytes'
+	// counters: requests outstanding now, the most ever, and bytes asked for.
+	inIO, peakIO, readBytes atomic.Int64
+	// inPages and peakPages are PreloadDepth's: pages Preload has in flight.
+	inPages, peakPages atomic.Int64
+	// preloadRead stands in for EnsurePage in Preload, for a gate that holds
+	// a page mid-read; nil is EnsurePage.
+	preloadRead func(i int) error
+	// preN counts running Preloads, for SetBudget to wait out
+	// (settlePreload), under preMu; preCond is signalled as each ends.
+	preMu   sync.Mutex
+	preCond sync.Cond
+	preN    int
 	// waitNs is wall time a caller spent blocked in EnsureRanges waiting for
 	// its runs to land: serial time on the decode path, which is what a
 	// prefetch would have to hide. It is the only exposed-I/O number on the
@@ -578,6 +591,9 @@ func (f *File) makeRoom(li int, size uint64) {
 // widening is free and narrowing evicts exactly the excess; nilling every
 // page here once meant loading the model twice.
 func (f *File) SetBudget(bytes uint64) {
+	// After everything, unlocked: a preload's in-flight pages are pinned and
+	// only leave once their reads land.
+	defer f.settlePreload()
 	// Deferred first, so it runs after the unlock: see flushRecycled.
 	defer f.flushRecycled()
 	f.mu.Lock()
@@ -650,6 +666,8 @@ func (f *File) readAt(dst []byte, off int64) error {
 	// Below a few MiB the goroutines cost more than the queue depth buys, and
 	// the metadata reads above go through here too.
 	if len(dst) < 4<<20 || g < 2 {
+		f.ioStart(len(dst))
+		defer f.ioEnd()
 		_, err := h.ReadAt(dst, off)
 		return err
 	}
@@ -673,6 +691,8 @@ func (f *File) readAt(dst []byte, off int64) error {
 		wg.Add(1)
 		go func(w, lo, hi int) {
 			defer wg.Done()
+			f.ioStart(hi - lo)
+			defer f.ioEnd()
 			_, errs[w] = h.ReadAt(dst[lo:hi], off+int64(lo))
 		}(w, lo, hi)
 	}

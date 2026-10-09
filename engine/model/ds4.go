@@ -6,6 +6,7 @@ import (
 
 	"github.com/samyfodil/jitllm/engine/nn"
 	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/samyfodil/jitllm/jit/cpu"
 )
 
 // DeepSeek V4 (transformers' DeepseekV4ForCausalLM, llama.cpp's
@@ -477,9 +478,9 @@ func (s *State) allocDS4() {
 	g.row = make([]float32, c.MaxKVDim())
 	g.zrow = make([]float32, c.MaxKVDim())
 	g.cs, g.csInv, g.csE = make([]float32, c.NRot), make([]float32, c.NRot), make([]float32, c.NRot)
-	g.attn = s.jit.AttnSetFor(c.HeadDim, c.HeadDim, c.HeadDim, false)
+	g.attn = s.jit.AttnSetFor(c.HeadDim, c.HeadDim, c.HeadDim, cpu.KVF32)
 	if c.IdxHeadDim > 0 {
-		g.idxAttn = s.jit.AttnSetFor(c.IdxHeadDim, c.IdxHeadDim, c.IdxHeadDim, false)
+		g.idxAttn = s.jit.AttnSetFor(c.IdxHeadDim, c.IdxHeadDim, c.IdxHeadDim, cpu.KVF32)
 	}
 	s.growDS4(1)
 }

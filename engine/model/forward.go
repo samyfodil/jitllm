@@ -16,6 +16,7 @@ import (
 	"github.com/samyfodil/jitllm/format/quant"
 
 	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/samyfodil/jitllm/jit/cpu"
 )
 
 // Per-op timing, armed by WithProfile. The counters are process-wide (OpProfile
@@ -83,6 +84,24 @@ type State struct {
 	// either way; only their geometry differs.
 	c   *Config
 	pos int
+	// sampleArgs, sampleVals and sampleIDs are ForwardSample's device
+	// sampler block and the candidates it returns, reused across tokens.
+	// SampledOnDevice counts the tokens whose candidates came home in place
+	// of the logits.
+	sampleArgs      []uint32
+	sampleVals      []float32
+	sampleIDs       []uint32
+	SampledOnDevice int64
+	// SampleProbes counts the tokens ForwardSample timed to decide between
+	// the device and the host sampler (devsample.go).
+	SampleProbes int64
+	// parked and parkedSeam are Park's: the session is preempted, and the
+	// seam it held on the device. ParkedOut and ParkedIn count the KV pages
+	// Park sent to the store and Resume brought back (park.go).
+	parked              bool
+	parkedSeam          int
+	parkStore           *MemStore
+	ParkedOut, ParkedIn int64
 	// outNorm and outW are the head this State projects through: the model's
 	// output norm and projection for a trunk, a prediction block's own head
 	// norm (and the trunk's projection, or the block's own copy) for a draft.
@@ -149,8 +168,8 @@ type State struct {
 	gate, up  []float32
 	logits    []float32
 	maxSeq    int
-	reqSeq    int  // what the caller asked for; > maxSeq when the model is shorter
-	kvF16     bool // the KV cache holds binary16
+	reqSeq    int       // what the caller asked for; > maxSeq when the model is shorter
+	kvFmt     cpu.KVFmt // the KV cache's element format
 
 	// MoE scratch, allocated only for a mixture-of-experts model. moeProbs is
 	// NExpert wide and moeGate/moeUp are the per-expert ffn width, which is not
@@ -580,7 +599,7 @@ func (m *Model) newStateRange(nseq, maxSeq, lo, hi int) *State {
 		}
 	}
 	s.kvl = kvLayout{headMajor: m.opt.kvHeadMajor, maxSeq: maxSeq, nKV: c.NKVHead,
-		headDim: c.HeadDim, elem: 4}
+		headDim: c.HeadDim}
 	// MLA caches one row per position for the whole layer: the compressed
 	// latent plus the shared rotary key (KVLoraRank + NRot), which every head
 	// attends to. So nKV is genuinely 1.
@@ -681,12 +700,16 @@ func (m *Model) newStateRange(nseq, maxSeq, lo, hi int) *State {
 	// stride are the same for every layer, and the kernels bake the layout's
 	// stride. The cache width is decided here, after the kernels exist: a
 	// binary16 cache is only legal if the generated kernels read it.
-	// WithKVF16 (or SetKVF16) forces it; otherwise nn.KVWidthPaysOff emits
-	// both and asks whether f16 costs anything on this host.
+	// WithKVType (or WithKVF16, SetKVType) forces it; otherwise
+	// nn.KVWidthPaysOff emits both and asks whether f16 costs anything on
+	// this host. A quantized cache is only ever forced (KVType).
 	hdK, hdV := c.attnWidths()
-	want := m.opt.kvF16Forced
-	if !m.opt.kvF16Set {
-		want = s.jit.KVWidthPaysOff(hdK, s.kvl.Stride())
+	want := m.opt.kvType.fmt()
+	if !m.opt.kvTypeSet {
+		want = cpu.KVF32
+		if s.jit.KVWidthPaysOff(hdK, s.kvl.Stride()) {
+			want = cpu.KVF16
+		}
 	}
 	// MiniMax Sparse Attention caches its indexer's key in the row (msa.go),
 	// and the selection over it is discrete: a key rounded to binary16 moves a
@@ -695,15 +718,15 @@ func (m *Model) newStateRange(nseq, maxSeq, lo, hi int) *State {
 	// at f32 (llama.cpp's converter and cache force F32 for the indexer), and
 	// so does every device here (the paged K pool is f32), so the host's
 	// default is f32 too; WithKVF16(true) still forces binary16.
-	if c.MSA() && !m.opt.kvF16Set {
-		want = false
+	if c.MSA() && !m.opt.kvTypeSet {
+		want = cpu.KVF32
 	}
 	// DeepSeek V4's cached row is not a key alone: it carries the
 	// compressor's pending projections, which the references hold at f32 and
 	// which a softmax over positions pools, so the row is f32 whatever is
 	// asked (ds4.go).
 	if c.DSV4() {
-		want = false
+		want = cpu.KVF32
 	}
 	if c.Hybrid() {
 		// The delta rule's kernel, provisioned per model like the attention
@@ -724,15 +747,21 @@ func (m *Model) newStateRange(nseq, maxSeq, lo, hi int) *State {
 		g := c.delta()
 		s.jit.AddConv1d(g.conv, g.chans)
 	}
+	// A forced q8 cache on a model that refuses one was refused at Open
+	// (Config.KVTypeRefusal); this is the backstop for one forced afterwards.
+	if want == cpu.KVQ8 && c.KVTypeRefusal(KVQ8_0) != nil {
+		want = cpu.KVF32
+	}
 	s.jit.AddAttnKV(hdK, hdV, s.kvl.Stride(), want)
-	if want {
-		s.kvl.elem = 2
-		s.kvF16 = true
+	s.kvFmt, s.kvl.fmt = want, want
+	if want == cpu.KVQ8 {
+		s.kvl.jit = s.jit
+		s.jit.ReserveKVQuant(max(c.HeadDim, c.HeadDimSWA))
 	}
 	s.provisionAttn()
 	s.allocDS4()
 	s.allocK3()
-	// After AddAttnKV: kvl.elem scales every page's size.
+	// After AddAttnKV: kvl.fmt sizes every page.
 	s.kv = newKVCacheRange(c, nextCacheID(), nseq, s.kvl, nil, s.m.opt.kvPage, s.lo, s.hi)
 	s.kv.usePool(&m.kvPool)
 	s.kv.reserve(s.maxSeq)
@@ -918,9 +947,10 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 		return fmt.Errorf("model: a head-major KV cache cannot move to a device")
 	}
 	// A binary16 cache cannot migrate either (MigrateKV moves float32, and
-	// packed halves would be reinterpreted). The device wins the tie: the cache
-	// steps down to f32, which is only possible while the history is empty.
-	if s.kvF16 && d != nil {
+	// packed halves would be reinterpreted). The device wins the tie: the
+	// cache steps down to f32, which is only possible while the history is
+	// empty. A q8_0 cache migrates converted (State.migrateKVAs).
+	if s.kvFmt == cpu.KVF16 && d != nil {
 		if s.pos != 0 {
 			return fmt.Errorf("model: a binary16 KV cache with history cannot move to a device")
 		}
@@ -1957,7 +1987,7 @@ func (s *State) prepDeviceRange(lo, n int) {
 	// A binary16 host cache cannot migrate to the device (packed halves read
 	// as float32). SetDeviceLayers steps it down first, so this is a
 	// backstop.
-	if s.kvF16 {
+	if s.kvFmt == cpu.KVF16 {
 		return
 	}
 	s.offerRange(lo, n)
@@ -2358,16 +2388,21 @@ func (s *State) SetAttnChunk(n int) { s.attnChunk = n }
 
 // SetKVF16 forces the cache width for States this model creates afterwards,
 // overriding what KVWidthPaysOff decides. For the A/B harness and the gates.
-func (m *Model) SetKVF16(on bool) { m.opt.kvF16Forced, m.opt.kvF16Set = on, true }
+func (m *Model) SetKVF16(on bool) {
+	m.opt.kvType, m.opt.kvTypeSet = KVF32, true
+	if on {
+		m.opt.kvType = KVF16
+	}
+}
 
 // ClearKVF16 hands the decision back to the tuner.
-func (m *Model) ClearKVF16() { m.opt.kvF16Set = false }
+func (m *Model) ClearKVF16() { m.opt.kvTypeSet = false }
 
 // KVIsF16 reports whether this state's cache is binary16. It can be false with
 // the width forced to f16 (WithKVF16), when the model's head dimension has no
 // generated attention kernel and the f32 fallbacks have to be able to read the
 // cache.
-func (s *State) KVIsF16() bool { return s.kvF16 }
+func (s *State) KVIsF16() bool { return s.kvFmt == cpu.KVF16 }
 
 // attnPairShipped is what ships: share both the K walk and the V walk between
 // each pair of query heads. It is neutral at shallow depth and a win where
@@ -2891,11 +2926,11 @@ func (s *State) Pos() int { return s.pos }
 // It is a named method so a gate can reach it without a real card. The caller
 // owns the pos == 0 precondition: the pages are rebuilt, not reinterpreted.
 func (s *State) stepDownKVToF32() {
-	s.kvF16, s.kvl.elem = false, 4
+	s.kvFmt, s.kvl.fmt, s.kvl.jit = cpu.KVF32, cpu.KVF32, nil
 	// attnWidths, not Cfg.HeadDim: on MLA the key and value widths differ
 	// from HeadDim (TestMLAStepsTheKVDownAtTheRightWidths).
 	hdK, hdV := s.c.attnWidths()
-	s.jit.AddAttnKV(hdK, hdV, s.kvl.Stride(), false)
+	s.jit.AddAttnKV(hdK, hdV, s.kvl.Stride(), cpu.KVF32)
 	s.provisionAttn()
 	// Carry every caller-visible setting into the fresh cache (namespace and
 	// budget); a forgotten one is silently lost.
@@ -3082,6 +3117,72 @@ func (s *State) ForwardGreedy(token int32) (int32, error) {
 		return h.Token, nil
 	}
 	return Greedy(logits), nil
+}
+
+// ForwardSample is Forward for a caller that only wants smp's next token.
+// Where the output projection runs on a device and the draw is a top-k one
+// (Sampler.Bounded), it asks that device for the k candidates alone
+// (nn.Head.SampleK) -- the penalty and the selection run there -- and draws
+// from them on the host (Sampler.SampleFrom), so k pairs cross the bus in
+// place of the vocabulary's logits; everywhere else it is smp.Sample over
+// Forward's logits. Either way the token is the one Sample would draw from
+// the logits Forward returns: the device selects exactly the host's
+// candidates, and the softmax, cuts and draw are the host sampler's own.
+//
+// Not under a head bias or a logit scale, which are added on the host after
+// the head (finishLogits) and would come after the device's penalty rather
+// than before it. A greedy smp is ForwardGreedy.
+func (s *State) ForwardSample(token int32, smp *Sampler) (int32, error) {
+	if smp == nil || smp.Temp <= 0 {
+		return s.ForwardGreedy(token)
+	}
+	h := s.head
+	onDev := h != nil && s.m.outB == nil && s.c.LogitScale == 1 && smp.Bounded(s.c.NVocab) &&
+		s.m.opt.devSample != DeviceSampleOff
+	// Auto: the key's verdict, or the probe's arm for this token
+	// (devsample.go). Both arms return the same token.
+	var choice *sampleChoice
+	probe := false
+	if onDev && s.m.opt.devSample == DeviceSampleAuto {
+		choice = s.sampleChoiceFor(s.sampleKeyOf(smp))
+		cs := &s.m.sampleChoices
+		cs.mu.Lock()
+		onDev, probe = choice.arm()
+		cs.mu.Unlock()
+	}
+	if onDev {
+		k := smp.TopK
+		s.sampleArgs = smp.DeviceArgs(s.sampleArgs)
+		s.sampleVals = grow32(s.sampleVals, k)
+		if cap(s.sampleIDs) < k {
+			s.sampleIDs = make([]uint32, k)
+		}
+		h.SampleK, h.SampleArgs, h.SampleVals, h.SampleIDs, h.Sampled = k, s.sampleArgs, s.sampleVals, s.sampleIDs[:k], false
+		defer func() { h.SampleK, h.Sampled = 0, false }()
+	}
+	t0 := time.Now()
+	logits, err := s.Forward(token)
+	if err != nil {
+		return 0, err
+	}
+	var tok int32
+	if onDev && h.Sampled {
+		s.SampledOnDevice++
+		tok = smp.SampleFrom(h.SampleVals, h.SampleIDs)
+	} else {
+		tok = smp.Sample(logits)
+	}
+	if choice != nil {
+		d := time.Since(t0)
+		cs := &s.m.sampleChoices
+		cs.mu.Lock()
+		choice.record(onDev, probe, d)
+		cs.mu.Unlock()
+		if probe {
+			s.SampleProbes++
+		}
+	}
+	return tok, nil
 }
 
 // forward runs one decode step over whatever fill() puts in s.x.

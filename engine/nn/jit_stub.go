@@ -112,8 +112,8 @@ func (f *JIT) BeginPrefill()                                 {}
 func (f *JIT) EndPrefill()                                   {}
 
 // AddAttn, AttnScores and AttnAcc have no generated code here.
-func (f *JIT) AddAttn(hd, kvStride int, f16 bool)         {}
-func (f *JIT) AddAttnKV(hdK, hdV, kvStride int, f16 bool) {}
+func (f *JIT) AddAttn(hd, kvStride int, kv cpu.KVFmt)         {}
+func (f *JIT) AddAttnKV(hdK, hdV, kvStride int, kv cpu.KVFmt) {}
 
 // AddDelta, Conv1d and GatedDelta likewise: no generated code here.
 func (f *JIT) AddDelta(n int)                                                     {}
@@ -144,8 +144,8 @@ func (f *JIT) AttnAcc2Into(o0, o1, v, w0, w1 []float32, npos int) bool { return 
 // AttnSet is one attention geometry's kernels; none are generated here.
 type AttnSet struct{}
 
-func (f *JIT) Attn() *AttnSet                                       { return nil }
-func (f *JIT) AttnSetFor(hdK, hdV, kvStride int, f16 bool) *AttnSet { return nil }
+func (f *JIT) Attn() *AttnSet                                           { return nil }
+func (f *JIT) AttnSetFor(hdK, hdV, kvStride int, kv cpu.KVFmt) *AttnSet { return nil }
 func (a *AttnSet) AttnScores(scores []float32, k, q []float32, npos int) {
 	unsupported()
 }
@@ -166,13 +166,13 @@ func (f *JIT) DiscardToken() {}
 // Shapes is how many shape-specialized kernels were generated.
 func (f *JIT) Shapes() int { return 0 }
 
-func (f *JIT) AddAttnTiled(hd, kvStride, qStride, scoreStride, qt int, f16 bool) {}
-func (f *JIT) AttnTiledQt() int                                                  { return 0 }
+func (f *JIT) AddAttnTiled(hd, kvStride, qStride, scoreStride, qt int, kv cpu.KVFmt) {}
+func (f *JIT) AttnTiledQt() int                                                      { return 0 }
 
 // AttnTiledSet is one geometry's tiled score kernel; none is generated here.
 type AttnTiledSet struct{}
 
-func (f *JIT) AttnTiledFor(hd, kvStride, qStride, scoreStride, qt int, f16 bool) *AttnTiledSet {
+func (f *JIT) AttnTiledFor(hd, kvStride, qStride, scoreStride, qt int, kv cpu.KVFmt) *AttnTiledSet {
 	return nil
 }
 func (a *AttnTiledSet) Qt() int                                      { return 0 }
@@ -194,3 +194,8 @@ func Available() bool { return false }
 // unsupported stops a caller that reached generated code on a host with no
 // emitter. There is no interpreted tier to finish the work in.
 func unsupported() { panic("jit: no code generator for this architecture") }
+
+// QuantizeKVRows and ReserveKVQuant have no generated code here.
+func (f *JIT) QuantizeKVRows(dst, src []float32, hd, n int) { unsupported() }
+func (f *JIT) ReserveKVQuant(hd int)                        {}
+func (f *JIT) WidenKVRows(dst, src []float32, hd, n int)    { unsupported() }

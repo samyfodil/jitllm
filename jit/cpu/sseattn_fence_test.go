@@ -45,7 +45,7 @@ func TestAttnReadsNothingPastTheRowSSE(t *testing.T) {
 	const npos = 3
 	type kern struct {
 		name   string
-		emit   func(hd, stride int, f16 bool) ([]byte, error)
+		emit   func(hd, stride int, fm KVFmt) ([]byte, error)
 		outLen func(hd int) int
 	}
 	perPos := func(int) int { return npos }
@@ -54,8 +54,8 @@ func TestAttnReadsNothingPastTheRowSSE(t *testing.T) {
 		{"scores", EmitAttnScoresSSE, perPos}, {"scores2", EmitAttnScores2SSE, perPos},
 		{"acc", EmitAttnAccSSE, perDim}, {"acc_into", EmitAttnAccIntoSSE, perDim},
 		{"acc2", EmitAttnAcc2SSE, perDim}, {"acc2_into", EmitAttnAcc2IntoSSE, perDim},
-		{"scores_t1", func(hd, stride int, f16 bool) ([]byte, error) {
-			return EmitAttnScoresTiledSSE(hd, stride, hd, npos, 1, f16)
+		{"scores_t1", func(hd, stride int, fm KVFmt) ([]byte, error) {
+			return EmitAttnScoresTiledSSE(hd, stride, hd, npos, 1, fm)
 		}, perPos},
 	}
 	ran := 0
@@ -77,7 +77,7 @@ func TestAttnReadsNothingPastTheRowSSE(t *testing.T) {
 			q, q2, w, w2 := f32(d.q, hd), f32(d.q2, hd), f32(d.w, npos), f32(d.w2, npos)
 
 			for _, k := range kerns {
-				b, err := k.emit(hd, hd, f16)
+				b, err := k.emit(hd, hd, KVOf(f16))
 				c := sseAttnKernel(t, k.name+"_fence_hd"+itoa(hd)+map[bool]string{true: "_f16"}[f16], b, err)
 				n := k.outLen(hd)
 				call := func(fenced bool) ([]float32, []float32) {

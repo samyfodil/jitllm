@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/samyfodil/jitllm/internal/testmodels"
@@ -34,20 +35,25 @@ func relocModels() []string { return append(principleModels(), principleMixtures
 func TestPagingDoesNotChangeTheAnswer(t *testing.T) {
 	for _, name := range principleModels() {
 		t.Run(name, func(t *testing.T) { pagingDoesNotChangeTheAnswer(t, jlmOf(t, testmodels.Path(name))) })
+		// And on a q8_0 KV cache: a block paged out and back is the same
+		// block whatever its history is stored as.
+		t.Run(name+"/q8_0", func(t *testing.T) {
+			pagingDoesNotChangeTheAnswer(t, jlmOf(t, testmodels.Path(name)), WithKVType(KVQ8_0))
+		})
 	}
 }
 
 // pagingDoesNotChangeTheAnswer is TestPagingDoesNotChangeTheAnswer on one model.
 // A frame count at or past the model's block count holds it whole and pages
 // nothing, so a fixture of three or four blocks runs the counts below it.
-func pagingDoesNotChangeTheAnswer(t *testing.T, path string) {
+func pagingDoesNotChangeTheAnswer(t *testing.T, path string, opts ...Option) {
 
 	// Tuning off: each arm opens its own model, and a tuner that times its
 	// kernel choice per process (an arm64 host picks a matvec per shape) can give the
 	// arms different reduction orders, which flips tinyllama's 0.082 tie at
 	// token 7 -- a difference in tuning, read as one in paging.
 	ids := func(frames int) ([]int32, int, int64) {
-		m, err := Open(path, noTune)
+		m, err := Open(path, append([]Option{noTune}, opts...)...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -79,9 +85,20 @@ func pagingDoesNotChangeTheAnswer(t *testing.T, path string) {
 		return out, got, faults
 	}
 
-	m0, err := Open(path, noTune)
+	m0, err := Open(path, append([]Option{noTune}, opts...)...)
 	if err != nil {
+		if strings.Contains(err.Error(), "q8_0 KV cache is not implemented") {
+			t.Skipf("refused by name: %v", err)
+		}
 		t.Fatal(err)
+	}
+	if m0.opt.kvTypeSet {
+		s := m0.NewState(8)
+		got := s.KVType()
+		s.Close()
+		if got != m0.opt.kvType {
+			t.Fatalf("asked for a %v KV cache and got %v", m0.opt.kvType, got)
+		}
 	}
 	nb := int(m0.container.H.NBlocks)
 	mixture := m0.Cfg.NExpert > 0

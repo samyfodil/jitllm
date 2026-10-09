@@ -9,13 +9,13 @@ import "testing"
 // docs/engineering-history/cpu-kernels.md). A log, not a bar.
 func TestAttnF16KernelSize(t *testing.T) {
 	for _, hd := range []int{64, 128, 256} {
-		s32, err := EmitAttnScores(hd, hd*4, false)
+		s32, err := EmitAttnScores(hd, hd*4, KVF32)
 		if err != nil {
 			t.Fatal(err)
 		}
-		s16, _ := EmitAttnScores(hd, hd*4, true)
-		a32, _ := EmitAttnAcc(hd, hd*4, false)
-		a16, _ := EmitAttnAcc(hd, hd*4, true)
+		s16, _ := EmitAttnScores(hd, hd*4, KVF16)
+		a32, _ := EmitAttnAcc(hd, hd*4, KVF32)
+		a16, _ := EmitAttnAcc(hd, hd*4, KVF16)
 		t.Logf("%s hd=%3d  scores %d -> %d (%+.0f%%)  acc %d -> %d (%+.0f%%)",
 			NativeArch(), hd, len(s32), len(s16),
 			100*float64(len(s16)-len(s32))/float64(len(s32)),

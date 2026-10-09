@@ -68,5 +68,6 @@ func TestNoMaxTokensRunsToTheEndOfTheContextBatched(t *testing.T) {
 	if lm.loop == nil {
 		t.Fatal("a model loaded onto a device has no step loop")
 	}
+	requireWholeOnDevice(t, e, lm)
 	runsToTheEndOfTheContext(t, serveEngine(t, e), lm, true)
 }

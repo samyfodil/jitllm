@@ -97,13 +97,15 @@ type Emitters struct {
 
 	// ---- family 3: attention (attn.go). All six non-tiled kernels are
 	// mandatory: nn.AddAttn maps every one of them. ----
-	AttnScores      func(hd, kvStride int, f16 bool) ([]byte, error)
-	AttnAcc         func(hd, kvStride int, f16 bool) ([]byte, error)
-	AttnAccInto     func(hd, kvStride int, f16 bool) ([]byte, error)
-	AttnScores2     func(hd, kvStride int, f16 bool) ([]byte, error)
-	AttnAcc2        func(hd, kvStride int, f16 bool) ([]byte, error)
-	AttnAcc2Into    func(hd, kvStride int, f16 bool) ([]byte, error)
-	AttnScoresTiled func(hd, kvStride, qStride, scoreStride, qt int, f16 bool) ([]byte, error)
+	AttnScores      func(hd, kvStride int, kv KVFmt) ([]byte, error)
+	AttnAcc         func(hd, kvStride int, kv KVFmt) ([]byte, error)
+	AttnAccInto     func(hd, kvStride int, kv KVFmt) ([]byte, error)
+	AttnScores2     func(hd, kvStride int, kv KVFmt) ([]byte, error)
+	AttnAcc2        func(hd, kvStride int, kv KVFmt) ([]byte, error)
+	AttnAcc2Into    func(hd, kvStride int, kv KVFmt) ([]byte, error)
+	AttnScoresTiled func(hd, kvStride, qStride, scoreStride, qt int, kv KVFmt) ([]byte, error)
+	// KVWiden is the q8 cache's dequantization to float32 rows (EmitKVWiden).
+	KVWiden func(hd int) ([]byte, error)
 
 	// ---- family 4: matvec (matvec.go's float path, packed.go,
 	// packedfused.go). ----
@@ -320,6 +322,7 @@ var primaryEmitters = Emitters{
 	AttnAcc2:        EmitAttnAcc2,
 	AttnAcc2Into:    EmitAttnAcc2Into,
 	AttnScoresTiled: EmitAttnScoresTiled,
+	KVWiden:         EmitKVWiden,
 
 	RowMajorSupported: primaryRowMajorSupported,
 	RowMajor:          EmitNative,
@@ -416,6 +419,7 @@ var sseEmitters = Emitters{
 	AttnAcc2:        EmitAttnAcc2SSE,
 	AttnAcc2Into:    EmitAttnAcc2IntoSSE,
 	AttnScoresTiled: EmitAttnScoresTiledSSE,
+	KVWiden:         EmitKVWidenSSE,
 
 	RowMajorSupported: SupportedRowMajorSSE,
 	RowMajor:          EmitRowMajorSSE,

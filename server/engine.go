@@ -105,6 +105,12 @@ type Config struct {
 	Probe func() ([]DeviceInfo, error)
 }
 
+// preloadDepth is how many pages a load keeps in flight behind model.Open
+// (model.WithPreload): a server's model is opened to be used, so its pages are
+// read while the JIT and the device placement run rather than when the first
+// request faults them in.
+const preloadDepth = 4
+
 func (c *Config) withDefaults() {
 	if c.ModelDir == "" {
 		c.ModelDir = "models"
@@ -150,6 +156,8 @@ type Engine struct {
 	order    []string
 	priority bool
 	favored  string
+
+	preempt preemptStats
 
 	// devices is the hardware probe, taken once. See devices.go for why it is
 	// not re-taken on every list.
@@ -239,6 +247,9 @@ type LoadedModel struct {
 	// SetPageBudget), taken off the top of the division; 0 is a share.
 	pin       uint64
 	maxBlocks int
+	// kvBudget caps the bytes this model's sessions' histories hold at once
+	// (SetKVBudget, preempt.go); 0 is none. Guarded by mu.
+	kvBudget uint64
 
 	// loop batches this model's device generates (batch.go). nil for a
 	// host-only model, or with batching off. Set before the model is
@@ -353,6 +364,9 @@ type LoadOptions struct {
 	DeviceIDs       []string
 	MaxDeviceBlocks int // -1 means "as many as fit"
 	KVF16           *bool
+	// DeviceSample forces where a sampled token's candidates are selected
+	// (model.WithDeviceSample); the zero value, auto, measures.
+	DeviceSample model.DeviceSampleMode
 	// Sessions is how many concurrent sessions every placed linear block
 	// reserves a recurrent pair for (tier.Config.Sessions); attention history
 	// is paged and reserves nothing. 0 and 1 are one: a second session then
@@ -481,10 +495,11 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		}
 	}
 
-	opts := []model.Option{model.WithPageBudget(hostBudget)}
+	opts := []model.Option{model.WithPageBudget(hostBudget), model.WithPreload(preloadDepth)}
 	if kv := cmp.Or(o.KVF16, e.cfg.KVF16); kv != nil {
 		opts = append(opts, model.WithKVF16(*kv))
 	}
+	opts = append(opts, model.WithDeviceSample(o.DeviceSample))
 	m, err := model.Open(path, opts...)
 	if err != nil {
 		closeDev()
@@ -723,6 +738,13 @@ type Session struct {
 	cancel   context.CancelFunc
 
 	closed atomic.Bool
+
+	// priority, parked and snapHist are preemption's (preempt.go): the order
+	// a session is parked in, whether it is parked, and its history's bytes
+	// as of the last snapshot (model.State.HistoryBytes).
+	priority atomic.Int32
+	parked   atomic.Bool
+	snapHist atomic.Uint64
 }
 
 // SessionOptions is CreateSession's input.
@@ -920,6 +942,7 @@ type placementSnapshot struct {
 func (s *Session) refresh() {
 	s.snapPos.Store(int32(s.st.Pos()))
 	s.snapKV.Store(s.st.KVBytes())
+	s.snapHist.Store(s.st.HistoryBytes())
 	s.snapDevBlocks.Store(int32(s.st.GPULayers()))
 	s.snapAt.Store(time.Now().UnixMilli())
 	s.snapBatched.Store(s.lm.loop != nil && s.st.Steppable())
@@ -1325,6 +1348,12 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		return fmt.Errorf("%w: continue_session with no prompt has no token to run", ErrInvalid)
 	}
 
+	// Room for this generate's history, parking idle sessions of the model
+	// if its KV budget is short (preempt.go), and this session back if it
+	// was the one parked.
+	if err := e.admit(s, len(ids)+tokenLimit(o.MaxTokens, s.st.MaxSeq()-s.st.Pos()-len(ids))); err != nil {
+		return err
+	}
 	spec := s.spec
 	if o.Speculation != nil {
 		spec = *o.Speculation
@@ -1476,6 +1505,12 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	}
 
 	lpw := newLogprobs(o)
+	// pending is the token ForwardSample already drew, -1 when the next one
+	// is drawn from logits. Only a reply that wants no row after the prompt
+	// takes it -- no grammar mask and no logprobs, both of which read the
+	// host's logits -- so a device holding the head selects the candidates
+	// and only they come home.
+	pending := int32(-1)
 	for ; n < maxTokens; n++ {
 		if ctx.Err() != nil {
 			reason = FinishCancelled
@@ -1484,6 +1519,9 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		var next int32
 		var tlp *TokenLogprob
 		switch {
+		case sp == nil && pending >= 0:
+			next = pending
+			sampler.Observe(next)
 		case sp == nil:
 			lg := logits
 			if con != nil && n+1 != o.maskSkip {
@@ -1532,6 +1570,13 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		if sp != nil {
 			continue
 		}
+		if con == nil && !o.Logprobs {
+			if pending, err = s.st.ForwardSample(next, &sampler); err != nil {
+				return err
+			}
+			continue
+		}
+		pending = -1
 		if logits, err = s.st.Forward(next); err != nil {
 			return err
 		}

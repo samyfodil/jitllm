@@ -86,7 +86,42 @@ func batchEngine(t *testing.T, name string, cfg Config, sessions int, tc func(*t
 	if lm.loop == nil {
 		t.Fatal("a model loaded onto a device has no step loop")
 	}
+	requireWholeOnDevice(t, e, lm)
 	return e, lm, serveEngine(t, e)
+}
+
+// requireWholeOnDevice fails, naming the cause, when a fresh session of lm
+// cannot take a row of the step loop -- which every gate that asserts a
+// generate ran as a row presumes.
+//
+// The tier sizes what it places from the card's free memory, and the CUDA
+// figure is machine-wide (backend.cudaDev.Mem): another process holding the
+// card -- another test binary, another session's jitllmd -- leaves the model
+// split between the card and the host, and a split session is stepped alone
+// (State.StepRefusal), correctly. Those gates then failed far from the cause,
+// as "did not run as a row", and looked like an order dependence between
+// tests in this package: they failed after the TestBatch* gates and passed
+// alone only because the card happened to be freer on the second run. Nothing
+// in this process holds the card after an Engine closes (measured: the
+// process's own figure in nvidia-smi is gone after Close). So the
+// precondition is checked here and its failure says what it is; it is not a
+// skip, because a gate that did not run is not a pass (RULE 10).
+func requireWholeOnDevice(t *testing.T, e *Engine, lm *LoadedModel) {
+	t.Helper()
+	s, err := e.CreateSession(SessionOptions{ModelID: lm.id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	why, placed := s.st.StepRefusal(), s.st.GPULayers()
+	if err := e.CloseSession(s.id); err != nil {
+		t.Fatal(err)
+	}
+	if why != nil {
+		t.Fatalf("PRECONDITION: %s places %d of %d blocks on the card (%v), so no generate on it can run as a "+
+			"row of the step loop and this gate cannot run. The tier sizes placement from the card's "+
+			"machine-wide free memory: another process is holding the card (nvidia-smi names it).",
+			lm.id, placed, lm.m.Cfg.NLayer, why)
+	}
 }
 
 // prompts are the requests the gates send, one per row.

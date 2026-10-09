@@ -137,6 +137,12 @@ func (g *devTier) releaseModel() {
 		g.argmaxK, g.argmaxOut = nil, nil
 		w.close()
 	}
+	// The sampler's kernels are built for the head's rows and its buffers
+	// were charged as scratch, like the argmax's.
+	sw := g.scratchWin()
+	g.closeSample()
+	g.lane0.freeSample()
+	sw.close()
 	// The capacity, the widest block and the retune mark are the model's
 	// plan, read the first time a device sees one.
 	g.kvCap, g.maxSeqAsked, g.paged = 0, 0, false
