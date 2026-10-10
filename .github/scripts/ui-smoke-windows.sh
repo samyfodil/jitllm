@@ -10,7 +10,8 @@
 # A runner has no GPU; gogpu falls back to whatever adapter Windows offers
 # (WARP or software). What it proves: the window, the device, the hardware
 # probe (CUDA and Vulkan opened through goffi when present) and the engine
-# worker start and keep running. It does not drive input.
+# worker start and keep running, through a resize storm, minimize and restore,
+# tab clicks, a message sent and stopped, and a theme swap (ui-drive-windows.ps1).
 set -uo pipefail
 bin=$1
 out=$2
@@ -35,6 +36,16 @@ for mode in mock engine; do
   fi
   pid=$!
   sleep "$secs"
+  # Input, while it runs: the Windows process id, not the shell's.
+  if kill -0 "$pid" 2>/dev/null; then
+    winpid=$(cat "/proc/$pid/winpid")
+    if ! powershell -NoProfile -ExecutionPolicy Bypass -File "$(dirname "$0")/ui-drive-windows.ps1" \
+      -ProcessId "$winpid" -Shot "$(cygpath -w "$out")\\$mode.png"; then
+      echo "::error::driving jitllm-ui ($mode) failed"
+      rc=1
+    fi
+    sleep 3
+  fi
   if ! kill -0 "$pid" 2>/dev/null; then
     wait "$pid"
     echo "::error::jitllm-ui ($mode) exited with status $? within ${secs}s"
