@@ -9,12 +9,15 @@ import (
 	"flag"
 	"log"
 	"os"
+	"path/filepath"
 
 	_ "github.com/gogpu/gg/gpu" // enable GPU SDF acceleration; required
 
 	"github.com/gogpu/gogpu"
 	"github.com/gogpu/ui/desktop"
 
+	"github.com/jitllm/jitllm/common/config"
+	"github.com/jitllm/jitllm/common/crash"
 	"github.com/jitllm/jitllm/ui/app"
 	"github.com/jitllm/jitllm/ui/engine"
 	"github.com/jitllm/jitllm/ui/mock"
@@ -35,10 +38,28 @@ func register(sh *app.Shell, d screen.Deps) {
 	sh.OnFilesDropped(func(paths []string) { screen.DropFiles(sh, paths) })
 }
 
+// version is the release's, set by the linker.
+var version = "dev"
+
 func main() {
 	mockMode := flag.Bool("mock", false, "run against package mock: no model, no GPU, fixtures only")
 	flag.Parse()
-	logToFileWithoutAConsole()
+	// The previous run's log is read before this run's truncates it: its last
+	// lines go in the report of a crash that ended it.
+	noConsole := !stderrIsRead()
+	var prev *crash.Report
+	if p := config.ConfigPath(); p != "" {
+		dir := filepath.Dir(p)
+		tail := crash.LogTail(filepath.Join(dir, logName), 20)
+		logToFileWithoutAConsole(noConsole)
+		crash.SetInfo(crash.Info{App: "jitllm-desktop", Version: version})
+		var err error
+		if prev, err = crash.Arm(dir, tail, noConsole); err != nil {
+			log.Printf("crash reports: %v", err)
+		}
+	}
+	// After Arm: the GPU it names is written beside crash.log.
+	tapAdapter()
 	app.UseEnv(app.Env{Models: os.Getenv("JITLLM_MODELS"), DataHome: os.Getenv("XDG_DATA_HOME")})
 	cfg := app.LoadConfig()
 
@@ -53,6 +74,10 @@ func main() {
 	app.LoadFonts()
 
 	sh := app.NewShell(gpuApp, cfg)
+	crash.OnReport(sh.ShowCrash)
+	if prev != nil {
+		sh.ShowCrash(*prev)
+	}
 	if *mockMode {
 		d, eng := mock.Deps(sh)
 		eng.Live = true

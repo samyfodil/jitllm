@@ -139,6 +139,7 @@ func (s *Shell) Build() widget.Widget {
 	}
 
 	root := primitives.VBox(
+		s.crashPanel(),
 		primitives.Expanded(primitives.HBox(
 			s.sidebar(),
 			primitives.Box().Width(1).Background(s.P.Colors.OutlineVariant),

@@ -21,7 +21,7 @@ func attachParentConsole() bool {
 	if err != nil {
 		return false
 	}
-	os.Stdout, os.Stderr = con, con
+	replaceStdio(con)
 	log.SetOutput(con) // package log took the old os.Stderr at init
 	return true
 }

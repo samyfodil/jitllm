@@ -10,6 +10,7 @@ require (
 	github.com/jitllm/jitllm/common v0.0.0
 	github.com/jitllm/jitllm/server v0.0.0
 	golang.org/x/image v0.45.0
+	golang.org/x/sys v0.48.0
 	golang.org/x/text v0.42.0
 )
 
@@ -27,7 +28,6 @@ require (
 	github.com/gogpu/gputypes v0.5.2 // indirect
 	github.com/gogpu/naga v0.18.0 // indirect
 	github.com/gogpu/wgpu v0.31.4 // indirect
-	golang.org/x/sys v0.48.0 // indirect
 )
 
 replace github.com/jitllm/jitllm => ../
