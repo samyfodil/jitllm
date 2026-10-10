@@ -59,11 +59,14 @@ func foldsTheHead(t *testing.T, name, spec string) {
 		st := m.NewState(len(ids) + 16)
 		defer st.Close()
 		st.SetDevice(g)
-		if gs := g.Stats(); st.GPULayers() == m.Cfg.NLayer && !st.HeadOnDevice() && gs.Declined+gs.NoRoom > 0 {
-			// The fold is the resident head riding the chunk, so a card that
-			// holds every block but not the head has nothing to fold.
-			t.Skipf("CARD TOO SMALL: all %d blocks placed but the head did not fit (%s) -- this gate "+
-				"proved nothing on this device; run it on one that holds both", m.Cfg.NLayer, g.Err())
+		if gs := g.Stats(); (st.GPULayers() < m.Cfg.NLayer || !st.HeadOnDevice()) && gs.Declined+gs.NoRoom > 0 {
+			// The fold is the resident head riding the chunk over every block,
+			// so a card that holds the blocks but not the head -- or the head
+			// and not every block, which is where a card shared with a desktop
+			// lands -- has nothing to fold.
+			t.Skipf("CARD TOO SMALL: %d of %d blocks and head %v placed (%s) -- this gate "+
+				"proved nothing on this device; run it on one that holds both", st.GPULayers(), m.Cfg.NLayer,
+				st.HeadOnDevice(), g.Err())
 		}
 		if st.GPULayers() != m.Cfg.NLayer || !st.HeadOnDevice() {
 			t.Fatalf("placed %d of %d blocks, head %v: %s", st.GPULayers(), m.Cfg.NLayer, st.HeadOnDevice(), g.Err())
