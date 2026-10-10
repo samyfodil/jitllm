@@ -74,6 +74,8 @@ func (g *devTier) injectedFail() bool {
 //	"stale"   a page-in uploads the bytes the block's host slices held at
 //	          admission, without asking the host for them again: whatever
 //	          block the host pager has since put in that frame
+//	"passfold" a staged decode over passes folds none after the first:
+//	          the finish reads a partial nothing wrote
 var pagedFault string
 
 // SetPagedFault arms one violation for the calls after it; "" disarms.

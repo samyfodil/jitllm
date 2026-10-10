@@ -102,8 +102,9 @@ type stepLoop struct {
 
 	// A gate's violations, false but in a test: feedNext feeds each decoding
 	// row the token sampled for the row after it; dropMaxTokens never
-	// retires a row for reaching its max_tokens.
-	feedNext, dropMaxTokens bool
+	// retires a row for reaching its max_tokens; admitAll admits every
+	// waiting request whatever the card has room for.
+	feedNext, dropMaxTokens, admitAll bool
 
 	stats batchCounters
 }
@@ -115,6 +116,9 @@ type batchCounters struct {
 	promptChunks, promptSteps                           atomic.Int64
 	admissions, admitWait                               atomic.Int64
 	refusals, separateSteps                             atomic.Int64
+	// kvWaits counts admissions put off because the card's room for history
+	// was promised to the rows already admitted (stepLoop.kvRoom).
+	kvWaits atomic.Int64
 	// pipelinedChunks is prompt chunks that ran as a pipelined prefill
 	// beside the step rather than as rows of it.
 	pipelinedChunks atomic.Int64
@@ -396,25 +400,92 @@ func (lp *stepLoop) serve() {
 	}
 }
 
-// admit moves waiting requests into rows while there is room.
+// admit moves waiting requests into rows while there is room: a free row,
+// and on a device room on the card for the row's history (kvRoom).
 func (lp *stepLoop) admit() {
 	lp.mu.Lock()
 	defer lp.mu.Unlock()
-	if len(lp.waiting) == 0 || len(lp.rows) >= lp.width {
-		return
+	room, page, promised := lp.kvRoom()
+	if len(lp.waiting) > 0 && len(lp.rows) < lp.width {
+		for len(lp.waiting) > 0 && len(lp.rows) < lp.width {
+			r := lp.waiting[0]
+			need := rowPages(r, 0, page) * page
+			if page > 0 && len(lp.rows) > 0 && need > room && !lp.admitAll {
+				lp.stats.kvWaits.Add(1)
+				break
+			}
+			room -= need
+			promised += need
+			lp.waiting = lp.waiting[1:]
+			r.waited = time.Since(r.enqueued)
+			r.s.queuePos.Store(0)
+			lp.rows = append(lp.rows, r)
+			lp.shape++
+			lp.stats.admissions.Add(1)
+			lp.stats.admitWait.Add(int64(r.waited))
+			close(r.admitted)
+		}
+		lp.renumber()
 	}
-	for len(lp.waiting) > 0 && len(lp.rows) < lp.width {
-		r := lp.waiting[0]
-		lp.waiting = lp.waiting[1:]
-		r.waited = time.Since(r.enqueued)
-		r.s.queuePos.Store(0)
-		lp.rows = append(lp.rows, r)
-		lp.shape++
-		lp.stats.admissions.Add(1)
-		lp.stats.admitWait.Add(int64(r.waited))
-		close(r.admitted)
+	if page > 0 {
+		lp.lm.gpu.PromiseKV(promised)
 	}
-	lp.renumber()
+}
+
+// admitLookahead is the most generated positions admission promises a row
+// beyond its prompt. A row's max_tokens is a bound, not a forecast (an
+// unbounded chat request's is the context), so promising all of it would
+// admit one row at a time; past the lookahead a row grows into whatever room
+// is left, and on a full card its oldest pages go home and stream back
+// (kvevict.go), as before there was admission. Parking the newest rows whole
+// when the card fills is the upgrade.
+const admitLookahead = 512
+
+// rowPages is the pages of history row r takes once its prompt and its
+// promised generation are in, less those of its first pos positions, which
+// it already holds. A page of 0 prices nothing.
+func rowPages(r *row, pos, page int) int {
+	if page <= 0 {
+		return 0
+	}
+	end := len(r.ids) + min(max(r.maxTokens, 0), admitLookahead)
+	if m := r.s.st.MaxSeq(); m > 0 {
+		end = min(end, m)
+	}
+	return max((end+page-1)/page-(pos+page-1)/page, 0)
+}
+
+// kvRoom is admission's budget, in positions: the card's room for history
+// (tier.GPU.KVRoom) less promised, what the admitted rows are still promised,
+// and the page both are counted in. A page of 0 is no bound: a model on the
+// host, or no history on the card to price.
+//
+// Admission keeps the rows' histories on the card. A row admitted past the
+// room would send the oldest pages of others home, and a step with two
+// sequences' pages at home is refused as one step: every row then runs alone
+// and re-streams its evicted prefix each token -- 172 of 256 requests failed
+// at 64 concurrent on a V100 that way. A row that does not fit waits for the
+// rows ahead of it to retire, first come first served; the first row is
+// always admitted, so nothing waits on a card that holds none. The promise
+// goes to the tier too (tier.GPU.PromiseKV), so a batched scratch built
+// after admission does not take the pages it was made on.
+func (lp *stepLoop) kvRoom() (room, page, promised int) {
+	g := lp.lm.gpu
+	if g == nil {
+		return 0, 0, 0
+	}
+	room, page = g.KVRoom()
+	if page == 0 {
+		return 0, 0, 0
+	}
+	for _, r := range lp.rows {
+		pos := r.s.st.Pos()
+		if r.reset && !r.begun {
+			pos = 0 // its State's old history goes at its first chunk
+		}
+		promised += rowPages(r, pos, page) * page
+	}
+	return room - promised, page, promised
 }
 
 // started queues a row's GenerateStarted (and its echo) once its prompt is in.

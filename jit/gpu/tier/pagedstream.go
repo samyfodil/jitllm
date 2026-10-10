@@ -83,18 +83,20 @@ func (st *pagedStream) writes(w func(backend.Buf, []byte)) {
 }
 
 // pagedStreamPrep readies the call's streaming, or leaves pg.st nil when no
-// row reads an evicted page. The passes reach the furthest live row, so every
-// row's keys are covered whichever sequence it belongs to; only one sequence
-// has pages at home (evictVictim). Callers hold g.mu, outside any submission;
-// it compiles and allocates.
-func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow) error {
+// row reads an evicted page and every row's keys fit the call's plan. The
+// passes reach the furthest live row, so every row's keys are covered
+// whichever sequence it belongs to; only one sequence has pages at home
+// (evictVictim). A call whose staged plan was built for a pass
+// (stagedPassKeys) and whose deepest row reads past it goes in passes too,
+// over pages already on the card: nothing is uploaded and nothing waits.
+// prefill says the call runs the prefill kernels, which pass over a long
+// history on their own (pagedprefill.go). Callers hold g.mu, outside any
+// submission; it compiles and allocates.
+func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow, prefill bool) error {
 	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
 	pg := bs.pkv
 	pg.st = nil
 	kp := g.kvPages()
-	if len(kp.evicted) == 0 {
-		return nil
-	}
 	var s seqID
 	far, over := 0, false
 	for _, r := range rows {
@@ -109,25 +111,32 @@ func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow)
 			s, over = r.s, true
 		}
 	}
-	if !over {
+	pass := g.stagedPassKeys(bs)
+	deep := pass > 0 && far >= pass && !prefill && pg.cur != nil && pg.cur.plan.Path == kernels.PathStaged
+	if !over && !deep {
 		return nil
 	}
-	e := kp.evicted[s]
-	w := e
-	if err := g.heldLayers(sid, func(li int, l *kvLayerPool) error {
-		w = min(w, g.streamWidth(l, e))
-		// Every layer holding s holds the same prefix at home (kvevict.go);
-		// one that does not would have the passes read past its copies.
-		if len(l.owned[s]) > 0 && len(l.home[s]) != e {
-			return fmt.Errorf("block %d holds %d page(s) of sequence %v at home and the pool counts %d",
-				li, len(l.home[s]), s, e)
+	e, w := 0, pass/kp.p
+	if over {
+		e = kp.evicted[s]
+		if !deep || e < w {
+			w = e
 		}
-		return nil
-	}); err != nil {
-		return err
-	}
-	if w < 1 {
-		return fmt.Errorf("%w: no free page to stream %d evicted page(s) through", ErrKVCapacity, e)
+		if err := g.heldLayers(sid, func(li int, l *kvLayerPool) error {
+			w = min(w, g.streamWidth(l, e))
+			// Every layer holding s holds the same prefix at home (kvevict.go);
+			// one that does not would have the passes read past its copies.
+			if len(l.owned[s]) > 0 && len(l.home[s]) != e {
+				return fmt.Errorf("block %d holds %d page(s) of sequence %v at home and the pool counts %d",
+					li, len(l.home[s]), s, e)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		if w < 1 {
+			return fmt.Errorf("%w: no free page to stream %d evicted page(s) through", ErrKVCapacity, e)
+		}
 	}
 	// A power of two, so the widths a pool passes through compile a handful
 	// of kernel sets rather than one per free-list length.
@@ -282,6 +291,7 @@ func (pg *pagedScratch) streamDecode(s backend.Session, lc *launcher,
 			}
 			g.KVStreamPasses++
 		}
+		g.StagedPasses++
 		desc := st.desc[di][j]
 		lc.la(vr.scores, vr.scoreT, q, k, n, pg.sc, tab, desc)
 		if err := lc.launch(vr.soft, vr.softG, 64, pg.sc, n, pg.wt, pg.part, tab, desc); err != nil {
@@ -290,7 +300,7 @@ func (pg *pagedScratch) streamDecode(s backend.Session, lc *launcher,
 		lc.la(vr.acc, vr.accT, pg.wt, v, n, pg.part, tab, desc)
 		if j == 0 {
 			lc.la(ss.first, ss.foldT, pg.part, ss.run[0])
-		} else {
+		} else if !pagedFaulted("passfold") {
 			lc.la(ss.fold, ss.foldT, pg.part, ss.run[(j+1)%2], ss.run[j%2])
 		}
 	}
@@ -300,4 +310,32 @@ func (pg *pagedScratch) streamDecode(s backend.Session, lc *launcher,
 		lc.la(ss.finish, ss.finT, ss.run[(st.passes+1)%2], out)
 	}
 	return nil
+}
+
+// devStagedPlane is the plane Config.StagedPassKeys' default is sized to:
+// a scratch's score plane, rows x heads x keys floats, at most 64 MiB (its
+// weight plane is the same again). A 512-row chunk of 32 heads passes 1024
+// keys at a time, a 64-row step 8192; a plan for a 131072-position context
+// was 8 GiB a plane at 256 rows.
+const devStagedPlane = 64 << 20
+
+// stagedPassKeys is the most keys bs's staged plan is built for, in whole
+// pages, or 0 for no bound: a block whose attention reads the whole history
+// through the table at once (the lightning indexer, MiniMax-M3's block
+// selection, DeepSeek V4's compressed entries) does not go in passes.
+// Callers hold g.mu.
+func (g *devTier) stagedPassKeys(bs *blockScratch) int {
+	pg := bs.pkv
+	if pg == nil || pg.idx != nil || pg.msa != nil || bs.ds4 != nil {
+		return 0
+	}
+	kp := g.kvPages()
+	if kp == nil || kp.p <= 0 {
+		return 0
+	}
+	n := g.StagedPassKeys
+	if n <= 0 {
+		n = devStagedPlane / 4 / max(pg.shape.Rows*pg.shape.Heads, 1)
+	}
+	return max(n/kp.p, 1) * kp.p
 }

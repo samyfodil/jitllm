@@ -6277,7 +6277,8 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			g.pagedStage(pk, p, pk.rows)
 			// A call over evicted history streams (pagedstream.go), through
 			// the staged decode kernels rather than the prefill ones.
-			if e := g.pagedStreamPrep(sid, bs, pk.rows); e != nil {
+			pf := pk.pf != nil && rag == nil && R > 1 && nrow > 0
+			if e := g.pagedStreamPrep(sid, bs, pk.rows, pf); e != nil {
 				return refuse("paged attention: %v", e)
 			}
 			// The lightning indexer scores every position through the
@@ -9091,8 +9092,9 @@ func (g *devTier) prepBatch(width int) bool {
 		// A width built after placement filled the card must not take what
 		// the blocks were budgeted: it is refused, and the caller runs the
 		// reserved width (batchFor) or narrower submissions. Without the
-		// reservation the device asks the card, as it did before it.
-		if !g.NoScratchReserve && g.overBudget() && width != g.promptW && width != g.stepW && !g.reserving {
+		// reservation the device asks the card, as it did before it. Nor
+		// may it take the history admitted rows were promised (PromiseKV).
+		if !g.NoScratchReserve && !g.room(g.promisedBytes()) && width != g.promptW && width != g.stepW && !g.reserving {
 			g.dropBatch(width)
 			g.ScratchRefused++
 			g.LastErr = fmt.Sprintf("a %d-row batched scratch does not fit the budget (%d of %d bytes charged)", width, g.used, g.limit)
