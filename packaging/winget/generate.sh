@@ -60,6 +60,14 @@ InstallModes:
   - interactive
   - silent
 UpgradeBehavior: install
+# The setup's Add/Remove Programs entry (packaging/windows/jitllm.nsi), so
+# winget can tell the installed package is this one: list, upgrade and
+# uninstall find it by these.
+ProductCode: jitllm
+AppsAndFeaturesEntries:
+  - DisplayName: jitllm
+    Publisher: jitllm
+    ProductCode: jitllm
 Commands:
   - jitllm
   - jitllmd

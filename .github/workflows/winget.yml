@@ -107,6 +107,9 @@ jobs:
           }
           winget --info
           winget settings --enable LocalManifestFiles
+          # The Store source asks for its own agreement on every query, and
+          # this check needs only the manifest in front of it.
+          winget source remove msstore
       - name: generate
         shell: bash
         env:
@@ -176,7 +179,8 @@ jobs:
             if (-not $install.WaitForExit(180000)) {
               Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, CommandLine | Format-Table -AutoSize -Wrap | Out-String -Width 400
               Get-ChildItem "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1 | Get-Content -Tail 40
-              Get-ChildItem -Recurse "$env:LOCALAPPDATA\Temp\WinGet" -Filter *.exe -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName; Get-Content -Stream Zone.Identifier $_.FullName -ErrorAction SilentlyContinue }
+              Get-Process | Where-Object MainWindowTitle | Select-Object Id, Name, MainWindowTitle | Format-Table -AutoSize | Out-String -Width 300
+              Get-Item -Force "$env:LOCALAPPDATA\Temp\WinGet\*\*.exe" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName; Get-Content -Stream Zone.Identifier $_.FullName -ErrorAction SilentlyContinue }
               throw "winget install did not finish in three minutes"
             }
             if ($install.ExitCode -ne 0) { throw "winget install exited $($install.ExitCode)" }
