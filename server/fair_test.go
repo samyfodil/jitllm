@@ -79,20 +79,22 @@ func TestFairnessZeroIsFirstComeFirstServed(t *testing.T) {
 	}
 }
 
-// TestFairFeedingAdvancesEveryPrompt: above level 0 every admitted prompt is
-// fed at every step until it is in, however many there are and however small
-// the budget, and the allotment never passes the budget but to give each a
-// token. Against level 0, a step with more
-// prompts than its budget covers leaves some at zero -- the count the gate
+// TestFairFeedingAdvancesTheWindow: above level 0 the oldest prompt and the
+// level's window after it (fairWindow) are each fed at every step until they
+// are in, however small the budget, and no step carries more than the
+// budget but a token for each of the window. Against level 0, a step whose
+// budget the oldest prompt takes whole feeds one prompt -- the count the gate
 // reads must be able to fail.
-func TestFairFeedingAdvancesEveryPrompt(t *testing.T) {
-	run := func(level int) (fed, had int) {
+func TestFairFeedingAdvancesTheWindow(t *testing.T) {
+	// short counts the steps that fed fewer prompts than the window asks.
+	run := func(level int) (short, steps, most int) {
 		lp := fairLoop(level, 64)
 		rows := make([]*row, 8)
 		for i := range rows {
 			rows[i] = promptRow(100+37*i, 0)
 		}
-		for step := 0; step < 400; step++ {
+		want := 1 + max(fairWindow(level), 1)
+		for range 400 {
 			var live []*row
 			for _, r := range rows {
 				if r.prompting() {
@@ -102,9 +104,9 @@ func TestFairFeedingAdvancesEveryPrompt(t *testing.T) {
 			if len(live) == 0 {
 				break
 			}
-			budget := 32
+			const budget = 32
 			a := allotOf(lp, live, budget)
-			sum := 0
+			sum, fed := 0, 0
 			for i, k := range a {
 				sum += k
 				if k > 0 {
@@ -112,22 +114,32 @@ func TestFairFeedingAdvancesEveryPrompt(t *testing.T) {
 				}
 				live[i].fed += k
 			}
-			had += len(live)
-			if sum > max(budget, len(live)) {
+			steps++
+			most = max(most, fed)
+			if fed < min(len(live), want) {
+				short++
+			}
+			if sum > budget+fairWindow(level) {
 				t.Fatalf("level %d: a step allots %d tokens, budget %d", level, sum, budget)
 			}
 		}
-		return fed, had
+		return short, steps, most
 	}
 	for _, level := range []int{1, DefaultFairness, 100} {
-		fed, had := run(level)
-		t.Logf("level %d: %d of %d prompting rows fed", level, fed, had)
-		if fed != had {
-			t.Fatalf("level %d: %d of %d prompting rows fed", level, fed, had)
+		short, steps, most := run(level)
+		t.Logf("level %d (window %d): %d of %d steps fed fewer than the oldest and its window; at most %d prompts a step",
+			level, fairWindow(level), short, steps, most)
+		if short != 0 {
+			t.Fatalf("level %d: %d steps left a prompt of the window unfed", level, short)
+		}
+		if most > 2+fairWindow(level) {
+			t.Fatalf("level %d: a step fed %d prompts, the window bounds it at %d", level, most, 2+fairWindow(level))
 		}
 	}
-	if fed, had := run(0); fed == had {
-		t.Fatalf("VIOLATION level 0 fed every prompting row (%d of %d): the count cannot tell", fed, had)
+	short, steps, _ := run(0)
+	t.Logf("violation, level 0: %d of %d steps fed one prompt", short, steps)
+	if short == 0 {
+		t.Fatal("VIOLATION level 0 fed two prompts every step: the count cannot tell")
 	}
 }
 
