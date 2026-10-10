@@ -9092,8 +9092,9 @@ func (g *devTier) prepBatch(width int) bool {
 		// A width built after placement filled the card must not take what
 		// the blocks were budgeted: it is refused, and the caller runs the
 		// reserved width (batchFor) or narrower submissions. Without the
-		// reservation the device asks the card, as it did before it.
-		if !g.NoScratchReserve && g.overBudget() && width != g.promptW && width != g.stepW && !g.reserving {
+		// reservation the device asks the card, as it did before it. Nor
+		// may it take the history admitted rows were promised (PromiseKV).
+		if !g.NoScratchReserve && !g.room(g.promisedBytes()) && width != g.promptW && width != g.stepW && !g.reserving {
 			g.dropBatch(width)
 			g.ScratchRefused++
 			g.LastErr = fmt.Sprintf("a %d-row batched scratch does not fit the budget (%d of %d bytes charged)", width, g.used, g.limit)

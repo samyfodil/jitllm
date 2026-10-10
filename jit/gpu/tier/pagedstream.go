@@ -312,10 +312,12 @@ func (pg *pagedScratch) streamDecode(s backend.Session, lc *launcher,
 	return nil
 }
 
-// devStagedPassKeys is Config.StagedPassKeys' default: a 256-row chunk's
-// planes at 32 heads are 256 MiB at it, where a 131072-position context's
-// were 8 GiB.
-const devStagedPassKeys = 4096
+// devStagedPlane is the plane Config.StagedPassKeys' default is sized to:
+// a scratch's score plane, rows x heads x keys floats, at most 64 MiB (its
+// weight plane is the same again). A 512-row chunk of 32 heads passes 1024
+// keys at a time, a 64-row step 8192; a plan for a 131072-position context
+// was 8 GiB a plane at 256 rows.
+const devStagedPlane = 64 << 20
 
 // stagedPassKeys is the most keys bs's staged plan is built for, in whole
 // pages, or 0 for no bound: a block whose attention reads the whole history
@@ -333,7 +335,7 @@ func (g *devTier) stagedPassKeys(bs *blockScratch) int {
 	}
 	n := g.StagedPassKeys
 	if n <= 0 {
-		n = devStagedPassKeys
+		n = devStagedPlane / 4 / max(pg.shape.Rows*pg.shape.Heads, 1)
 	}
 	return max(n/kp.p, 1) * kp.p
 }

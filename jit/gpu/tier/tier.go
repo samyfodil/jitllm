@@ -247,7 +247,7 @@ type Config struct {
 	// history uploads (kvevict.go); 0 is every free page the layer has.
 	KVStreamPages int
 	// StagedPassKeys is the most keys one staged paged attention pass
-	// covers; 0 is devStagedPassKeys. The staged plan's score and weight
+	// covers; 0 sizes it to a 64 MiB plane (devStagedPlane). The staged plan's score and weight
 	// planes are rows x heads x keys, so a plan sized for the context would
 	// hold gigabytes of a card that a model's histories need (8 GiB of a
 	// V100 for a 256-row chunk of a 131072-position Llama 3.1); a row deeper
@@ -1378,7 +1378,10 @@ type devShared struct {
 	cnt backend.AllocCounter
 	// rounding is the driver's page rounding charged so far (settleRounding).
 	rounding uint64
-	winDepth int
+	// kvPromise is the positions of history a scheduler has admitted rows
+	// for and they have not yet taken (GPU.PromiseKV, kvroom.go).
+	kvPromise int
+	winDepth  int
 	// geoUsed says a split plan was ever placed here (gemma4.go).
 	geoUsed bool
 	// reserving is set while reserveScratch probes widths, so prepBatch's
