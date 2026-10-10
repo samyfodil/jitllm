@@ -104,7 +104,7 @@ capIsMeasurement() {
       # EXCLUSIVE for it would park every build and test behind a download.
       case "${2:-}" in convert|info|tokenize|hardware|library|asm) return 1 ;; esac
       return 0 ;;
-    llama-bench|llama-cli|*bench|*.test|vs-llamacpp.sh) return 0 ;;
+    llama-bench|llama-cli|*bench|*.test|vs-llamacpp.sh|vs-llamacpp-paged.sh) return 0 ;;
     go)
       case " $* " in *" -bench"*) return 0 ;; esac
       return 1 ;;
@@ -132,6 +132,7 @@ if [ "${1:-}" = "--selftest" ]; then
   t 1 taskset -c 0,2,4,6,8,10 go test ./... -count=1
   t 1 gcc -O2 -o probe probe.c
   t 0 ./scripts/vs-llamacpp.sh cpu m.gguf
+  t 0 ./scripts/vs-llamacpp-paged.sh m.gguf 2G
   t 1 make -j4
   ( export JITLLM_MEASURE=1; t 0 ./scratchpad/my-ab.sh )
   [ "$fail" = 0 ] && echo "cap --selftest: ok"
