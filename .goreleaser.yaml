@@ -215,9 +215,12 @@ snapshot:
 # With a Developer ID certificate and an App Store Connect API key in the
 # secrets, the binaries are signed with the hardened runtime and the JIT
 # entitlements, then notarized. This runs on Linux (goreleaser uses quill).
+# quill signs only with an Apple-issued chain, so a self-signed certificate
+# (no notary key beside it) leaves the bare binaries ad-hoc signed; the
+# desktop app is still signed with it on the Mac.
 notarize:
   macos:
-    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+    - enabled: '{{ and (isEnvSet "MACOS_SIGN_P12") (isEnvSet "MACOS_NOTARY_KEY") }}'
       ids: [jitllm, jitllmd, jitllm-desktop-darwin, jitllm-tui]
       sign:
         certificate: "{{ .Env.MACOS_SIGN_P12 }}"
