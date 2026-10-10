@@ -97,6 +97,24 @@ func TestFatalCrashIsReportedOnTheNextLaunch(t *testing.T) {
 	}
 }
 
+// What a driver prints to standard error lands in crash.log too, and is not a
+// crash: a launch after it shows nothing. Against the violation (any bytes
+// counting as a crash) a report comes back.
+func TestDriverNoiseIsNotACrash(t *testing.T) {
+	dir := t.TempDir()
+	noise := "libEGL warning: DRI3 error: Could not get DRI3 device\nvulkan: No DRI3 support detected\n"
+	if err := os.WriteFile(filepath.Join(dir, fatalFile), []byte(noise), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := Arm(dir, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep != nil {
+		t.Fatalf("driver noise reported as a crash:\n%s", rep.Text)
+	}
+}
+
 // A recovered panic is handed to the handler with the panicking goroutine's
 // stack, and the goroutine ends rather than the process.
 func TestRecoverReportsAndKeepsTheProcess(t *testing.T) {

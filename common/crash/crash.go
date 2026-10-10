@@ -107,7 +107,7 @@ func Arm(d string, logTail []string, noConsole bool) (*Report, error) {
 
 	fatal := filepath.Join(d, fatalFile)
 	var rep *Report
-	if b, err := os.ReadFile(fatal); err == nil && len(bytes.TrimSpace(b)) > 0 {
+	if b, err := os.ReadFile(fatal); err == nil && crashed(b) {
 		r := build("the previous run", string(b), logTail)
 		rep = &r
 		rep.Path = save(r.Text)
@@ -132,6 +132,14 @@ func Arm(d string, logTail []string, noConsole bool) (*Report, error) {
 	// here without losing the crash output.
 	defer f.Close()
 	return rep, debug.SetCrashOutput(f, debug.CrashOptions{})
+}
+
+// crashed reports whether b, what a run left in crash.log, holds a Go
+// traceback. With standard error pointed at the file it also collects what
+// drivers print there ("libEGL warning: ..."), which is not a crash.
+func crashed(b []byte) bool {
+	return bytes.Contains(b, []byte("\ngoroutine ")) || bytes.HasPrefix(b, []byte("goroutine ")) ||
+		bytes.Contains(b, []byte("fatal error:")) || bytes.Contains(b, []byte("panic:"))
 }
 
 // fatalOut is crash.log while it is the process's standard error.
@@ -198,7 +206,7 @@ func title(app, trace string) string {
 		l := strings.TrimSpace(sc.Text())
 		if strings.HasPrefix(l, "panic:") || strings.HasPrefix(l, "fatal error:") ||
 			strings.HasPrefix(l, "Exception ") || strings.HasPrefix(l, "unexpected fault") ||
-			strings.HasPrefix(l, "runtime:") {
+			strings.HasPrefix(l, "runtime:") || strings.HasPrefix(l, "SIG") {
 			if len(l) > 120 {
 				l = l[:120]
 			}
