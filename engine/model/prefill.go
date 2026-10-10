@@ -34,6 +34,10 @@ func (s *State) Prefill(tokens []int32) ([]float32, error) {
 	if s.batched {
 		return nil, errBatch{}
 	}
+	if err := s.retireErr; err != nil {
+		s.retireErr = nil
+		return nil, err
+	}
 	return s.prefillInto(0, tokens)
 }
 
