@@ -126,11 +126,39 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          $server = Start-Process -PassThru -WindowStyle Hidden -FilePath python -ArgumentList '-m', 'http.server', '8765', '--bind', '127.0.0.1', '--directory', (Resolve-Path dist)
-          try {
-            for ($i = 0; $i -lt 30; $i++) {
-              try { Invoke-WebRequest -UseBasicParsing -Method Head http://127.0.0.1:8765/checksums.txt | Out-Null; break } catch { Start-Sleep 1 }
+          # The setups over HTTP from this runner: a listener in a background
+          # job, since not every image has Python on its PATH.
+          $root = (Resolve-Path dist).Path
+          $server = Start-Job -ArgumentList $root -ScriptBlock {
+            param($root)
+            $l = [System.Net.HttpListener]::new()
+            $l.Prefixes.Add('http://127.0.0.1:8765/')
+            $l.Start()
+            while ($true) {
+              $c = $l.GetContext()
+              $f = Join-Path $root ([Uri]::UnescapeDataString($c.Request.Url.AbsolutePath.TrimStart('/')))
+              if (Test-Path -PathType Leaf $f) {
+                $b = [IO.File]::ReadAllBytes($f)
+                $c.Response.ContentType = 'application/octet-stream'
+                $c.Response.ContentLength64 = $b.Length
+                if ($c.Request.HttpMethod -ne 'HEAD') { $c.Response.OutputStream.Write($b, 0, $b.Length) }
+              } else { $c.Response.StatusCode = 404 }
+              $c.Response.Close()
             }
+          }
+          # The setups are unsigned until WINDOWS_SIGN_PFX exists, and winget
+          # starts a downloaded setup through the shell, so SmartScreen holds
+          # it at "Windows protected your PC" with nobody to click through
+          # (packaging/README.md). Turned off on this throwaway runner only.
+          New-Item -Force 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' | Out-Null
+          Set-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' EnableSmartScreen 0 -Type DWord
+          Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer' SmartScreenEnabled 'Off'
+          try {
+            $up = $false
+            for ($i = 0; $i -lt 30 -and -not $up; $i++) {
+              try { Invoke-WebRequest -UseBasicParsing -Method Head http://127.0.0.1:8765/checksums.txt | Out-Null; $up = $true } catch { Start-Sleep 1 }
+            }
+            if (-not $up) { Receive-Job $server; throw "the local server did not come up" }
             winget validate --manifest $env:MANIFEST
             # Bounded: an installer that waits on something never ends the
             # step, so after five minutes show what is still running and
@@ -139,7 +167,7 @@ jobs:
             $null = $install.Handle # keeps the exit code readable after WaitForExit
             if (-not $install.WaitForExit(300000)) {
               Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, CommandLine | Format-Table -AutoSize -Wrap | Out-String -Width 400
-              Get-ChildItem "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir" -ErrorAction SilentlyContinue | Get-Content -Tail 60
+              Get-ChildItem "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1 | Get-Content -Tail 40
               throw "winget install did not finish in five minutes"
             }
             if ($install.ExitCode -ne 0) { throw "winget install exited $($install.ExitCode)" }
@@ -158,5 +186,5 @@ jobs:
             $path = [Environment]::GetEnvironmentVariable('Path', 'User')
             if (($path -split ';') -contains $dir) { throw "winget uninstall left $dir on the user PATH" }
           } finally {
-            Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
+            Stop-Job $server
           }
