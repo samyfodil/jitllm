@@ -1,6 +1,8 @@
 package model
 
 import (
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/samyfodil/jitllm/jit/gpu/tier"
@@ -10,8 +12,8 @@ import (
 // card, the staged decode forced, its plan built for pass keys (0: the
 // default, wider than the whole history), and the eviction gate's prompt
 // and teacher-forced decode.
-func (eg *evictGate) stagedPassRun(t *testing.T, pass int) ([][]float32, tier.Stats) {
-	g, err := tier.OpenWith(tier.WithDevices("cuda:0"), tier.WithDeviceTune(tier.TuneOff),
+func (eg *evictGate) stagedPassRun(t *testing.T, dev string, pass int) ([][]float32, tier.Stats) {
+	g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(c *tier.Config) {
 			c.KVPage = 64
 			c.StagedDecode = true
@@ -55,25 +57,33 @@ func (eg *evictGate) stagedPassRun(t *testing.T, pass int) ([][]float32, tier.St
 // TestStagedPassGateDiscriminates.
 func TestStagedDecodePassesPastItsWidth(t *testing.T) {
 	eg := newEvictGate(t)
-	wide, ws := eg.stagedPassRun(t, 0)
-	narrow, ns := eg.stagedPassRun(t, 128)
-	if ws.StagedPasses != 0 {
-		t.Fatalf("the wide arm ran %d staged passes: its plan did not cover the history", ws.StagedPasses)
+	devs := []string{"cuda:0", "vulkan:0"}
+	if v := os.Getenv("JITLLM_STEP_DEVICES"); v != "" {
+		devs = strings.Split(v, ",")
 	}
-	if ns.StagedPasses == 0 || ns.KVStreamPasses != 0 || ns.KVEvictions != 0 {
-		t.Fatalf("the narrow arm: %d staged passes, %d upload passes, %d evictions: want passes over pages on the card",
-			ns.StagedPasses, ns.KVStreamPasses, ns.KVEvictions)
-	}
-	dev, at := worstStep(narrow, wide)
-	host, hat := worstStep(narrow, eg.host)
-	ctl, _ := worstStep(wide, eg.host)
-	t.Logf("%d tokens, passes of 128 keys: %d staged passes; worst logit NMSE %.3e against the wide plan (step %d), "+
-		"%.3e against the host (step %d; the wide plan reads %.3e); scratch %d MiB narrow, %d MiB wide",
-		len(eg.ids), ns.StagedPasses, dev, at, host, hat, ctl, ns.ScratchBytes>>20, ws.ScratchBytes>>20)
-	if !(dev < evictNMSE) {
-		t.Fatalf("worst logit NMSE %.3e against the wide plan at step %d", dev, at)
-	}
-	if !(host < evictNMSE) {
-		t.Fatalf("worst logit NMSE %.3e against the host at step %d", host, hat)
+	for _, dev := range devs {
+		t.Run(dev, func(t *testing.T) {
+			wide, ws := eg.stagedPassRun(t, dev, 0)
+			narrow, ns := eg.stagedPassRun(t, dev, 128)
+			if ws.StagedPasses != 0 {
+				t.Fatalf("the wide arm ran %d staged passes: its plan did not cover the history", ws.StagedPasses)
+			}
+			if ns.StagedPasses == 0 || ns.KVStreamPasses != 0 || ns.KVEvictions != 0 {
+				t.Fatalf("the narrow arm: %d staged passes, %d upload passes, %d evictions: want passes over pages on the card",
+					ns.StagedPasses, ns.KVStreamPasses, ns.KVEvictions)
+			}
+			got, at := worstStep(narrow, wide)
+			host, hat := worstStep(narrow, eg.host)
+			ctl, _ := worstStep(wide, eg.host)
+			t.Logf("%d tokens, passes of 128 keys: %d staged passes; worst logit NMSE %.3e against the wide plan (step %d), "+
+				"%.3e against the host (step %d; the wide plan reads %.3e); scratch %d MiB narrow, %d MiB wide",
+				len(eg.ids), ns.StagedPasses, got, at, host, hat, ctl, ns.ScratchBytes>>20, ws.ScratchBytes>>20)
+			if !(got < evictNMSE) {
+				t.Fatalf("worst logit NMSE %.3e against the wide plan at step %d", got, at)
+			}
+			if !(host < evictNMSE) {
+				t.Fatalf("worst logit NMSE %.3e against the host at step %d", host, hat)
+			}
+		})
 	}
 }

@@ -31,10 +31,10 @@ func TestKVEvictionGateDiscriminates(t *testing.T) {
 // with every pass after the first left unfolded, and demands it fail.
 func TestStagedPassGateDiscriminates(t *testing.T) {
 	eg := newEvictGate(t)
-	wide, _ := eg.stagedPassRun(t, 0)
+	wide, _ := eg.stagedPassRun(t, "cuda:0", 0)
 	tier.SetPagedFault("passfold")
 	defer tier.SetPagedFault("")
-	narrow, ns := eg.stagedPassRun(t, 128)
+	narrow, ns := eg.stagedPassRun(t, "cuda:0", 128)
 	if ns.StagedPasses == 0 {
 		t.Fatal("no staged pass ran: the violation was never exercised")
 	}
