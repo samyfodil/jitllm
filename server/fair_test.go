@@ -314,9 +314,11 @@ func timeSliced(t *testing.T, dev string, violate bool) (parks int64, apart int)
 	parks = lm.loop.stats.parks.Load()
 	if lm.gpu != nil {
 		home, freed := e.preempt.blocksHome.Load(), lm.loop.stats.parkFreed.Load()
+		// The room freed is logged, not demanded: KVRoom reads the card's
+		// machine-wide free memory, which another process moves.
 		t.Logf("%s: parking brought %d block(s) home and freed %d positions of the card's room", dev, home, freed)
-		if home == 0 || freed <= 0 {
-			t.Fatalf("%s: %d parks moved %d block(s) home and freed %d positions: nothing left the card", dev, parks, home, freed)
+		if want := parks * int64(lm.m.Cfg.NLayer); home != want {
+			t.Fatalf("%s: %d parks moved %d block(s) home, want every block of each, %d", dev, parks, home, want)
 		}
 	}
 	if lm.loop.stats.resumes.Load() != parks {
@@ -351,7 +353,9 @@ func TestTimeSlicesBoundTheWait(t *testing.T) {
 			mu.Unlock()
 		}
 		concurrently(t, e, lm, c, fairRequests(n, gen))
-		q := int64(fairQuantum(100))
+		// The slice the loop ran: the level's, or longer where its swaps
+		// measured dear (stepLoop.quantum).
+		q := int64(max(fairQuantum(100), lm.loop.quantum()))
 		// A wave of width rows runs a quantum before the next wave is in, a
 		// prompt a step or two each: (n/width - 1) waves ahead of the last.
 		bound = int64(n/width-1)*(q+4) + 4
