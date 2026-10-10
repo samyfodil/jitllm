@@ -161,4 +161,15 @@ To publish, in order:
   `jitllm.app/Contents/Resources/bin/jitllm version`, `open` the app, and run
   `ui/install`'s test binary with `JITLLM_LAUNCHD_JITLLMD` set to the
   bundle's `jitllmd`, which starts the real agent under launchd and removes it.
-- `shellcheck packaging/*/*.sh` and `actionlint .github/workflows/release.yml`.
+- The winget manifests: `.github/workflows/winget.yml`, on a push to
+  `installers` and in every release before it is published. On windows-2025
+  and windows-11-arm it serves the setups from the runner
+  (`JITLLM_INSTALLER_BASE`), generates the manifests with their real
+  checksums, and runs `winget validate`, `winget install --manifest`,
+  `jitllm version` from a new shell's PATH and `winget uninstall`. Where the
+  image has no winget it is installed with `Repair-WinGetPackageManager`. The
+  unsigned setup needs SmartScreen and the attachment manager's prompt turned
+  off on the runner; a signed one would not. A manifest installed from disk is
+  in no source, so the check finds the install by its Add/Remove Programs
+  name, not by `jitllm.jitllm`.
+- `shellcheck packaging/*/*.sh` and `actionlint .github/workflows/*.yml`.
