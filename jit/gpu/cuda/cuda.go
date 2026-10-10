@@ -173,6 +173,10 @@ func NewEvent() (*Event, error) {
 // Record stamps the event when s reaches this point.
 func (e *Event) Record(s *Stream) error { return call(cuEventRecord(e.e, s.Handle()), "cuEventRecord") }
 
+// RecordOn stamps the event when the stream with handle h (0 is the legacy
+// stream) reaches this point.
+func (e *Event) RecordOn(h CUstream) error { return call(cuEventRecord(e.e, h), "cuEventRecord") }
+
 // RecordNode records the event into the graph h is capturing, as a node that
 // stamps the device clock on every replay (CU_EVENT_RECORD_EXTERNAL).
 func (e *Event) RecordNode(h CUstream) error {
