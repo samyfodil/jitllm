@@ -80,8 +80,14 @@ type prefillMode int
 const (
 	prefillTiled prefillMode = iota // FMA scores and accumulate
 	prefillMMA                      // m16n8k16 scores, FMA accumulate
+	prefillMMAAcc                   // m16n8k16 scores, m16n8k8 accumulate
 	prefillMMA70                    // sm_70's m8n8k4, both products
 )
+
+// accMMANT is PagedAttnAccMMA's query tiles a warp: 16 queries, the scores
+// kernel's query tile, which the softmax's (and so the accumulate's) must
+// divide.
+const accMMANT = 2
 
 // prefillVariant is the staged kernels at one span.
 type prefillVariant struct {
@@ -166,6 +172,12 @@ func (g *devTier) initPagedPrefill(bs *blockScratch) error {
 		// width takes it, and a refusal is better found at placement.
 		mat := !g.NoMMA && !g.kb.noAttnMMA
 		var modes []prefillMode
+		// The accumulate on the matrix unit too where the m16n8 binary16
+		// instruction lowers (f16GemmK): the FMA accumulate was the larger
+		// half of a 512-row prompt's attention on an sm_86 card.
+		if mat && hd%16 == 0 && rows%16 == 0 && !p.MLA() && g.f16GemmK() > 0 && rows%(8*accMMANT) == 0 {
+			modes = append(modes, prefillMMAAcc)
+		}
 		if mat && hd%16 == 0 && rows%16 == 0 && !p.MLA() {
 			modes = append(modes, prefillMMA)
 		}
@@ -194,6 +206,8 @@ func (g *devTier) initPagedPrefill(bs *blockScratch) error {
 			switch m {
 			case prefillMMA:
 				pf.sq = 16
+			case prefillMMAAcc:
+				pf.qt, pf.sq = 8*accMMANT, 16
 			case prefillMMA70:
 				pf.qt, pf.sq = 8*volta70AttnNT, 8*volta70AttnNT
 			}
@@ -306,7 +320,7 @@ func (g *devTier) prefillVariantAt(bs *blockScratch, pf *pagedPrefill, chunk, sp
 	var ks, kf, ka *ir.Kernel
 	var err error
 	switch pf.mode {
-	case prefillMMA:
+	case prefillMMA, prefillMMAAcc:
 		ks, err = kernels.PagedAttnScoresMMA(s, g.tiles.attnNT)
 		v.scoreT = kernels.PagedAttnScoresMMAWarps(s, g.tiles.attnNT) * 32
 	case prefillMMA70:
@@ -320,10 +334,18 @@ func (g *devTier) prefillVariantAt(bs *blockScratch, pf *pagedPrefill, chunk, sp
 		kf, err = kernels.PagedPrefillSoftmax(s, pf.lanes, pf.qt)
 	}
 	if err == nil {
-		if pf.mode == prefillMMA70 {
+		switch pf.mode {
+		case prefillMMA70:
 			ka, err = kernels.PagedAttnAccMMA70(s, volta70AccMT, volta70AttnNT)
 			v.accT = kernels.PagedAttnAccMMA70Warps(s, volta70AccMT, volta70AttnNT) * 32
-		} else {
+		case prefillMMAAcc:
+			mt := 4
+			for mt > 1 && s.Dim%(16*mt) != 0 {
+				mt /= 2
+			}
+			ka, err = kernels.PagedAttnAccMMA(s, mt, accMMANT)
+			v.accT = kernels.PagedAttnAccMMAWarps(s, mt, accMMANT) * 32
+		default:
 			ka, err = kernels.PagedAttnAccTiled(s, pf.qt)
 			v.accT = kernels.PagedAttnAccTiledThreads(s, pf.qt)
 		}
@@ -474,6 +496,9 @@ func (pf *pagedPrefill) prefillWrites(w func(backend.Buf, []byte)) {
 
 // on70 reports that the staged form runs on sm_70's m8n8k4 pair.
 func (pf *pagedPrefill) on70() bool { return pf.flash == nil && pf.mode == prefillMMA70 }
+
+// accOnMMA reports that the staged form's accumulate is PagedAttnAccMMA.
+func (pf *pagedPrefill) accOnMMA() bool { return pf.flash == nil && pf.mode == prefillMMAAcc }
 
 // passes is how many passes the current call's descriptor set win runs, 0
 // for one launch.

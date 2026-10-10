@@ -13,7 +13,9 @@ import (
 // TestF16GemmPrefillMatchesTheHost prefills real models on CUDA with every
 // block placed, through the staged binary16 GEMM on the m16n8 instruction
 // (tier's f16Gemm: sm_75 and later), and holds the prompt's logits AND the
-// decode that reads the chunk's KV to the host.
+// decode that reads the chunk's KV to the host. The chunk's attention
+// accumulates on m16n8k8 (kernels.PagedAttnAccMMA) behind the m16n8k16
+// scores, counted by Stats().PagedAccMMA.
 //
 // The models cover the formats and features the GEMM carries: Q4_K/Q6_K,
 // Q3_K beside Q4_K/Q5_K/Q6_K (Q3_K has no binary16 dequant and keeps the int8
@@ -112,9 +114,15 @@ func TestF16GemmPrefillMatchesTheHost(t *testing.T) {
 			// After the comparison, so a run with the GEMM switched off still
 			// prints the int8 arm's numbers.
 			st := g.Stats()
-			t.Logf("%s: %d matvecs on the m16n8 GEMM, %d on sm_70's", g.Name(), st.GemmF16, st.VoltaMV)
+			t.Logf("%s: %d matvecs on the m16n8 GEMM, %d on sm_70's; %d attention accumulates on m16n8k8",
+				g.Name(), st.GemmF16, st.VoltaMV, st.PagedAccMMA)
 			if st.GemmF16 == 0 && ptxTargetSM(g.Name()) >= 75 {
 				t.Fatalf("%s lowers the m16n8 binary16 instruction and built no GEMM on it: the int8 twin answered", g.Name())
+			}
+			// The accumulate rides the m16n8k16 scores, so from sm_80; a
+			// hybrid's attention blocks and a mixture's take it as well.
+			if st.PagedAccMMA == 0 && ptxTargetSM(g.Name()) >= 80 {
+				t.Fatalf("%s: no prompt attention accumulated on m16n8k8: the FMA tiles answered", g.Name())
 			}
 			ran++
 		})

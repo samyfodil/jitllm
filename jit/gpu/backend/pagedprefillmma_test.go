@@ -19,7 +19,8 @@ func prefillValue(s kernels.FlashShape) int {
 
 // TestPagedPrefillMMA is TestPagedPrefillStaged for the matrix-instruction
 // forms: PagedAttnScoresMMA (m16n8k16, sm_80 and later) with the tiled
-// accumulate, and the Volta pair PagedAttnScoresMMA70 and PagedAttnAccMMA70
+// accumulate and with PagedAttnAccMMA (m16n8k8), and the Volta pair
+// PagedAttnScoresMMA70 and PagedAttnAccMMA70
 // (m8n8k4, which sm_86 runs too), on every device that lowers each. Binary16
 // operands and float32 sums, so the bound is FlashPrefill70's 1e-5 against
 // the float64 oracle. MLA's row-major region runs on the Volta pair, as the
@@ -41,6 +42,9 @@ func TestPagedPrefillMMA(t *testing.T) {
 		{ir.MMAShape{M: 16, N: 8, K: 16, Kind: ir.MMAF16}, []prefillForm{
 			{name: "mma1", mmaNT: 1, accQT: 1, smLanes: 32},
 			{name: "mma4", mmaNT: 4, accQT: 4, smLanes: 1, groupMerge: true},
+			// PagedAttnAccMMA (m16n8k8, sm_75 on) behind the m16n8k16 scores.
+			{name: "mma2acc4x2", mmaNT: 2, accMMA: [2]int{4, 2}, smLanes: 32},
+			{name: "mma1acc1x1", mmaNT: 1, accMMA: [2]int{1, 1}, smLanes: 1, groupMerge: true},
 		}},
 		{ir.MMAVolta, []prefillForm{
 			{name: "v1x2", voltaMT: 1, voltaNT: 2, smLanes: 32},
@@ -54,6 +58,7 @@ func TestPagedPrefillMMA(t *testing.T) {
 					for _, sh := range prefillShapes {
 						for fi, f := range pass.forms {
 							if f.mmaNT > 0 && (sh.MLA > 0 || sh.Dim%16 != 0) ||
+								f.accMMA[0] > 0 && prefillValue(sh)%(16*f.accMMA[0]) != 0 ||
 								f.voltaMT > 0 && (sh.Dim%4 != 0 || prefillValue(sh)%(32*f.accMT()) != 0) {
 								continue
 							}

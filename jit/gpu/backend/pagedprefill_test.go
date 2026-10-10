@@ -143,6 +143,7 @@ type prefillForm struct {
 	voltaNT    int
 	voltaAccMT int // PagedAttnAccMMA70's own dim tile, 0 for voltaMT (the tier's is 1)
 	accQT      int // PagedAttnAccTiled's query tile
+	accMMA     [2]int // PagedAttnAccMMA's dim and query tiles (mt, nt), zero for the tiled accumulate
 	smLanes    int
 	groupMerge bool // FlashAttentionMerge rather than its wide form
 }
@@ -162,6 +163,9 @@ func pagedParams(k *ir.Kernel) bool {
 func (f prefillForm) accTile() int {
 	if f.voltaMT > 0 {
 		return 8 * f.voltaNT
+	}
+	if f.accMMA[0] > 0 {
+		return 8 * f.accMMA[1]
 	}
 	return f.accQT
 }
@@ -218,9 +222,12 @@ func pagedPrefillStaged(t *testing.T, d backend.Device, s kernels.FlashShape, f 
 		build(kernels.PagedAttnScoresTiled(s, f.scoresQT, f.scoresKT))
 	}
 	build(kernels.PagedPrefillSoftmax(s, f.smLanes, f.accTile()))
-	if f.voltaMT > 0 {
+	switch {
+	case f.voltaMT > 0:
 		build(kernels.PagedAttnAccMMA70(s, f.accMT(), f.voltaNT))
-	} else {
+	case f.accMMA[0] > 0:
+		build(kernels.PagedAttnAccMMA(s, f.accMMA[0], f.accMMA[1]))
+	default:
 		build(kernels.PagedAttnAccTiled(s, f.accQT))
 	}
 	direct := s.Splits == 0 // the accumulate writes the output, no merge
@@ -287,9 +294,12 @@ func pagedPrefillStaged(t *testing.T, d backend.Device, s kernels.FlashShape, f 
 		if direct {
 			dst = oo
 		}
-		if f.voltaMT > 0 {
+		switch {
+		case f.voltaMT > 0:
 			launch(cs[2], (kernels.PagedAttnAccMMA70Warps(s, f.accMT(), f.voltaNT)+3)/4, 128, pr, vo, no, dst, to, ro)
-		} else {
+		case f.accMMA[0] > 0:
+			launch(cs[2], (kernels.PagedAttnAccMMAWarps(s, f.accMMA[0], f.accMMA[1])+3)/4, 128, pr, vo, no, dst, to, ro)
+		default:
 			launch(cs[2], (kernels.PagedAttnAccTiledThreads(s, f.accQT)+127)/128, 128, pr, vo, no, dst, to, ro)
 		}
 		ma := []backend.Buf{part, oo}

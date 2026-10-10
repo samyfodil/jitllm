@@ -7328,6 +7328,9 @@ func (g *devTier) layersSession(s backend.Session) {
 							if pk.pf.on70() {
 								g.PagedPrefill70++
 							}
+							if pk.pf.accOnMMA() {
+								g.PagedAccMMA++
+							}
 						}
 					} else if !skipAttn && pk != nil {
 						// A decode row or a batch's rows: each a descriptor, a

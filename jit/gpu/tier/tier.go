@@ -833,6 +833,10 @@ type Stats struct {
 	// (PagedAttnScoresMMA70/PagedAttnAccMMA70): the selection check that a
 	// prompt on an sm_70 card took the tensor cores, latent blocks included.
 	PagedPrefill70 int
+	// PagedAccMMA counts prefill launches whose accumulate ran on the m16n8k8
+	// binary16 instruction (kernels.PagedAttnAccMMA, sm_75 on): the selection
+	// check that the weighted sum of V left the FMA tiles.
+	PagedAccMMA int
 	// PagedPrefillPasses counts the passes those launches ran over a history
 	// longer than one launch attends -- the selection check for the fold.
 	PagedPrefillPasses int
@@ -1088,6 +1092,7 @@ func (s *Stats) add(o Stats) {
 	s.RecAligns += o.RecAligns
 	s.RecCarryBytes += o.RecCarryBytes
 	s.PagedPrefill70 += o.PagedPrefill70
+	s.PagedAccMMA += o.PagedAccMMA
 	s.PagedPrefillPasses += o.PagedPrefillPasses
 	s.EmbedLaunches += o.EmbedLaunches
 	s.HeadFolds += o.HeadFolds
