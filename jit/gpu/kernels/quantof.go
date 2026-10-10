@@ -1,6 +1,6 @@
 package kernels
 
-import "github.com/samyfodil/jitllm/format/quant"
+import "github.com/jitllm/jitllm/format/quant"
 
 // QuantOf maps a GGUF weight type onto the device packer's.
 //

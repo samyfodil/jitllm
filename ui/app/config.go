@@ -1,8 +1,8 @@
 package app
 
 import (
-	"github.com/samyfodil/jitllm/common/config"
-	"github.com/samyfodil/jitllm/common/session"
+	"github.com/jitllm/jitllm/common/config"
+	"github.com/jitllm/jitllm/common/session"
 )
 
 // The settings live in common/config, shared with the terminal; these are

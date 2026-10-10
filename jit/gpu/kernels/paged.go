@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math/bits"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // Paged KV addressing, the ABI of docs/design/device-kv-paging.md.

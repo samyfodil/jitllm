@@ -11,8 +11,8 @@ import (
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 
-	"github.com/samyfodil/jitllm/common/session"
-	"github.com/samyfodil/jitllm/ui/app"
+	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/ui/app"
 )
 
 // Tuning is the sampling and context panel, shown beside the conversation.

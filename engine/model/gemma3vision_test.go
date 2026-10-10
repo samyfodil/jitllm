@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // Gemma 3's vision half: a SigLIP-so400m tower (27 blocks, 1152 wide, 4096

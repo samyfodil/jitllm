@@ -9,7 +9,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/internal/oracle"
 )
 
 // The DeepSeek-V3 router gate's fixtures and its oracle adapter, shared by the

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // Janus-Pro's tower under the five principles: it pages under a budget with

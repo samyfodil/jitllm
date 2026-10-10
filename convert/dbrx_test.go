@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/samyfodil/jitllm/convert/meta"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // TestDbrxCarriesItsClamp is the converter half of the DBRX gate: the clamp

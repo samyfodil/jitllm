@@ -9,8 +9,8 @@ import (
 	"github.com/gogpu/ui/uitest"
 	"github.com/gogpu/ui/widget"
 
-	"github.com/samyfodil/jitllm/ui/app"
-	"github.com/samyfodil/jitllm/ui/widgets"
+	"github.com/jitllm/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/widgets"
 )
 
 // The map must actually draw its lanes; the formatter gates pass whether or

@@ -21,10 +21,10 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/internal/testmodels"
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
-	"github.com/samyfodil/jitllm/server/gen/jitllm/v1/jitllmv1connect"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
+	"github.com/jitllm/jitllm/server/gen/jitllm/v1/jitllmv1connect"
 )
 
 // The embedding gates: a real embedding container on every path the server

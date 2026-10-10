@@ -91,7 +91,7 @@ addition is chosen from.
 
 ## Reporting results
 
-Try a model and [share what you saw](https://github.com/samyfodil/jitllm/issues)
+Try a model and [share what you saw](https://github.com/jitllm/jitllm/issues)
 with `jitllm hardware`, the model and quantization, and the command. A rate is
 worth more beside the same machine's llama.cpp rate:
 [`scripts/vs-llamacpp.sh`](scripts/vs-llamacpp.sh) measures both.

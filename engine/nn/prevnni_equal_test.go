@@ -6,9 +6,9 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // forcedPreVNNI builds a JIT as though this host had no AVX-VNNI, and reports

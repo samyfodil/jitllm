@@ -10,13 +10,13 @@
 package cpu
 
 import (
-	"github.com/samyfodil/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/internal/oracle"
 	"math/rand"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/samyfodil/jitllm/dev/bench"
+	"github.com/jitllm/jitllm/dev/bench"
 )
 
 // TestABKQuantAccs measures whether the k-quant kernel is latency-bound.

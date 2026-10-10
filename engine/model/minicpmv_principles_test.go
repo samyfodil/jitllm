@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // The five principles on a sliced tower: its blocks page under a budget and

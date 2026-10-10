@@ -10,8 +10,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/samyfodil/jitllm/server"
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	"github.com/jitllm/jitllm/server"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // humanGiB reads the byte figure pattern captures out of text, in GiB.

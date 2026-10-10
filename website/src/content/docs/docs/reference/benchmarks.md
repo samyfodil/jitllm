@@ -3,7 +3,7 @@ title: Benchmarks
 description: jitllm against llama.cpp, vLLM, mistral.rs and ZML on V100s, a Xeon and an M4, with the method behind every number.
 ---
 
-Every figure here names its host, its backend and the engine it is compared with, and every comparison was taken in the same pass on the same machine. Ratios are jitllm divided by the other engine, so above 1 means jitllm is faster. The full record, including every row below parity and what was measured about it, is [`docs/perf/current.md`](https://github.com/samyfodil/jitllm/blob/main/docs/perf/current.md) in the repository.
+Every figure here names its host, its backend and the engine it is compared with, and every comparison was taken in the same pass on the same machine. Ratios are jitllm divided by the other engine, so above 1 means jitllm is faster. The full record, including every row below parity and what was measured about it, is [`docs/perf/current.md`](https://github.com/jitllm/jitllm/blob/main/docs/perf/current.md) in the repository.
 
 ## Method
 
@@ -185,4 +185,4 @@ jitllm speed -devices auto -p 512 -n 128 -r 2 models/model.jlm
 llama-bench -m model.gguf -p 512 -n 128 -ngl 99 -r 3
 ```
 
-Run both on the same GGUF, on an idle machine, one after the other. The repository's `scripts/vs-llamacpp.sh` interleaves the two engines and refuses a result whose spread is too wide. [Share what you find](https://github.com/samyfodil/jitllm/issues), with `jitllm hardware` output, the model, the command and the numbers.
+Run both on the same GGUF, on an idle machine, one after the other. The repository's `scripts/vs-llamacpp.sh` interleaves the two engines and refuses a result whose spread is too wide. [Share what you find](https://github.com/jitllm/jitllm/issues), with `jitllm hardware` output, the model, the command and the numbers.

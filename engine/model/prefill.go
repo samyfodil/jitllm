@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // MaxPrefillChunk sizes the batched scratch. The width used is tuned per

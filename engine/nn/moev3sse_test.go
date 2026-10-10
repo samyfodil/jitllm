@@ -5,8 +5,8 @@ package nn
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/oracle"
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestMoERouteJITOnTheForcedSSETier runs the whole DeepSeek-V3 router -- the

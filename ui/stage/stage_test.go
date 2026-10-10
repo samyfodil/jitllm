@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/samyfodil/jitllm/ui/app"
-	"github.com/samyfodil/jitllm/ui/mock"
-	"github.com/samyfodil/jitllm/ui/stage"
+	"github.com/jitllm/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/mock"
+	"github.com/jitllm/jitllm/ui/stage"
 )
 
 // Every scenario, at both window sizes the shots use and in both themes, must

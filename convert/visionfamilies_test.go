@@ -5,7 +5,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 func f32Tensor(t *testing.T, role jlm.Role, block int32, vals []float32, dims ...uint64) jlm.Tensor {

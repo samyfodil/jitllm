@@ -8,9 +8,9 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/samyfodil/jitllm/common/config"
-	"github.com/samyfodil/jitllm/common/engine"
-	"github.com/samyfodil/jitllm/common/session"
+	"github.com/jitllm/jitllm/common/config"
+	"github.com/jitllm/jitllm/common/engine"
+	"github.com/jitllm/jitllm/common/session"
 )
 
 // newTestRoot is the app over a real engine with no model, a models folder

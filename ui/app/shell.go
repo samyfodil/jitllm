@@ -28,7 +28,7 @@ import (
 	"github.com/gogpu/ui/theme/material3"
 	"github.com/gogpu/ui/widget"
 
-	"github.com/samyfodil/jitllm/ui/widgets"
+	"github.com/jitllm/jitllm/ui/widgets"
 )
 
 // ScreenFunc builds a screen's root widget. It may be called more than once

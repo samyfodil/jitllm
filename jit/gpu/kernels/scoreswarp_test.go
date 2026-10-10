@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // TestAttnScoresWarpMatchesTheReference gates the warp-per-(head, position)

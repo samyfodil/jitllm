@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // TestFeatureProbeGatesTheQuantizedKernels is the production gate: a CPU

@@ -3,7 +3,7 @@ package model
 import (
 	"strings"
 
-	"github.com/samyfodil/jitllm/tok"
+	"github.com/jitllm/jitllm/tok"
 )
 
 // ToolStream reads tool calls out of a reply as it streams, in one syntax.

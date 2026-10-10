@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestSynthLlama4Q8DecodeOnDevice holds the device's DECODE mixture on the

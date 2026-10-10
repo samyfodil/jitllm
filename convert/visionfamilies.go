@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // The per-projector half of the tower converter: what gemma3 and InternVL ship

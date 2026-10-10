@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/samyfodil/jitllm/convert/meta"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // Gemma 3n's MobileNet-V5 tower (jlm.ProjGemma3nV), converter half.

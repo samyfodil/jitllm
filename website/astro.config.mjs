@@ -40,10 +40,10 @@ export default defineConfig({
     starlight({
       title: 'jitllm',
       description: 'An operating system for LLM inference: compiled for your machine, scheduled across every core and GPU, paged through memory.',
-      editLink: { baseUrl: 'https://github.com/samyfodil/jitllm/edit/main/website/' },
+      editLink: { baseUrl: 'https://github.com/jitllm/jitllm/edit/main/website/' },
       lastUpdated: false,
       favicon: '/favicon.svg',
-      social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/samyfodil/jitllm' }],
+      social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/jitllm/jitllm' }],
       customCss: ['./src/styles/docs.css', './src/styles/figures.css'],
       components: {
         SiteTitle: './src/components/SiteTitle.astro',

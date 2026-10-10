@@ -8,7 +8,7 @@ package cpu
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // emitGEMMA64K generates the arm64 prefill kernel for the k-quants.

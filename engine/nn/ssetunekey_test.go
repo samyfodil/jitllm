@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestTuneKeySeparatesTheSSETier: the tuner's cache key must differ between

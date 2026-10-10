@@ -1,8 +1,8 @@
 package app
 
 import (
-	"github.com/samyfodil/jitllm/common/session"
-	"github.com/samyfodil/jitllm/ui/widgets"
+	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/ui/widgets"
 )
 
 // DialogReq is re-exported so a screen can raise a dialog with one import.

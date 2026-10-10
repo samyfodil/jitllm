@@ -3,7 +3,7 @@ package sched_test
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/engine/sched"
 )
 
 // The policy, simulated: the claim is that on a cyclic scan the obvious

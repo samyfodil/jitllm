@@ -3,7 +3,7 @@ package cpu
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // TestA64PackedMatVecPrefetchesOneTileAhead pins the PRFM EmitA64PackedMatVec

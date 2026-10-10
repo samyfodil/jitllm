@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/samyfodil/jitllm/tok/pretok"
+	"github.com/jitllm/jitllm/tok/pretok"
 )
 
 // TestKimiK2SplitsAsMoonshotDoes runs the kimi-k2 pre-tokenizer against a

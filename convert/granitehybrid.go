@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/samyfodil/jitllm/convert/meta"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // graniteHybridConfig is graniteConfig's four scales for Granite 4.0-H, whose

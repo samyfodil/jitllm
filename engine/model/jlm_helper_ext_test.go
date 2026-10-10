@@ -8,12 +8,12 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/samyfodil/jitllm/convert/gguf"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/convert/gguf"
+	"github.com/jitllm/jitllm/internal/testmodels"
 
-	"github.com/samyfodil/jitllm/convert"
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 var convertOnceExt sync.Map

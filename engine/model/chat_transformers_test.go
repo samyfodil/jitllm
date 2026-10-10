@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/tok/jinja"
+	"github.com/jitllm/jitllm/tok/jinja"
 )
 
 // chatGold is tok/jinja's testdata: one chat template per supported family,

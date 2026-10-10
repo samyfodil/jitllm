@@ -6,9 +6,9 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
-	"github.com/samyfodil/jitllm/jit/gpu/metal"
-	"github.com/samyfodil/jitllm/jit/gpu/msl"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/metal"
+	"github.com/jitllm/jitllm/jit/gpu/msl"
 )
 
 type mtlDev struct {

@@ -8,8 +8,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // c6Golden is scripts/c6gold.py's golden: transformers' own class over twelve

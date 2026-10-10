@@ -5,8 +5,8 @@ import (
 	"math"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // The GGUF side of MLA's fused up-projection, gated hermetically because the

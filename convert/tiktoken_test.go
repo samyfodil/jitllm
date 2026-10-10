@@ -7,10 +7,10 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/samyfodil/jitllm/convert/gguf"
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/internal/testmodels"
-	"github.com/samyfodil/jitllm/tok"
+	"github.com/jitllm/jitllm/convert/gguf"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/tok"
 )
 
 // TestTiktokenVocabMatchesLlamaCpp builds Kimi's vocabulary from tiktoken.model

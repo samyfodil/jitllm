@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestTheREADMEGoExamplesBuild compiles every ```go block of the top-level

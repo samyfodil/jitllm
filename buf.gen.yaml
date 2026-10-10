@@ -9,7 +9,7 @@ managed:
   enabled: true
   override:
     - file_option: go_package_prefix
-      value: github.com/samyfodil/jitllm/server/gen
+      value: github.com/jitllm/jitllm/server/gen
 
 plugins:
   - local: protoc-gen-go

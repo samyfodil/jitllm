@@ -3,7 +3,7 @@ package cpu
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // The two packed kernels the SSE tier does not have, by decision rather than

@@ -5,8 +5,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestMoEFaultsAreVisible checks the router directly, since the llama.cpp

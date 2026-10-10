@@ -1,7 +1,7 @@
 package model
 
 import (
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // Multi-head Latent Attention, the DeepSeek-V2/V3 attention and the one place

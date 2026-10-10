@@ -11,9 +11,9 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/format/quant"
-	"github.com/samyfodil/jitllm/internal/oracle"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // Gates for the SSE tier's family 2 (sse_norm.go): RMSNorm, LayerNorm, RoPE,

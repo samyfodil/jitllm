@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // FlashTile is FlashPrefillTile's blocking: SG simdgroups of eight query rows

@@ -5,9 +5,9 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestAttnF16MatchesF32OnExactHalves holds the f16 attention kernels to the f32

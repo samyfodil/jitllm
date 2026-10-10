@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestEncodeIsSafeConcurrently encodes on one vocabulary from many goroutines

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/model"
 )
 
 // OpenAI-compatible HTTP.

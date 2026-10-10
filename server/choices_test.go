@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/internal/oracle"
 )
 
 // TestGenerateLogprobsAreTheModelsRawDistribution: the logprobs a generate

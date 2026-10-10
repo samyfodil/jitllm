@@ -8,7 +8,7 @@ import (
 	"github.com/gogpu/ui/uitest"
 	"github.com/gogpu/ui/widget"
 
-	"github.com/samyfodil/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/app"
 )
 
 // drawSession lays out and draws the whole chat column, and returns everything

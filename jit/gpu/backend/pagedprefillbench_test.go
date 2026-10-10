@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/dev/bench"
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/dev/bench"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // TestPagedPrefillAB is the paged prefill kernels' performance bar

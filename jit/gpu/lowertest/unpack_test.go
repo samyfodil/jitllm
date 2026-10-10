@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
-	"github.com/samyfodil/jitllm/jit/gpu/msl"
-	"github.com/samyfodil/jitllm/jit/gpu/ptx"
-	"github.com/samyfodil/jitllm/jit/gpu/spirv"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/msl"
+	"github.com/jitllm/jitllm/jit/gpu/ptx"
+	"github.com/jitllm/jitllm/jit/gpu/spirv"
 )
 
 // Which formats the device can unpack is a list in the repo. A page-in with no

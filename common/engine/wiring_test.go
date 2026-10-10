@@ -3,14 +3,14 @@
 package engine
 
 import (
-	"github.com/samyfodil/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/model"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/common/session"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // loadFor opens modelPath on a fresh engine with the given setup applied first.

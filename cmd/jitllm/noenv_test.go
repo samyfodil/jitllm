@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestOnlyTheCommandReadsTheEnvironment is the gate behind AGENTS.md's "the

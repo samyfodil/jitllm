@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 const gemma3nGoldScript = "scripts/gemma3ngold.py"

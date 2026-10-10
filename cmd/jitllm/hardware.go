@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/samyfodil/jitllm/engine/sched"
-	"github.com/samyfodil/jitllm/jit/cpu"
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
-	"github.com/samyfodil/jitllm/jit/gpu/vulkan"
+	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/vulkan"
 )
 
 // hardware reports what compute this machine offers jitllm.

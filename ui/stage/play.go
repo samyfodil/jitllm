@@ -3,9 +3,9 @@ package stage
 import (
 	"time"
 
-	"github.com/samyfodil/jitllm/ui/app"
-	"github.com/samyfodil/jitllm/ui/mock"
-	"github.com/samyfodil/jitllm/ui/screen"
+	"github.com/jitllm/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/mock"
+	"github.com/jitllm/jitllm/ui/screen"
 )
 
 // Play runs sc in a fresh window built over package mock, and hands each

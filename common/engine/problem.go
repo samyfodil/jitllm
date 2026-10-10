@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/samyfodil/jitllm/common/catalog"
-	"github.com/samyfodil/jitllm/engine/model"
+	"github.com/jitllm/jitllm/common/catalog"
+	"github.com/jitllm/jitllm/engine/model"
 )
 
 // The stages an engine error can come from, which decide how it is explained.

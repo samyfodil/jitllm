@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"math"
 
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // PackedRowScratch is how many bytes of Args.Scratch EmitPackedRow uses: the

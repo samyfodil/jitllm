@@ -1460,9 +1460,9 @@ const file_jitllm_v1_model_proto_rawDesc = "" +
 	"\bTokenize\x12\x1a.jitllm.v1.TokenizeRequest\x1a\x1b.jitllm.v1.TokenizeResponse\"\x00\x12K\n" +
 	"\n" +
 	"Detokenize\x12\x1c.jitllm.v1.DetokenizeRequest\x1a\x1d.jitllm.v1.DetokenizeResponse\"\x00\x12`\n" +
-	"\x11ApplyChatTemplate\x12#.jitllm.v1.ApplyChatTemplateRequest\x1a$.jitllm.v1.ApplyChatTemplateResponse\"\x00B\x9b\x01\n" +
+	"\x11ApplyChatTemplate\x12#.jitllm.v1.ApplyChatTemplateRequest\x1a$.jitllm.v1.ApplyChatTemplateResponse\"\x00B\x98\x01\n" +
 	"\rcom.jitllm.v1B\n" +
-	"ModelProtoP\x01Z9github.com/samyfodil/jitllm/server/gen/jitllm/v1;jitllmv1\xa2\x02\x03JXX\xaa\x02\tJitllm.V1\xca\x02\tJitllm\\V1\xe2\x02\x15Jitllm\\V1\\GPBMetadata\xea\x02\n" +
+	"ModelProtoP\x01Z6github.com/jitllm/jitllm/server/gen/jitllm/v1;jitllmv1\xa2\x02\x03JXX\xaa\x02\tJitllm.V1\xca\x02\tJitllm\\V1\xe2\x02\x15Jitllm\\V1\\GPBMetadata\xea\x02\n" +
 	"Jitllm::V1b\x06proto3"
 
 var (

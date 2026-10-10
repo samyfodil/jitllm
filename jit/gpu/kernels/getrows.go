@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // GetRowsPacked gathers ntok rows of a packed weight into float32:

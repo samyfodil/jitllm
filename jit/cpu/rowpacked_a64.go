@@ -5,7 +5,7 @@ package cpu
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // EmitPackedRow is the NEON twin of the amd64 row dequantization; see

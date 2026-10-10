@@ -32,10 +32,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/internal/cmd/goheap"
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
-	"github.com/samyfodil/jitllm/server"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/internal/cmd/goheap"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/server"
 )
 
 // verb is one client subcommand. `serve` is not one: it owns the process for

@@ -5,8 +5,8 @@ package tier
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // visionBlocks builds n distinct ViT blocks (resident() keys on the weight

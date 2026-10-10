@@ -1,6 +1,6 @@
 package model
 
-import "github.com/samyfodil/jitllm/engine/nn"
+import "github.com/jitllm/jitllm/engine/nn"
 
 // Nemotron-H (jlm.ArchNemotronH) on the Mamba-2 harness (ssmfamily_test.go):
 // its fixture, built by NemotronHForCausalLM (scripts/ssmgold.py) with one

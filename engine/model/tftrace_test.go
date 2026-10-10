@@ -20,8 +20,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // TestTeacherForcedTrace prints the top logits along a teacher-forced chain and

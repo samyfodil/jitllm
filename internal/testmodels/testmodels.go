@@ -66,7 +66,7 @@ func Missing(t testing.TB, format string, args ...any) {
 	t.Fatalf(format, args...)
 }
 
-const module = "github.com/samyfodil/jitllm"
+const module = "github.com/jitllm/jitllm"
 
 // Dir is the model directory: $JITLLM_MODELS, or models/ at the repository
 // root. With neither a variable nor a root in reach it is "models", which a

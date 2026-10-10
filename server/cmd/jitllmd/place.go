@@ -11,8 +11,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // cmdPlace is PlacementService, whole: the seam, relocation, seam tuning and

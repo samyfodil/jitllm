@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/schemacheck"
+	"github.com/jitllm/jitllm/internal/schemacheck"
 )
 
 // toyVocab is a vocabulary of every single byte, a few multi-byte pieces and

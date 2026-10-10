@@ -18,8 +18,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/tok/pretok"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/tok/pretok"
 )
 
 // spaceMark is U+2581 LOWER ONE EIGHTH BLOCK, SentencePiece's visible space.

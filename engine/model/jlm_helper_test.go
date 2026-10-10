@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/convert"
-	"github.com/samyfodil/jitllm/convert/gguf"
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/convert/gguf"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 var convertOnce sync.Map

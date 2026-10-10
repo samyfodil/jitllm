@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
-	"github.com/samyfodil/jitllm/jit/gpu/ptx"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/ptx"
 )
 
 func main() {

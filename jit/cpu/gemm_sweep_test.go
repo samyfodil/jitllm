@@ -10,7 +10,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // TestGEMMTileSweep measures the register-tiling span against the kernel that

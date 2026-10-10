@@ -16,8 +16,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/samyfodil/jitllm/engine/model"
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	"github.com/jitllm/jitllm/engine/model"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // hybridModel is a recurrent hybrid (Mamba-2 layers beside attention): its

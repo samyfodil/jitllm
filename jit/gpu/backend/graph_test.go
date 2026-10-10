@@ -5,8 +5,8 @@ import (
 	"math"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // TestRecordReplayMatchesDirect holds a replayed graph to the same bar as every

@@ -5,7 +5,7 @@ package cpu
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // EmitPackedRow generates the dequantization of one row of a packed tensor:

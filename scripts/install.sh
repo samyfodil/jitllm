@@ -15,7 +15,7 @@
 #   JITLLM_DOWNLOAD_URL where releases are fetched from (default: GitHub)
 set -eu
 
-repo=samyfodil/jitllm
+repo=jitllm/jitllm
 base=${JITLLM_DOWNLOAD_URL:-https://github.com/$repo/releases/download}
 
 say() { printf '%s\n' "$*" >&2; }

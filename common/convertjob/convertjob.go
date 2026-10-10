@@ -17,10 +17,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/samyfodil/jitllm/common/catalog"
-	"github.com/samyfodil/jitllm/common/session"
-	"github.com/samyfodil/jitllm/convert"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/common/catalog"
+	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // Request is one conversion: a source model, optionally its vision tower, and

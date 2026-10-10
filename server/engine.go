@@ -24,9 +24,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // Config is what a server is built with. Every field has a working default.
@@ -452,6 +452,11 @@ func (e *Engine) ResolvePath(p string) string {
 	return filepath.Join(e.ModelDir(), p)
 }
 
+// hostInexact, when set, loads a host model the step loop runs without the
+// one summation order (LoadModel). False but in a gate's violation: it is how
+// the gate shows that a sampled row parts from its run alone without it.
+var hostInexact bool
+
 // LoadModel opens a container and, when devices were named, the tier that will
 // hold its blocks. A GGUF is refused by model.Open with a NotConvertedError,
 // which errors.go turns into a FailedPrecondition carrying the convert command.
@@ -542,6 +547,19 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		opts = append(opts, model.WithKVF16(*kv))
 	}
 	opts = append(opts, model.WithDeviceSample(o.DeviceSample))
+	// A host model the step loop runs steps its sessions' rows as one pass
+	// (model.StepRuns' host arm, a matmul over the rows) or one session after
+	// another (a matvec each), as the joint choice decides per step. Its
+	// contract is that a row comes out as it does alone, to the bit, so a
+	// seeded sampler draws the same tokens either way. That holds only when
+	// the matmul sums a row in the matvec's order: the pre-VNNI x86 and arm64
+	// prefill GEMMs fold a k-quant's super-block in integers where the decode
+	// matvec rounds per sub-block, arm64's decode picker times forms that sum
+	// differently, and a wide pool splits a long matvec over k. GEMMExact is
+	// the one summation order every packed kernel shares.
+	if dev == nil && e.cfg.MaxBatchRows != 1 && !hostInexact {
+		opts = append(opts, model.WithJITOptions(nn.WithGEMMExact(true)))
+	}
 	m, err := model.Open(path, opts...)
 	if err != nil {
 		closeDev()

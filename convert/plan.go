@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/samyfodil/jitllm/convert/safetensors"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/convert/safetensors"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // ShardPlan is what converting a safetensors model would write, decided from

@@ -3,7 +3,7 @@ package model
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestScoreRowsFollowTheReach: a State made at the model's whole context holds

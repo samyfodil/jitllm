@@ -21,8 +21,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
-	"github.com/samyfodil/jitllm/server/gen/jitllm/v1/jitllmv1connect"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
+	"github.com/jitllm/jitllm/server/gen/jitllm/v1/jitllmv1connect"
 )
 
 // defaultAddr keeps the common case short: a daemon on this host, on the

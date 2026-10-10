@@ -12,7 +12,7 @@
 | NVIDIA (CUDA) | PTX kernels, tensor-core matrix multiply, captured decode graphs |
 | Vulkan | SPIR-V kernels (a software Vulkan device is declined) |
 | Apple (Metal) | MSL kernels on unified memory |
-| AMD (native, `hip:N`) | AMDGPU kernels generated from the IR, assembled through ROCm's comgr; found when ROCm is installed, **not yet tested on AMD hardware** ([#34](https://github.com/samyfodil/jitllm/issues/34)). An AMD GPU also runs through Vulkan with only its driver. |
+| AMD (native, `hip:N`) | AMDGPU kernels generated from the IR, assembled through ROCm's comgr; found when ROCm is installed, **not yet tested on AMD hardware** ([#34](https://github.com/jitllm/jitllm/issues/34)). An AMD GPU also runs through Vulkan with only its driver. |
 
 GPU libraries are loaded at run time through
 [`goffi`](https://github.com/go-webgpu/goffi), with no cgo. One card seen by two

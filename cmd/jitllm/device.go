@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/samyfodil/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/engine/sched"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // One binary: importing jit/gpu costs only libc and libdl, since the CUDA,
