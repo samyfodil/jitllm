@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The CUDA backend's gates on a host with an NVIDIA card, run from a bundle of
-# shipped test binaries rather than the source tree (scripts/kaggle/bundle.sh
+# shipped test binaries rather than the source tree (a bundle script
 # builds one; AGENTS.md RULE 11d has the shipped-binary recipe):
 #
 #   JITLLM_MODELS=/path/to/models ./cuda-gates.sh

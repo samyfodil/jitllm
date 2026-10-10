@@ -156,7 +156,7 @@ if [ "$(uname -s)" = Darwin ]; then
   exec "$@"
 fi
 
-# ★ A CONTAINER WITH NO SYSTEMD AT ALL (Kaggle, a CI image) is the one place
+# ★ A CONTAINER WITH NO SYSTEMD AT ALL (a hosted notebook, a CI image) is the one place
 # the cap is applied another way, and it is decided by a PLATFORM fact, as
 # Darwin's is: /run/systemd/system exists exactly when systemd is PID 1. On a
 # host that boots systemd -- the laptop -- a missing user manager is still the
