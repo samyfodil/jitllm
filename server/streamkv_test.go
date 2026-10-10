@@ -59,19 +59,41 @@ func TestSixtyFourRequestsGateDiscriminates(t *testing.T) {
 	}
 }
 
+// TestSixtyFourRequestsTimeSliced is the same load at fairness level 100:
+// rows are parked for the requests waiting on the card's room, and every
+// request still completes, in both waves, with joint steps.
+func TestSixtyFourRequestsTimeSliced(t *testing.T) {
+	for wave, w := range sixtyFour(t, 2, false, 100) {
+		t.Logf("wave %d: %d of 64 requests failed; %d joint steps, %d parks, %d resumes parked again, "+
+			"%d admissions put off, %d refusals, %d evictions", wave, w.failed, w.joint, w.parks, w.short,
+			w.waits, w.refusals, w.evictions)
+		if w.failed > 0 {
+			t.Fatalf("wave %d: %d of 64 requests failed", wave, w.failed)
+		}
+		if w.joint == 0 || w.parks == 0 {
+			t.Fatalf("wave %d: %d joint steps, %d parks: the gate did not time-slice joint rows", wave, w.joint, w.parks)
+		}
+	}
+}
+
 // waveCounts is what one wave of sixtyFour did.
 type waveCounts struct {
 	failed                                    int
 	joint, waits, refusals, evictions, passes int64
+	parks, short                              int64
 }
 
 // sixtyFour loads Llama 3.2 1B wholly onto gpu:0 with the budget 1 GiB past
 // what placement spent, and sends waves of 64 concurrent greedy completions,
 // half of 128 words and half of 512; admitAll is the violation.
-func sixtyFour(t *testing.T, waves int, admitAll bool) []waveCounts {
+func sixtyFour(t *testing.T, waves int, admitAll bool, level ...int) []waveCounts {
 	const name = "Llama-3.2-1B-Instruct-Q4_K_M.jlm"
 	path := modelPath(t, name)
-	e := New(Config{Probe: oneCardProbe, Version: "test", DefaultMaxSeq: 1024, MaxBatchRows: 64})
+	cfg := Config{Probe: oneCardProbe, Version: "test", DefaultMaxSeq: 1024, MaxBatchRows: 64}
+	if len(level) > 0 {
+		cfg.Fairness = &level[0]
+	}
+	e := New(cfg)
 	t.Cleanup(e.Close)
 	lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "dev", DeviceIDs: []string{"gpu:0"},
 		tierConfig: func(c *tier.Config) { c.KVPage = 64 }})
@@ -93,6 +115,7 @@ func sixtyFour(t *testing.T, waves int, admitAll bool) []waveCounts {
 	var out []waveCounts
 	for wave := range waves {
 		j0, w0, r0 := st.jointSteps.Load(), st.kvWaits.Load(), st.refusals.Load()
+		p0, q0 := st.parks.Load(), st.shortResumes.Load()
 		s0 := lm.gpu.Stats()
 		errs := make([]error, n)
 		var wg sync.WaitGroup
@@ -120,6 +143,7 @@ func sixtyFour(t *testing.T, waves int, admitAll bool) []waveCounts {
 		s1 := lm.gpu.Stats()
 		wc.joint, wc.waits, wc.refusals = st.jointSteps.Load()-j0, st.kvWaits.Load()-w0, st.refusals.Load()-r0
 		wc.evictions, wc.passes = int64(s1.KVEvictions-s0.KVEvictions), int64(s1.KVStreamPasses-s0.KVStreamPasses)
+		wc.parks, wc.short = st.parks.Load()-p0, st.shortResumes.Load()-q0
 		out = append(out, wc)
 	}
 	return out

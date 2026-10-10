@@ -23,8 +23,9 @@ import "time"
 //
 // The factor is the policy between two axes: a decoding row's worst
 // inter-token gap is about cost decode steps, and a waiting prompt's time to
-// its first token falls as the factor rises. Prompts are fed oldest first
-// (promptUnits), so a long one still finishes, a budget a step.
+// its first token falls as the factor rises. Prompts are fed oldest first,
+// beside the fairness level's even share (promptUnits, batchfair.go), so a
+// long one still finishes, a budget a step.
 //
 // Config.StepPromptTokens fixes the budget instead. Only the loop goroutine
 // touches it.

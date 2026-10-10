@@ -165,6 +165,10 @@ func serve(args []string) {
 	stepCost := fs.Float64("step-cost", 0,
 		"with -step-prompt-tokens 0, how many decode steps' time a step carrying prompt "+
 			"tokens may take (0: the engine's default)")
+	fairness := fs.Int("fairness", server.DefaultFairness,
+		"0 to 100: 0 serves requests first come first served, each to its end (the most "+
+			"tokens a second); higher time-slices running rows for waiting ones and feeds the next "+
+			"prompts beside the oldest (shorter, evener waits for a first token)")
 	jointSteps := fs.String("joint-steps", "auto",
 		"how a batch's decode step runs: auto (time joint against one session after another, "+
 			"per row count, and run the faster), always (one joint step) or never (each session alone)")
@@ -261,6 +265,7 @@ func serve(args []string) {
 		PromptChunk:      *promptChunk,
 		StepPromptTokens: *stepPrompt,
 		StepCost:         *stepCost,
+		Fairness:         fairness,
 		JointSteps:       joint,
 		DefaultMaxSeq:    *maxSeq,
 		Version:          *version,
