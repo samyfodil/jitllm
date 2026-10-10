@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // TestAttentionBiasesReachTheModel injects each attention bias (a bias is just a

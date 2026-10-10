@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
 )
 
 // TestWriteAtAssemblesAndRefusesAnOverrun builds a device buffer out of runs

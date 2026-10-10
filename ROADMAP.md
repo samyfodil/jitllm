@@ -336,3 +336,40 @@ What it needs:
 - **Scale checks** nobody has run at this size: page-table size, open time,
   conversion time, and the expert pager under a budget a small fraction of the
   model.
+
+## 16. Application-facing contracts and serving under load
+
+**Not started**, except where noted. Each item builds on what exists rather
+than replacing it.
+
+1. **A compatibility matrix and client-level tests.** Fields whose omission
+   changes a request's meaning are refused, never ignored (non-zero
+   presence/frequency penalties and `tool_choice` already are). Left: a written
+   matrix of supported fields per API, and conformance cases for streaming and
+   non-streaming, tool-result replay, cancellation and malformed input.
+   Harmless unknown fields stay accepted.
+2. **A mixed-load serving benchmark before any scheduler redesign.** Open-loop
+   arrivals, mixed short and long prompts and outputs, concurrency 1 to 64,
+   reporting p50/p95/p99 first-token and inter-token latency, completed and
+   refused requests and throughput, beside counters that show which path ran.
+3. **Shared steps for partly placed sessions and image prompts**, chosen by
+   what that benchmark shows they cost. Today a session with blocks on both the
+   host and a device, or a prompt carrying a picture, runs outside the shared
+   step.
+4. **A stateless `/v1/responses` endpoint**, when a client that needs it is
+   the target; stateful behaviour is refused explicitly.
+5. **Standard metrics, extended rather than rebuilt.** `/metrics` carries
+   prefill and decode timings; add queue time, inter-token latency, prefix-cache
+   hits, page faults, bytes transferred and shared-step refusal reasons, with
+   labels of bounded cardinality (never a prompt or a session).
+6. **Conversion coverage, ranked by the checkpoints people are blocked on:**
+   Q2_K first for large models, then MLX 4-bit (item 8), then direct
+   safetensors classes for graphs the GGUF path already runs. Other formats
+   (IQ, AWQ, GPTQ, FP8) only for a named checkpoint.
+7. **A capability map tied to code and tests**: graph support, source formats,
+   CLI and server surface, hardware validated and real checkpoints validated,
+   kept separate. Stale statements here and in source comments are corrected in
+   place as part of it.
+8. **Features held to compose:** speculation, constrained output, batching,
+   stop strings, streaming and cancellation in combination, not only each one
+   alone.

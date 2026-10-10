@@ -3,7 +3,7 @@ package model
 import (
 	"math"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // The gated delta net: the other half of a hybrid's block loop.

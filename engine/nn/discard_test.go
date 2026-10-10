@@ -3,7 +3,7 @@ package nn
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // TestDiscardedTokensAreNotDuelSamples runs decode tokens that each call

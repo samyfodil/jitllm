@@ -8,7 +8,7 @@ import (
 	"github.com/gogpu/ui/uitest"
 	"github.com/gogpu/ui/widget"
 
-	"github.com/samyfodil/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/app"
 )
 
 // A turn bubble must be as tall as the text it paints, and no taller. The

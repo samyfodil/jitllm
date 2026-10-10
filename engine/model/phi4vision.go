@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // Phi-4-reasoning-vision: SigLIP2's NaFlex tower at the picture's own size,

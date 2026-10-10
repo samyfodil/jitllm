@@ -8,10 +8,10 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/samyfodil/jitllm/engine/sched"
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestGEMMPoolRate measures the int8 GEMM across the whole P-core pool, which

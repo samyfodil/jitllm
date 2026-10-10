@@ -459,7 +459,7 @@ jobs:
       - name: tag the image latest
         if: ${{ !contains(github.ref_name, '-') }}
         run: |
-          image=ghcr.io/samyfodil/jitllm
+          image=ghcr.io/jitllm/jitllm
           docker buildx imagetools create -t "$image:latest" "$image:${GITHUB_REF_NAME#v}"
 
   # The package-manager files for the published release, generated from its

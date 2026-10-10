@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // TestStepBudgetFollowsTheMeasurement drives the prompt budget with step
@@ -57,6 +57,14 @@ func TestStepBudgetFollowsTheMeasurement(t *testing.T) {
 	drive(slow, 40, line(ms/2))
 	if seen := drive(slow, 60, line(100*ms)); seen[len(seen)-1] != budgetFloor {
 		t.Fatalf("slow prompt tokens took the budget %v, want the floor %d", seen, budgetFloor)
+	}
+	// Once the tokens are cheap again the budget leaves its floor: a fit
+	// taken across slow steps (a compile, a pool growth) must not hold it
+	// there once its steps spend under half their cost, so it comes back to
+	// at least half of what the fit gives (20). Against the fit that
+	// stood whenever a step was within its cost, it stays at the floor.
+	if seen := drive(slow, 60, line(ms/2)); seen[len(seen)-1] < 20/2 {
+		t.Fatalf("cheap prompt tokens after slow ones left the budget %v, want it back within half of 20", seen)
 	}
 	if got := newStepBudget(16, 512, 2).tokens(); got != 16 {
 		t.Fatalf("a fixed budget reads %d", got)

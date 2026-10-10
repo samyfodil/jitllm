@@ -6,10 +6,10 @@ import (
 	"slices"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // Paged attention history on the device (docs/design/device-kv-paging.md).
@@ -407,6 +407,12 @@ func (g *devTier) pagedPlanFor(bs *blockScratch, keys int) (*pagedVariant, error
 	// declining the block (RULE 8).
 	if plan.Path == kernels.PathFlashKV && g.pickLanes() != ir.SubgroupLanes {
 		plan = kernels.DecodePlan{Path: kernels.PathStaged, Shape: kernels.PagedStagedPlan(pg.shape, keys, g.dev.Slots())}
+	}
+	// A staged plan's planes grow with its keys: past the pass width it is
+	// built for the pass, and a deeper call goes in passes (pagedStreamPrep).
+	if pk := g.stagedPassKeys(bs); plan.Path == kernels.PathStaged && pk > 0 && keys > pk {
+		keys = pk
+		plan.Shape = kernels.PagedStagedPlan(pg.shape, keys, g.dev.Slots())
 	}
 	v, err := g.pagedBuild(bs, plan)
 	// The split count only divides the work, and the partials are rows x

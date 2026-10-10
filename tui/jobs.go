@@ -8,10 +8,10 @@ import (
 	"github.com/charmbracelet/bubbles/progress"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/samyfodil/jitllm/common/convertjob"
-	"github.com/samyfodil/jitllm/common/discover"
-	"github.com/samyfodil/jitllm/convert/hf"
-	"github.com/samyfodil/jitllm/convert/library"
+	"github.com/jitllm/jitllm/common/convertjob"
+	"github.com/jitllm/jitllm/common/discover"
+	"github.com/jitllm/jitllm/convert/hf"
+	"github.com/jitllm/jitllm/convert/library"
 )
 
 // jobs is the one conversion or download running, as Models and Discover

@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestTwoModelsKeepTheirOwnLoadOptions checks two models in one process each

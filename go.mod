@@ -1,4 +1,4 @@
-module github.com/samyfodil/jitllm
+module github.com/jitllm/jitllm
 
 go 1.26
 

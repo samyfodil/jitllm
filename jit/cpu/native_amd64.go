@@ -2,7 +2,7 @@
 
 package cpu
 
-import "github.com/samyfodil/jitllm/format/quant"
+import "github.com/jitllm/jitllm/format/quant"
 
 // The native emitter for this GOARCH. Both emitters are host-pure, so either
 // can be generated and disassembled anywhere; only execution needs the

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/format/quant"
-	"github.com/samyfodil/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/internal/oracle"
 )
 
 // TestA64Q5_0MatchesOracle gates the Q5_0 arm of emitA64MatVec. It is tagged

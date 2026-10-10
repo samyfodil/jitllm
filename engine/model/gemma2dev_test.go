@@ -5,8 +5,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestGemma2SoftcapOnDevice runs gemma-2-2b with every block on the device

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestParseToolCalls covers the two call shapes and the cases that must stay

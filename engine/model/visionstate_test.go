@@ -1,6 +1,6 @@
 package model
 
-import "github.com/samyfodil/jitllm/engine/nn"
+import "github.com/jitllm/jitllm/engine/nn"
 
 // testState is a State over the tower's vision segment for a gate that
 // encodes on its own: on share's JIT when one is given (a text State's, as

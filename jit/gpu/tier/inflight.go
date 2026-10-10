@@ -3,7 +3,7 @@ package tier
 import (
 	"slices"
 
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
 )
 
 // Submissions in flight.
@@ -90,7 +90,7 @@ func (g *devTier) exclusiveRange(lo, hi int, rag *ragStep, bs *blockScratch) boo
 	if rag != nil && rag.sid != nil {
 		return true
 	}
-	if bs != nil && bs.pkv != nil && bs.pkv.st != nil {
+	if bs != nil && bs.pkv != nil && bs.pkv.st != nil && bs.pkv.st.evicted > 0 {
 		return true
 	}
 	for li := lo; li < hi; li++ {

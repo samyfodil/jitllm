@@ -14,7 +14,7 @@
 **An operating system for LLM inference: generate the compute for your hardware,
 page models larger than memory, and move execution without losing the conversation.**
 
-[jitllm.org](https://jitllm.org) · [Documentation](https://jitllm.org/docs/) · [Latest release](https://github.com/samyfodil/jitllm/releases/latest)
+[jitllm.org](https://jitllm.org) · [Documentation](https://jitllm.org/docs/) · [Latest release](https://github.com/jitllm/jitllm/releases/latest)
 
 - **Every kernel JIT-generated at load time** for your CPU (AVX2, SSE, NEON)
   or GPU (CUDA, Vulkan, Metal), specialised to the model's shapes and weight
@@ -74,19 +74,19 @@ release, after checking each archive against the release's checksums: into
 `%LOCALAPPDATA%\Programs\jitllm`, which it adds to your `PATH`. Add the apps with
 `| sh -s -- all` (or `desktop`, `tui`), or `$env:JITLLM_PROGRAMS = "all"` before
 the Windows line. Each program is one self-contained binary and its own archive
-on the [Releases](https://github.com/samyfodil/jitllm/releases/latest) page, for Linux,
+on the [Releases](https://github.com/jitllm/jitllm/releases/latest) page, for Linux,
 macOS and Windows on x86-64 and arm64. GPUs need only their driver.
 
 > **AMD GPUs:** they run through Vulkan with only the driver. With ROCm
 > installed, jitllm also uses them through a native backend (`hip:0`, ...),
 > which **has not yet been tested on AMD hardware**
-> ([#34](https://github.com/samyfodil/jitllm/issues/34)). To stay on the
+> ([#34](https://github.com/jitllm/jitllm/issues/34)). To stay on the
 > tested path, pick the Vulkan device explicitly (`-devices vulkan:0`).
 
 To build from source instead, with **Go 1.26 or newer** and no C toolchain:
 
 ```sh
-git clone https://github.com/samyfodil/jitllm.git && cd jitllm
+git clone https://github.com/jitllm/jitllm.git && cd jitllm
 go build ./cmd/jitllm
 (cd server && go build -o ../jitllmd ./cmd/jitllmd)
 (cd ui && CGO_ENABLED=0 go build -o ../jitllm-desktop .)
@@ -129,8 +129,8 @@ and the [server reference](docs/server.md) for endpoints and daemon commands.
 
 ```sh
 docker volume create jitllm-models
-docker run --rm -v jitllm-models:/models --entrypoint jitllm ghcr.io/samyfodil/jitllm convert qwen3-30b-a3b
-docker run -d -p 8080:8080 -v jitllm-models:/models ghcr.io/samyfodil/jitllm -load Qwen3-30B-A3B-Q4_K_M.jlm -id qwen3
+docker run --rm -v jitllm-models:/models --entrypoint jitllm ghcr.io/jitllm/jitllm convert qwen3-30b-a3b
+docker run -d -p 8080:8080 -v jitllm-models:/models ghcr.io/jitllm/jitllm -load Qwen3-30B-A3B-Q4_K_M.jlm -id qwen3
 ```
 
 Add `--gpus all` (with the NVIDIA Container Toolkit) to run on an NVIDIA GPU. The image is
@@ -217,7 +217,7 @@ import (
     "fmt"
     "log"
 
-    "github.com/samyfodil/jitllm/engine/model"
+    "github.com/jitllm/jitllm/engine/model"
 )
 
 func main() {

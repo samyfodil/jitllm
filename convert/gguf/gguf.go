@@ -9,8 +9,8 @@ package gguf
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/convert/meta"
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 const magic = 0x46554747 // "GGUF" little-endian

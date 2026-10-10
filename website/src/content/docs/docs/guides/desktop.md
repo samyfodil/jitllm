@@ -14,7 +14,7 @@ curl -fsSL https://jitllm.org/install.sh | sh -s -- desktop
 jitllm-desktop
 ```
 
-On Windows, set `$env:JITLLM_PROGRAMS = "desktop"` before the PowerShell line. Its archive, `jitllm-desktop_<version>_<os>_<arch>`, is also on the [latest release](https://github.com/samyfodil/jitllm/releases/latest). It is a separate Go module, so the engine keeps its single dependency; to build it from source:
+On Windows, set `$env:JITLLM_PROGRAMS = "desktop"` before the PowerShell line. Its archive, `jitllm-desktop_<version>_<os>_<arch>`, is also on the [latest release](https://github.com/jitllm/jitllm/releases/latest). It is a separate Go module, so the engine keeps its single dependency; to build it from source:
 
 ```sh
 cd jitllm/ui

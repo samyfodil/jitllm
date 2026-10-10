@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strconv"
 
-	"github.com/samyfodil/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/convert/meta"
 )
 
 // splitName matches llama.cpp's gguf-split naming: NAME-00001-of-00003.gguf.

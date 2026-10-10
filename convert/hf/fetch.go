@@ -55,7 +55,7 @@ func sharedTransport() http.RoundTripper {
 	return t
 }
 
-const userAgent = "jitllm (+https://github.com/samyfodil/jitllm)"
+const userAgent = "jitllm (+https://github.com/jitllm/jitllm)"
 
 // copyBuf is fixed: Content-Length is untrusted input, used for progress and
 // completeness, never to size an allocation.

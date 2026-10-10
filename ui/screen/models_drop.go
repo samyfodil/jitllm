@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/samyfodil/jitllm/common/catalog"
-	"github.com/samyfodil/jitllm/ui/app"
+	"github.com/jitllm/jitllm/common/catalog"
+	"github.com/jitllm/jitllm/ui/app"
 )
 
 // Drag and drop. The handler lives in this package because a drop fills

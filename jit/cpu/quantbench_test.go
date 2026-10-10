@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // TestQuantActRate prices the generated activation quantizer against the Go

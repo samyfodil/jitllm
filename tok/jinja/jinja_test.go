@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/tok/jinja"
+	"github.com/jitllm/jitllm/tok/jinja"
 )
 
 // =============================================================================

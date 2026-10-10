@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 func BenchmarkGemmaDecode(b *testing.B) {

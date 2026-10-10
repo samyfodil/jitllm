@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/samyfodil/jitllm/convert/meta"
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // qwen35Of reads what a Qwen3.5 / Qwen3.6 file says beyond qwen3next's keys:

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/samyfodil/jitllm/convert/safetensors"
+	"github.com/jitllm/jitllm/convert/safetensors"
 )
 
 // compressed-tensors' mxfp4-pack-quantized, the format Moonshot released

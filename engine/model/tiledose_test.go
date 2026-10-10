@@ -14,9 +14,9 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/samyfodil/jitllm/dev/bench"
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/dev/bench"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/sched"
 )
 
 // TestPrefillTileDose prices the token tile against prefill, in one process. A

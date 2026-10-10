@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/sched"
 )
 
 // TestTowerSpinProbe prices one tower encode against the worker spin budget, to

@@ -3,7 +3,7 @@ package model
 import (
 	"math"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // What speculative sampling needs of the Sampler beyond Sample: the

@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // Pixtral's and Llama 4's vision under the five principles: the tower pages

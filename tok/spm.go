@@ -18,8 +18,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/tok/pretok"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/tok/pretok"
 )
 
 // spaceMark is U+2581 LOWER ONE EIGHTH BLOCK, SentencePiece's visible space.
@@ -584,3 +584,21 @@ func (v *Vocab) Piece(id int32) (string, bool) {
 	s := v.Decode([]int32{id})
 	return s, s != ""
 }
+
+// Literal is token id's text as a chat template writes it: a control token's
+// own text ([TOOL_CALLS], <|call|>), which Decode drops, and Decode's piece for
+// every other. A tool call written in control tokens is read from it.
+func (v *Vocab) Literal(id int32) string {
+	if id < 0 || int(id) >= len(v.text) {
+		return ""
+	}
+	if k := v.kind[id]; k == typeControl || k == typeUnused {
+		return v.text[id]
+	}
+	one := [1]int32{id}
+	return v.Decode(one[:])
+}
+
+// Harmony reports whether the vocabulary frames messages as gpt-oss's
+// harmony does (DecodeChat).
+func (v *Vocab) Harmony() bool { return v.harmony.ok }

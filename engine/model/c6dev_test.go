@@ -5,8 +5,8 @@ import (
 	"math"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // c6DevViolations are the kit's features taken out of the model while only the

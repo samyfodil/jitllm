@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/convert/gguf"
-	"github.com/samyfodil/jitllm/convert/meta"
-	"github.com/samyfodil/jitllm/internal/testmodels"
-	"github.com/samyfodil/jitllm/tok/jinja"
+	"github.com/jitllm/jitllm/convert/gguf"
+	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/tok/jinja"
 )
 
 // pinned holds exact renderings of the chat templates in real GGUFs. A stray

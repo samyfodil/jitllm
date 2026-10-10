@@ -5,7 +5,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // oldSampler is engine/model/sample.go's Sampler before the kernels replaced it. It

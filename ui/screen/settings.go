@@ -1,7 +1,7 @@
 package screen
 
 import (
-	"github.com/samyfodil/jitllm/common/api"
+	"github.com/jitllm/jitllm/common/api"
 	"os"
 
 	"github.com/gogpu/ui/core/button"
@@ -13,9 +13,9 @@ import (
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 
-	"github.com/samyfodil/jitllm/common/config"
-	"github.com/samyfodil/jitllm/ui/app"
-	"github.com/samyfodil/jitllm/ui/widgets"
+	"github.com/jitllm/jitllm/common/config"
+	"github.com/jitllm/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/widgets"
 )
 
 // Settings is every choice the app remembers, in one place, and where it

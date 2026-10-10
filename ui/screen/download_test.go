@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/common/convertjob"
-	"github.com/samyfodil/jitllm/common/discover"
-	"github.com/samyfodil/jitllm/convert/hf"
-	"github.com/samyfodil/jitllm/convert/library"
-	"github.com/samyfodil/jitllm/internal/testmodels"
-	"github.com/samyfodil/jitllm/ui/app"
+	"github.com/jitllm/jitllm/common/convertjob"
+	"github.com/jitllm/jitllm/common/discover"
+	"github.com/jitllm/jitllm/convert/hf"
+	"github.com/jitllm/jitllm/convert/library"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/ui/app"
 )
 
 // firstText is the first library entry with no vision tower.

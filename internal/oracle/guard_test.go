@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestNoProductionCodeImportsTheOracle walks every non-test Go file in the
@@ -19,7 +19,7 @@ import (
 // habit: a missing kernel cannot silently fall back to the oracle.
 func TestNoProductionCodeImportsTheOracle(t *testing.T) {
 	testmodels.SourceTree(t)
-	const me = "github.com/samyfodil/jitllm/internal/oracle"
+	const me = "github.com/jitllm/jitllm/internal/oracle"
 	root := filepath.Join("..", "..")
 	fset := token.NewFileSet()
 	checked := 0

@@ -3,7 +3,7 @@ package screen
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/app"
 )
 
 // Only the last assistant turn is live, because only that one is being

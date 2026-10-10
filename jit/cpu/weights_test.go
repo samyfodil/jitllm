@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"math/rand"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // Shared by the amd64 and arm64 kernel tests, and deliberately untagged: both

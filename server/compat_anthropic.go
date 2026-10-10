@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/samyfodil/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/model"
 )
 
 // Anthropic-compatible HTTP: POST /v1/messages.
@@ -42,7 +42,8 @@ type anRequest struct {
 	Stream        bool     `json:"stream"`
 
 	// Tools are rendered by the model's own template, converted to the
-	// OpenAI shape it reads; tool_choice {"type": "none"} withholds them.
+	// OpenAI shape it reads; tool_choice {"type": "none"} withholds them,
+	// "any" and a named "tool" hold the reply to a call (tools.go).
 	Tools      []anTool        `json:"tools"`
 	ToolChoice json.RawMessage `json:"tool_choice"`
 
@@ -229,8 +230,11 @@ func (e *compat) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	if t, err := anTools(req.Tools, req.ToolChoice); err != nil {
 		anFail(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
-	} else {
-		chat.Tools = t
+	} else if chat.Tools = t; t != nil {
+		if chat.ToolChoice, err = anToolChoice(req.ToolChoice, toolNames(t)); err != nil {
+			anFail(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+			return
+		}
 	}
 	tt := newToolText(chat.Tools)
 
@@ -263,8 +267,9 @@ func (e *compat) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 			switch ev.Kind {
 			case EventStarted:
 				started = ev.Started
+				tt.start(ev.Started)
 			case EventToken:
-				tt.push(ev.Token.Text)
+				tt.push(ev.Token)
 				text.WriteString(ev.Token.Text)
 			case EventFinished:
 				fin = ev.Finished
@@ -283,12 +288,12 @@ func (e *compat) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		reason := anStopReason(fin.Reason)
 		txt := text.String()
 		blocks := []anOutBlock{{Type: "text", Text: &txt}}
-		if _, content, calls := tt.finish(); len(calls) > 0 {
+		if _, _, content := tt.finish(fin.StopMatched); len(tt.calls) > 0 {
 			reason, blocks = "tool_use", nil
 			if content != "" {
 				blocks = append(blocks, anOutBlock{Type: "text", Text: &content})
 			}
-			for _, c := range calls {
+			for _, c := range tt.calls {
 				blocks = append(blocks, anOutBlock{Type: "tool_use", ID: "toolu_" + e.b.NextID("tc"),
 					Name: c.Name, Input: json.RawMessage(c.Arguments)})
 			}
@@ -319,10 +324,58 @@ func (e *compat) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	var fin *Finished
 	var started *Started
+	// The content blocks as they stream: a text block open at the start,
+	// closed when a call's tool_use block comes, and opened again for text
+	// after one.
+	blk, textOpen, ncalls := 0, true, 0
+	text := func(s string) error {
+		if !textOpen {
+			blk++
+			textOpen = true
+			if err := sse.sendNamed("content_block_start", map[string]any{
+				"type": "content_block_start", "index": blk,
+				"content_block": anContentBlock{Type: "text"},
+			}); err != nil {
+				return err
+			}
+		}
+		return sse.sendNamed("content_block_delta", map[string]any{
+			"type": "content_block_delta", "index": blk,
+			"delta": map[string]string{"type": "text_delta", "text": s},
+		})
+	}
+	// A call streams as its own tool_use block: start with an empty input,
+	// the arguments as one input_json_delta, stop -- the frames an Anthropic
+	// client assembles a tool_use from.
+	toolUse := func(calls []model.ToolCall) error {
+		for _, c := range calls {
+			if textOpen {
+				if err := sse.sendNamed("content_block_stop", map[string]any{"type": "content_block_stop", "index": blk}); err != nil {
+					return err
+				}
+				textOpen = false
+			}
+			blk++
+			ncalls++
+			for _, f := range []map[string]any{
+				{"type": "content_block_start", "index": blk, "content_block": anOutBlock{Type: "tool_use",
+					ID: "toolu_" + e.b.NextID("tc"), Name: c.Name, Input: json.RawMessage("{}")}},
+				{"type": "content_block_delta", "index": blk,
+					"delta": map[string]string{"type": "input_json_delta", "partial_json": c.Arguments}},
+				{"type": "content_block_stop", "index": blk},
+			} {
+				if err := sse.sendNamed(f["type"].(string), f); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
 	gerr := e.b.Generate(r.Context(), o, func(ev Event) error {
 		switch ev.Kind {
 		case EventStarted:
 			started = ev.Started
+			tt.start(ev.Started)
 			// message_start carries the shell of the message with EMPTY
 			// content and the input token count; the content arrives as
 			// deltas. A client builds its message object from this frame.
@@ -342,14 +395,13 @@ func (e *compat) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 				"content_block": anContentBlock{Type: "text"},
 			})
 		case EventToken:
-			txt := tt.push(ev.Token.Text)
-			if txt == "" {
-				return nil
+			txt, calls := tt.push(ev.Token)
+			if txt != "" {
+				if err := text(txt); err != nil {
+					return err
+				}
 			}
-			return sse.sendNamed("content_block_delta", map[string]any{
-				"type": "content_block_delta", "index": 0,
-				"delta": map[string]string{"type": "text_delta", "text": txt},
-			})
+			return toolUse(calls)
 		case EventFinished:
 			fin = ev.Finished
 		}
@@ -363,30 +415,17 @@ func (e *compat) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		sse.sendError(errors.New("the generate finished without a finished event"))
 		return
 	}
-	tail, _, calls := tt.finish()
+	tail, calls, _ := tt.finish(fin.StopMatched)
 	if tail != "" {
-		sse.sendNamed("content_block_delta", map[string]any{
-			"type": "content_block_delta", "index": 0,
-			"delta": map[string]string{"type": "text_delta", "text": tail},
-		})
+		text(tail)
 	}
-	sse.sendNamed("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
+	toolUse(calls)
+	if textOpen {
+		sse.sendNamed("content_block_stop", map[string]any{"type": "content_block_stop", "index": blk})
+	}
 	stop := anStopReason(fin.Reason)
-	// A call streams as its own tool_use block: start with an empty input,
-	// the arguments as one input_json_delta, stop -- the frames an Anthropic
-	// client assembles a tool_use from.
-	for i, c := range calls {
+	if ncalls > 0 {
 		stop = "tool_use"
-		sse.sendNamed("content_block_start", map[string]any{
-			"type": "content_block_start", "index": i + 1,
-			"content_block": anOutBlock{Type: "tool_use", ID: "toolu_" + e.b.NextID("tc"),
-				Name: c.Name, Input: json.RawMessage("{}")},
-		})
-		sse.sendNamed("content_block_delta", map[string]any{
-			"type": "content_block_delta", "index": i + 1,
-			"delta": map[string]string{"type": "input_json_delta", "partial_json": c.Arguments},
-		})
-		sse.sendNamed("content_block_stop", map[string]any{"type": "content_block_stop", "index": i + 1})
 	}
 	delta := map[string]any{"stop_reason": stop, "stop_sequence": nil}
 	if fin.StopMatched != "" {

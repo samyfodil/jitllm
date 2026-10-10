@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/dev/bench"
+	"github.com/jitllm/jitllm/dev/bench"
 )
 
 // TestABBatchThroughput prices batched decode: how many tokens per second the

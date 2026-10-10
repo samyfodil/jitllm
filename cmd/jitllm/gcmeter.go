@@ -8,7 +8,7 @@ import (
 	"runtime/metrics"
 	"runtime/pprof"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // gcSummary is JITLLM_GCSTATS=1's whole-process line: what the collector cost

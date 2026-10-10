@@ -2,7 +2,7 @@ package tok
 
 import (
 	"fmt"
-	"github.com/samyfodil/jitllm/tok/pretok"
+	"github.com/jitllm/jitllm/tok/pretok"
 	"os"
 	"path/filepath"
 	"reflect"

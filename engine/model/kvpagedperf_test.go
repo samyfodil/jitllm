@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestPagedKVCost measures what walking the KV pages costs, paired and

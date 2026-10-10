@@ -14,7 +14,7 @@ curl -fsSL https://jitllm.org/install.sh | sh -s -- tui
 jitllm-tui models/qwen3.jlm
 ```
 
-On Windows, set `$env:JITLLM_PROGRAMS = "tui"` before the PowerShell line. Its archive, `jitllm-tui_<version>_<os>_<arch>`, is also on the [latest release](https://github.com/samyfodil/jitllm/releases/latest). It is a separate Go module; to build it from source:
+On Windows, set `$env:JITLLM_PROGRAMS = "tui"` before the PowerShell line. Its archive, `jitllm-tui_<version>_<os>_<arch>`, is also on the [latest release](https://github.com/jitllm/jitllm/releases/latest). It is a separate Go module; to build it from source:
 
 ```sh
 cd jitllm/tui

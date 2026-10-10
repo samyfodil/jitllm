@@ -3,7 +3,7 @@ package jinja_test
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/tok/jinja"
+	"github.com/jitllm/jitllm/tok/jinja"
 )
 
 // TestFormatFilter holds format to Python's % operator, as jinja2 applies it;

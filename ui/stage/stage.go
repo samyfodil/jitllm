@@ -24,7 +24,7 @@ import (
 	"github.com/gogpu/ui/transition"
 	"github.com/gogpu/ui/widget"
 
-	"github.com/samyfodil/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/app"
 )
 
 // Stage is one window's tree, mounted.

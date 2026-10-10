@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/samyfodil/jitllm/convert/hf"
+	"github.com/jitllm/jitllm/convert/hf"
 )
 
 // The command half of package hf: where a download lands, and which token pays

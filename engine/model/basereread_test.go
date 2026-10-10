@@ -5,7 +5,7 @@ package model
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // TestTheDeviceCallbackDoesNotRereadTheBase: the device's callback must not read

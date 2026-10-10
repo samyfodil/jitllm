@@ -13,11 +13,11 @@ import (
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 
-	"github.com/samyfodil/jitllm/common/discover"
-	"github.com/samyfodil/jitllm/common/hardware"
-	"github.com/samyfodil/jitllm/convert/library"
-	"github.com/samyfodil/jitllm/ui/app"
-	"github.com/samyfodil/jitllm/ui/widgets"
+	"github.com/jitllm/jitllm/common/discover"
+	"github.com/jitllm/jitllm/common/hardware"
+	"github.com/jitllm/jitllm/convert/library"
+	"github.com/jitllm/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/widgets"
 )
 
 // Discover is the first thing a person needs: what this machine is, and which

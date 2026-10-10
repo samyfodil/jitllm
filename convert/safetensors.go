@@ -14,9 +14,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/samyfodil/jitllm/convert/safetensors"
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/convert/safetensors"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // The second input format, producing the same container gguf.go does. A

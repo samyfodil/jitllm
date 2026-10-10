@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/common/catalog"
-	"github.com/samyfodil/jitllm/common/session"
-	"github.com/samyfodil/jitllm/convert/library"
+	"github.com/jitllm/jitllm/common/catalog"
+	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/convert/library"
 )
 
 func TestParamsReadsTotalAndActive(t *testing.T) {

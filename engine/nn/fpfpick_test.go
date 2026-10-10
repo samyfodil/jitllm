@@ -6,8 +6,8 @@ import (
 	"math"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestPrefetchDistanceIsPickedPerShape: on x86 each shape times the fused

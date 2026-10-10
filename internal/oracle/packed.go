@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/samyfodil/jitllm/format/quant"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // The packed layout, read in Go: the reference every generated packed matvec

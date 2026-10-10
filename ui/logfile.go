@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 
-	"github.com/samyfodil/jitllm/common/config"
+	"github.com/jitllm/jitllm/common/config"
 )
 
 // logToFileWithoutAConsole sends the app's log output to jitllm-ui.log beside

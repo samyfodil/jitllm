@@ -3,8 +3,8 @@ package model
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestMoEFusedEpiloguesOnDevice is the end-to-end gate on tier.fuseMoE: a

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestGCNotBlocked is jit/cpu's invariant I3, measured -- a timing

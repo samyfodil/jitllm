@@ -6,7 +6,7 @@ description: Use the engine as a Go library, with the same model format and plac
 The CLI, the server and the desktop app are all thin layers over the same packages. Embedding jitllm means importing them: the engine runs inside your process, and its only dependency is [`goffi`](https://github.com/go-webgpu/goffi).
 
 ```sh
-go get github.com/samyfodil/jitllm
+go get github.com/jitllm/jitllm
 ```
 
 ## Generate text
@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/samyfodil/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/model"
 )
 
 func main() {
@@ -80,7 +80,7 @@ A zero `Sampler` (or `model.Greedy`) is greedy. Call `Observe` for each prompt a
 Open the devices with the device tier and hand them to a state. The spec is the same [device grammar](/docs/guides/devices/#the-device-grammar) the CLI takes.
 
 ```go
-import "github.com/samyfodil/jitllm/jit/gpu/tier"
+import "github.com/jitllm/jitllm/jit/gpu/tier"
 
 g, err := tier.OpenWith(tier.WithDevices("auto"))
 if err != nil {
@@ -148,4 +148,4 @@ vec, err := e.EmbedText("a sentence to embed") // pooled and L2-normalised
 
 ## Run a server in process
 
-The server package is a separate module, `github.com/samyfodil/jitllm/server`. `server.New` returns an engine, `LoadModel` loads into it, and `Handler()` is an `http.Handler` serving the OpenAI, Anthropic and Connect APIs, to mount on your own mux.
+The server package is a separate module, `github.com/jitllm/jitllm/server`. `server.New` returns an engine, `LoadModel` loads into it, and `Handler()` is an `http.Handler` serving the OpenAI, Anthropic and Connect APIs, to mount on your own mux.

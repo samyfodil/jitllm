@@ -8,9 +8,9 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/internal/testmodels"
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestEveryModelRunsPreVNNI decodes and prefills every model under 2 GiB with
@@ -98,6 +98,7 @@ func TestExactGatesRunPreVNNI(t *testing.T) {
 	t.Run("RaggedBatchMatchesForward", TestRaggedBatchMatchesForward)
 	t.Run("PrefillMatchesForward", TestPrefillMatchesForward)
 	t.Run("PrefillSeqMatchesForward", TestPrefillSeqMatchesForward)
+	t.Run("StepRunsOnTheHostSharesOnePass", TestStepRunsOnTheHostSharesOnePass)
 	t.Run("DecodeDoesNotAllocate", func(t *testing.T) {
 		for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf",
 			"olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"} {

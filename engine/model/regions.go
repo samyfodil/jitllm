@@ -1,6 +1,6 @@
 package model
 
-import "github.com/samyfodil/jitllm/engine/nn"
+import "github.com/jitllm/jitllm/engine/nn"
 
 // regions is the per-State form of the pool regions a decode token runs every
 // layer, with the function each hands the pool built once -- engine/nn's

@@ -3,7 +3,7 @@ package model
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestThePoolParksOnlyWhileTokensPage is the spin decision. After a decode

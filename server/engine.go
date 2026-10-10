@@ -24,9 +24,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // Config is what a server is built with. Every field has a working default.
@@ -65,6 +65,15 @@ type Config struct {
 	// prompt's time to its first token. Zero (or up to 1) takes
 	// DefaultStepCost.
 	StepCost float64
+
+	// Fairness is the step loop's policy between throughput and the spread
+	// of the requests' waits, 0 to 100 (batchfair.go): 0 serves first come
+	// first served and runs each row to its end, the most tokens a second;
+	// above it rows are time-sliced (parked for a waiting request after a
+	// quantum that shrinks with the level), the prompts admitted after the
+	// oldest are fed beside it, and priority is a head start that age
+	// overtakes. nil takes DefaultFairness.
+	Fairness *int
 
 	// JointSteps is how a decode step whose rows could run as one joint step
 	// does run: measured per row count (the default), always joint, or never.
@@ -443,6 +452,11 @@ func (e *Engine) ResolvePath(p string) string {
 	return filepath.Join(e.ModelDir(), p)
 }
 
+// hostInexact, when set, loads a host model the step loop runs without the
+// one summation order (LoadModel). False but in a gate's violation: it is how
+// the gate shows that a sampled row parts from its run alone without it.
+var hostInexact bool
+
 // LoadModel opens a container and, when devices were named, the tier that will
 // hold its blocks. A GGUF is refused by model.Open with a NotConvertedError,
 // which errors.go turns into a FailedPrecondition carrying the convert command.
@@ -533,6 +547,19 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		opts = append(opts, model.WithKVF16(*kv))
 	}
 	opts = append(opts, model.WithDeviceSample(o.DeviceSample))
+	// A host model the step loop runs steps its sessions' rows as one pass
+	// (model.StepRuns' host arm, a matmul over the rows) or one session after
+	// another (a matvec each), as the joint choice decides per step. Its
+	// contract is that a row comes out as it does alone, to the bit, so a
+	// seeded sampler draws the same tokens either way. That holds only when
+	// the matmul sums a row in the matvec's order: the pre-VNNI x86 and arm64
+	// prefill GEMMs fold a k-quant's super-block in integers where the decode
+	// matvec rounds per sub-block, arm64's decode picker times forms that sum
+	// differently, and a wide pool splits a long matvec over k. GEMMExact is
+	// the one summation order every packed kernel shares.
+	if dev == nil && e.cfg.MaxBatchRows != 1 && !hostInexact {
+		opts = append(opts, model.WithJITOptions(nn.WithGEMMExact(true)))
+	}
 	m, err := model.Open(path, opts...)
 	if err != nil {
 		closeDev()
@@ -1105,6 +1132,11 @@ type ChatInput struct {
 	// Tools is the tool list the template renders, a JSON array in the
 	// OpenAI shape ([{"type": "function", "function": {...}}]); nil for none.
 	Tools []byte
+	// ToolChoice is what the reply may do with Tools. One that forces a
+	// call (required, or a named tool) holds the reply to the model's own
+	// tool-call syntax around the tool's schema (tools.go); every choice is
+	// handed to a template that reads tool_choice.
+	ToolChoice model.ToolChoice
 }
 
 // Prompt is what a generate runs: the member Kind names is the one read.
@@ -1198,6 +1230,10 @@ type Started struct {
 	// store rather than being computed: all of them for every choice of an
 	// n > 1 request but the first.
 	Restored int
+	// Tools reads this choice's tool calls from its tokens, in the model's
+	// own syntax, when the request declared tools; nil otherwise. A shim
+	// feeds it every Token's ID (tools.go).
+	Tools *model.ToolStream
 }
 
 // Token is one step of the output. Every sampled token is sent, its Text
@@ -1415,7 +1451,16 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 			"from one verification and reads back no distribution for each", ErrInvalid)
 	}
 	var con *constraint
-	if o.Grammar != "" {
+	if tc, err := lm.toolConstraint(o, ids); err != nil {
+		return err
+	} else if tc != nil {
+		if o.IgnoreEOS {
+			return fmt.Errorf("%w: a forced tool call ends its reply with an end-of-generation token, "+
+				"and ignore_eos would run past it", ErrInvalid)
+		}
+		con = tc
+		speculate = false
+	} else if o.Grammar != "" {
 		if o.IgnoreEOS {
 			return fmt.Errorf("%w: a grammar ends its reply with an end-of-generation token, and ignore_eos "+
 				"would run past it", ErrInvalid)
@@ -1527,6 +1572,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		Prefill:      prefill,
 		Execution:    ExecutionParallel,
 		Restored:     restored,
+		Tools:        lm.toolStream(o),
 	}}); err != nil {
 		return err
 	}
@@ -1789,7 +1835,7 @@ func (e *Engine) encode(lm *LoadedModel, p Prompt) ([]int32, error) {
 			// template takes a message list, so it is prepended.
 			msgs = append([]model.ChatMessage{{Role: "system", Content: p.Chat.System}}, msgs...)
 		}
-		return lm.m.ChatIDsTools(msgs, p.Chat.Tools, p.Chat.AddGenerationPrompt)
+		return lm.m.ChatIDsToolChoice(msgs, p.Chat.Tools, p.Chat.ToolChoice, p.Chat.AddGenerationPrompt)
 	case PromptNone, PromptSpans:
 		return nil, nil
 	}

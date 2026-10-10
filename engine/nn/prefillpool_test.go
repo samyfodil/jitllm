@@ -6,8 +6,8 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/sched"
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // TestPrefillPoolIsSwappedInAndOut: BeginPrefill runs on the prefill pool and

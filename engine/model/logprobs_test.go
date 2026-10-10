@@ -6,8 +6,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/oracle"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // lpCheck holds a step's reported logprobs to the oracle's log-softmax of the

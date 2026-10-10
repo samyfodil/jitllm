@@ -5,7 +5,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // TestFloatMatVecIsServed runs a lone F32, F16 and BF16 matvec through the

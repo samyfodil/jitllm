@@ -6,7 +6,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestRopeTableIsKeyedByTier checks a forced tier actually selects its own

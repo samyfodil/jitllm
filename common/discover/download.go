@@ -12,11 +12,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/samyfodil/jitllm/common/config"
-	"github.com/samyfodil/jitllm/common/convertjob"
-	"github.com/samyfodil/jitllm/common/session"
-	"github.com/samyfodil/jitllm/convert/hf"
-	"github.com/samyfodil/jitllm/convert/library"
+	"github.com/jitllm/jitllm/common/config"
+	"github.com/jitllm/jitllm/common/convertjob"
+	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/convert/hf"
+	"github.com/jitllm/jitllm/convert/library"
 )
 
 // DefaultBalance is the preference a first look starts at: Balanced.

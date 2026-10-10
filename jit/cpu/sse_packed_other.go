@@ -5,7 +5,7 @@ package cpu
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // The SSE tier is an amd64 tier, and its packed kernels read the amd64

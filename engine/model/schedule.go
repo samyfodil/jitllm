@@ -3,7 +3,7 @@ package model
 import (
 	"slices"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // Scheduler runs many sequences over one batch session: it admits queued

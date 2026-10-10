@@ -5,7 +5,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestGPTOSSMatchesLlamaCppIntermediates holds gpt-oss-20b's graph to

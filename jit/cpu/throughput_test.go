@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/dev/bench"
+	"github.com/jitllm/jitllm/dev/bench"
 )
 
 // TestGeneratedThroughput measures what the emitter actually produces, streaming

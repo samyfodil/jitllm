@@ -3,7 +3,7 @@ package meta
 import (
 	"sort"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // Package meta is the model metadata and tensor directory, and it belongs to

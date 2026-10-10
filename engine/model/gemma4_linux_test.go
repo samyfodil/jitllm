@@ -5,7 +5,7 @@ package model
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestBatchSeamMovesCarryEveryRowGemma4 is the seam gate on Gemma 4: three

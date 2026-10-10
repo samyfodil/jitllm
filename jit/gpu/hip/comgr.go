@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ffi"
+	"github.com/jitllm/jitllm/jit/gpu/ffi"
 )
 
 // comgr's handles are structs of one uint64; on the C ABIs jitllm builds for
