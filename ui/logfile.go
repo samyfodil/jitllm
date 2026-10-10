@@ -2,7 +2,6 @@ package main
 
 import (
 	"log"
-	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -34,7 +33,6 @@ func logToFileWithoutAConsole(noConsole bool) {
 	}
 	replaceStdio(f)
 	log.SetOutput(f)
-	slog.SetDefault(slog.New(slog.NewTextHandler(f, nil)))
 }
 
 // logName is the log file beside the settings. A crash's traceback is not in

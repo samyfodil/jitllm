@@ -7,7 +7,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -42,20 +41,6 @@ func register(sh *app.Shell, d screen.Deps) {
 // version is the release's, set by the linker.
 var version = "dev"
 
-// nameGPU puts the window's adapter in the crash reports, once it has one.
-func nameGPU(a *gogpu.App) bool {
-	p := a.GPUContextProvider()
-	if p == nil {
-		return false
-	}
-	info := p.AdapterInfo()
-	if info.Name == "" {
-		return false
-	}
-	crash.SetGPU(fmt.Sprintf("%s (%v)", info.Name, info.Type))
-	return true
-}
-
 func main() {
 	mockMode := flag.Bool("mock", false, "run against package mock: no model, no GPU, fixtures only")
 	flag.Parse()
@@ -73,6 +58,8 @@ func main() {
 			log.Printf("crash reports: %v", err)
 		}
 	}
+	// After Arm: the GPU it names is written beside crash.log.
+	tapAdapter()
 	app.UseEnv(app.Env{Models: os.Getenv("JITLLM_MODELS"), DataHome: os.Getenv("XDG_DATA_HOME")})
 	cfg := app.LoadConfig()
 
@@ -109,13 +96,7 @@ func main() {
 	// The async -> UI bridge. OnUpdate runs inside the frame on the main
 	// thread, and it only fires when the loop is awake -- which is why
 	// Shell.Post pairs every send with a RequestRedraw.
-	named := false
-	gpuApp.OnUpdate(func(dt float64) {
-		if !named {
-			named = nameGPU(gpuApp)
-		}
-		sh.DrainQueue(dt)
-	})
+	gpuApp.OnUpdate(sh.DrainQueue)
 
 	// Shutdown runs after desktop.Run returns, not from OnClose: gogpu's OnClose
 	// and OnDragDrop are single-slot setters that desktop.Run overwrites, so a
