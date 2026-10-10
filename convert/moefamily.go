@@ -3,8 +3,8 @@ package convert
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/convert/meta"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // The mixture families added beside DeepSeek's: GLM-4.5 (glm4moe), Qwen1.5-MoE

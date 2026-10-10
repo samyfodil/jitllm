@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestWideQKNormOnDevice is the end-to-end gate on the device's whole-row q/k

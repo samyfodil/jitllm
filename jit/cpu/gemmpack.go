@@ -3,7 +3,7 @@ package cpu
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // The activation side of the prefill GEMM. It is architecture-neutral: the

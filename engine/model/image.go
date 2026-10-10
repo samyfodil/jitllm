@@ -9,9 +9,9 @@ import (
 	"math"
 	"os"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // Image preprocessing: a decoded picture to the float vector Encode wants.

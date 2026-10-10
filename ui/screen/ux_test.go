@@ -10,7 +10,7 @@ import (
 	"github.com/gogpu/ui/uitest"
 	"github.com/gogpu/ui/widget"
 
-	"github.com/samyfodil/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/app"
 )
 
 // An empty transcript must say what to do next, differently before and after

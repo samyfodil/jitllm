@@ -3,7 +3,7 @@ package spirv
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // Cooperative matrices (SPV_KHR_cooperative_matrix), Vulkan's only matrix

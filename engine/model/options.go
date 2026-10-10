@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // This package reads no environment. cmd/jitllm reads the JITLLM_* names and

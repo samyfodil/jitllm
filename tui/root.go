@@ -13,8 +13,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/samyfodil/jitllm/common/config"
-	"github.com/samyfodil/jitllm/common/engine"
+	"github.com/jitllm/jitllm/common/config"
+	"github.com/jitllm/jitllm/common/engine"
 )
 
 // root is the program's model: it owns the pages, routes every message,

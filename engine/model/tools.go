@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/samyfodil/jitllm/tok/jinja"
+	"github.com/jitllm/jitllm/tok/jinja"
 )
 
 // ToolCall is one function call an assistant turn made. Arguments is the JSON

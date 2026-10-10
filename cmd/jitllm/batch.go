@@ -3,13 +3,13 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/samyfodil/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/engine/sched"
 	"os"
 	"runtime/pprof"
 	"strings"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/model"
 )
 
 // batchCmd decodes one prompt as `-batch` independent sequences in lockstep on

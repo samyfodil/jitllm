@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/engine/sched"
 )
 
 // TestServeCapsTheGoHeap: `jitllmd serve` sets the collector's memory limit

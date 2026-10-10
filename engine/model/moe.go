@@ -6,8 +6,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // The mixture-of-experts FFN.

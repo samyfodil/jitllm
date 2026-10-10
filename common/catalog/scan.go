@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/samyfodil/jitllm/convert"
+	"github.com/jitllm/jitllm/convert"
 )
 
 // Scan walks dirs one level deep and classifies what it finds. It stats and

@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/jit/cpu"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // The mixture-of-experts router, generated. Like the greedy argmax it is a

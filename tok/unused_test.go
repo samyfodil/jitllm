@@ -3,7 +3,7 @@ package tok
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestDecodeRendersUnusedAsNothing: a token of type UNUSED is a converter's

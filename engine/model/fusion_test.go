@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/sched"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestFusionCeiling bounds what whole-layer fusion could buy without building

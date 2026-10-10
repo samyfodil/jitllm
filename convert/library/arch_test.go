@@ -3,7 +3,7 @@ package library
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/convert"
+	"github.com/jitllm/jitllm/convert"
 )
 
 // obtainableExempt is an architecture the converter implements that the

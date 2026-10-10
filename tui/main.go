@@ -13,9 +13,9 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/jitllm/jitllm/common/config"
+	"github.com/jitllm/jitllm/common/engine"
 	"github.com/muesli/termenv"
-	"github.com/samyfodil/jitllm/common/config"
-	"github.com/samyfodil/jitllm/common/engine"
 )
 
 func main() {

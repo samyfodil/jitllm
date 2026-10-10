@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/model"
 
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // Conversions between the engine's Go types and the generated protobuf ones.

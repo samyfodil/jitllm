@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestStopSetMatchesLlamaCpp holds the stop set built from a GGUF to the one

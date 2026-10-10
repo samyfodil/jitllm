@@ -10,9 +10,9 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/format/quant"
-	"github.com/samyfodil/jitllm/internal/oracle"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // The kernels without FEAT_DotProd (sdotemu.go). Two gates beside the package's

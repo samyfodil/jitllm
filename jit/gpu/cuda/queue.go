@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ffi"
+	"github.com/jitllm/jitllm/jit/gpu/ffi"
 )
 
 // A queue is a non-blocking stream that carries one session's whole sequence:

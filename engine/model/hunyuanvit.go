@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // HunyuanVL's tower (jlm.ProjHunyuanVL): a LayerNorm, GELU ViT with biased

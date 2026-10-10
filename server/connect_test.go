@@ -10,8 +10,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
-	"github.com/samyfodil/jitllm/server/gen/jitllm/v1/jitllmv1connect"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
+	"github.com/jitllm/jitllm/server/gen/jitllm/v1/jitllmv1connect"
 )
 
 // These gates go through the generated stubs over a real HTTP server, so they

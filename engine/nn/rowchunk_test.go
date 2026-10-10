@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // TestRowChunkDuelSettlesAndReachesTheMatmul drives the prefill tuners on

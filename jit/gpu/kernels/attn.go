@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // Attention kernels. The score and accumulate loops run pos+1 times and pos

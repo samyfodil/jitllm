@@ -13,9 +13,9 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/samyfodil/jitllm/dev/bench"
-	"github.com/samyfodil/jitllm/format/quant"
-	"github.com/samyfodil/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/dev/bench"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/internal/oracle"
 )
 
 // TestABPack8 measures interleave width on a DRAM-resident set, paired.

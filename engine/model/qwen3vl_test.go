@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // qwen3TowerGate is TestQwenTowerMatchesTransformers' half for a deepstack

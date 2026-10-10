@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/modelsdoc"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/modelsdoc"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestModelsDocIsGenerated holds docs/models.md to the converter's tables: it

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // serveModel is the 1B model jitllmd served when four of them on one NUMA

@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/common/api"
-	"github.com/samyfodil/jitllm/common/session"
-	"github.com/samyfodil/jitllm/server"
+	"github.com/jitllm/jitllm/common/api"
+	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/server"
 )
 
 // The app's model is the API's model: one engine, so a model opened in the

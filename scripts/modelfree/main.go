@@ -44,8 +44,8 @@ import (
 // it, so a reader sees what was never attempted beside what skipped.
 func notRun() map[string]string {
 	m := map[string]string{
-		"github.com/samyfodil/jitllm/dev/bench": "perf floors, which want a quiet box: RULE 4",
-		"github.com/samyfodil/jitllm/ui/stage":  "run by CI's ui job, with the app's build",
+		"github.com/jitllm/jitllm/dev/bench": "perf floors, which want a quiet box: RULE 4",
+		"github.com/jitllm/jitllm/ui/stage":  "run by CI's ui job, with the app's build",
 	}
 	// The macOS runner exposes Apple's paravirtual Metal device, whose
 	// pipelines allow 512 threads where the backend's gates force 1024-thread
@@ -53,7 +53,7 @@ func notRun() map[string]string {
 	// and the gates fail. The Linux and Windows runners, which have no GPU,
 	// still run the package.
 	if runtime.GOOS == "darwin" {
-		m["github.com/samyfodil/jitllm/jit/gpu/backend"] = "the runner's paravirtual Metal device allows 512-thread pipelines; the gates force 1024"
+		m["github.com/jitllm/jitllm/jit/gpu/backend"] = "the runner's paravirtual Metal device allows 512-thread pipelines; the gates force 1024"
 	}
 	return m
 }
@@ -208,7 +208,7 @@ func goTest(name, dir, out string, args []string) (result, bool) {
 				fmt.Print(strings.Join(buf[k], ""))
 			}
 			if !strings.Contains(e.Test, "/") {
-				r := row{strings.TrimPrefix(e.Package, "github.com/samyfodil/jitllm"), e.Test, reason(buf[k])}
+				r := row{strings.TrimPrefix(e.Package, "github.com/jitllm/jitllm"), e.Test, reason(buf[k])}
 				if r.pkg == "" {
 					r.pkg = "/"
 				}
@@ -284,7 +284,7 @@ func summarize(results []result, skip map[string]string) error {
 	}
 	var left []string
 	for p, why := range skip {
-		left = append(left, fmt.Sprintf("`%s` (%s)", strings.TrimPrefix(p, "github.com/samyfodil/jitllm/"), why))
+		left = append(left, fmt.Sprintf("`%s` (%s)", strings.TrimPrefix(p, "github.com/jitllm/jitllm/"), why))
 	}
 	slices.Sort(left)
 	fmt.Fprintf(w, "\nNot run at all: %s. The only model here is the committed stories260K; a test that needs "+

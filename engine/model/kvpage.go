@@ -15,8 +15,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // The KV cache is paged, and its pages are its own.

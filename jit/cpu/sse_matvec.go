@@ -3,7 +3,7 @@ package cpu
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // The SSE tier's row-major family: the float matvec, and nothing quantized.

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // TestSSEPackedCallTime measures, and asserts nothing about speed: how

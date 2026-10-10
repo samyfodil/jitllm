@@ -3,8 +3,8 @@ package tier
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // TestKnobsArePerTier: two tiers in one process, one pinned and one on the

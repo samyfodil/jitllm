@@ -9,10 +9,10 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/samyfodil/jitllm/convert"
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/format/jlm"
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/format/jlm"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // ModelService implements jitllm.v1.ModelService.

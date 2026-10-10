@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/tok/pretok"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/tok/pretok"
 )
 
 // The tokenizer, read from the model's own tokenizer.json (RULE 7m). A GGUF

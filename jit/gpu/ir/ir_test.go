@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // TestShuffleBounds pins the two things that make one shuffle lowering correct

@@ -5,7 +5,7 @@ import (
 	"math"
 	"sync"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ffi"
+	"github.com/jitllm/jitllm/jit/gpu/ffi"
 )
 
 // A rec is one line of submissions: its own command pool (a pool is not safe

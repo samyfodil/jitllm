@@ -3,7 +3,7 @@ package model
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestSharedOverlapIsTheSameSum: Kimi-K3's shared experts run behind the

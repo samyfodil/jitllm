@@ -5,8 +5,8 @@ import (
 	"math"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // TestSplitDeltaGatesMatchesTheHostDeinterleave runs the beta/alpha split on

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // GLM-4.xV's tower (jlm.ProjGLM4V): Qwen2.5-VL's RMSNorm, gated-SiLU block

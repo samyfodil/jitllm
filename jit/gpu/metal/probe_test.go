@@ -8,7 +8,7 @@ package metal_test
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/metal"
+	"github.com/jitllm/jitllm/jit/gpu/metal"
 )
 
 // TestPackedDotIntrinsic asks the Metal compiler, rather than the internet,

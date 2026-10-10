@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // The command line: which subcommand runs, what a bad flag does, and the

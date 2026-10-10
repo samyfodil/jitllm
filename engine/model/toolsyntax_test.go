@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/grammar"
+	"github.com/jitllm/jitllm/engine/grammar"
 )
 
 // The tool-call syntaxes are held to each family's own template: the

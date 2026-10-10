@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // XIELU is Apertus's xIELU over n elements, out of place, the device twin of

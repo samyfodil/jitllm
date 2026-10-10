@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // The step loop's gates on the host (batch.go, model.StepRuns' host arm):

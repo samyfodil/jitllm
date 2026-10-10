@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // Gemma 3n's MobileNet-V5 on the device (jit/gpu/tier/conv.go) against the

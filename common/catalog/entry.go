@@ -8,7 +8,7 @@ package catalog
 import (
 	"time"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // Kind classifies a file the catalog found.

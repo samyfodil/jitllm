@@ -10,7 +10,7 @@ import (
 	"github.com/gogpu/ui/uitest"
 	"github.com/gogpu/ui/widget"
 
-	"github.com/samyfodil/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/app"
 )
 
 // tickTree is what app.Window does before every layout pass: walk the tree and

@@ -8,7 +8,7 @@ import (
 
 	"connectrpc.com/connect"
 
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // The placement surface with a real tier under it: the only way to reach the

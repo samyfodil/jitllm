@@ -7,8 +7,8 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/internal/oracle"
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // selScanCase is one token of random inputs for a Mamba-1 scan of rows

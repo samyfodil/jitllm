@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // stagedPassRun is one arm of the staged-pass gate: the model wholly on the

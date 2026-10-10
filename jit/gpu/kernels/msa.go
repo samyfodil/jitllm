@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // MiniMax Sparse Attention on a device (engine/model/msa.go has the graph).

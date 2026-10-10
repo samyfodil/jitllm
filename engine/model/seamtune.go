@@ -2,7 +2,7 @@ package model
 
 import (
 	"fmt"
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 	"os"
 	"sort"
 	"time"

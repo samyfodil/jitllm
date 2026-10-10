@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/vulkan"
+	"github.com/jitllm/jitllm/jit/gpu/vulkan"
 )
 
 // TestClosingADeviceLeavesNoKernelOpen runs a latent-attention mixture and a

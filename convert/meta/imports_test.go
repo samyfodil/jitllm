@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-const modPath = "github.com/samyfodil/jitllm"
+const modPath = "github.com/jitllm/jitllm"
 
 // pkgGraph maps a package's import path to the jitllm packages it imports
 // directly, from non-test files only.

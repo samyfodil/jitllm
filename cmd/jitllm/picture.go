@@ -5,8 +5,8 @@ import (
 	"image"
 	"os"
 
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // picture is the image of a prompt as its spans carry it: one model.Picture,

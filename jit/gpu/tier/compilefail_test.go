@@ -3,7 +3,7 @@ package tier
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // TestCompileFailureIsCounted holds Stats.Failed to what it says: a matvec

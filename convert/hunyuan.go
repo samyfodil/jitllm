@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/samyfodil/jitllm/convert/meta"
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // hunyuanConfig is llama.cpp's hunyuan-moe.cpp / hunyuan-vl.cpp (which serves

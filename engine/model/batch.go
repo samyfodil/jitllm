@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // ForwardBatch runs one token for each of the session's nseq sequences and

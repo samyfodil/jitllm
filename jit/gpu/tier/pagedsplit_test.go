@@ -3,7 +3,7 @@ package tier
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // TestAStagedPlanThatDoesNotFitHalvesItsSplits builds a staged plan for a

@@ -3,7 +3,7 @@ package kernels_test
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // TestPackedWordsMatchesPack holds the size predicate to the packer itself.

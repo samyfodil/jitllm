@@ -1,6 +1,6 @@
 package model
 
-import "github.com/samyfodil/jitllm/engine/nn"
+import "github.com/jitllm/jitllm/engine/nn"
 
 // Bidirectional runs inside a causal prompt: Gemma 3's reference masks an
 // image's tokens so they see each other in both directions, while every other

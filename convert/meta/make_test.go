@@ -3,7 +3,7 @@ package meta_test
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/convert/meta"
 )
 
 // TestMakeRoundTrips builds every value kind from ordinary Go values and reads

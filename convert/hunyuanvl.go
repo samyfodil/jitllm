@@ -3,7 +3,7 @@ package convert
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // hunyuanvlRole is HunyuanVL's merger as llama.cpp's converter names it

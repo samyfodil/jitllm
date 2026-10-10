@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestGemma3GlobalLayersAreLinearlyScaled: gemma-3-4b ships rope.scaling.type

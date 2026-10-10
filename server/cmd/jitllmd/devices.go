@@ -9,7 +9,7 @@ import (
 
 	"connectrpc.com/connect"
 
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // cmdDevices is DeviceService: what hardware the daemon found, and how many

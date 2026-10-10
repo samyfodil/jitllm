@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/vulkan"
+	"github.com/jitllm/jitllm/jit/gpu/vulkan"
 )
 
 // noDevice is what a device arm does when its device would not open: skip,

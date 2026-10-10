@@ -12,10 +12,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/samyfodil/jitllm/dev/bench"
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/dev/bench"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 func verifyCmd(args []string) error {

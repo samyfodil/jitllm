@@ -5,8 +5,8 @@ package model
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestMoEFFNRunsBatched asserts which dispatch shape a mixture's decode took,

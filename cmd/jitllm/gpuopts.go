@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // gpuOptions turns the device tier's environment variables into tier.Options.

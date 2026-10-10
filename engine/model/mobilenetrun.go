@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // The MobileNet-V5 tower's encode on the host (mobilenet.go has the tower).

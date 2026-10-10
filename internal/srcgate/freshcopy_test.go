@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestNoCopyOfAFreshSlice fails on a defensive copy of a slice its callee

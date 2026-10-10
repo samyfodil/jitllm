@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/tok/pretok"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/tok/pretok"
 )
 
 // A tiktoken vocabulary is the third shape a tokenizer arrives in, and the one

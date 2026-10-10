@@ -56,7 +56,7 @@ The first prompt of a process generates and loads the prompt kernels, and the tu
 
 ## CPU and GPU answers differ
 
-The CPU and GPU add floating-point numbers in different orders, so logits differ slightly, and greedy decoding can take a different branch at a near-tie. `jitllm verify -devices cuda:0 models/m.jlm` reports every position where they differ and by how much. Small differences at near-ties are expected; a large one is a bug worth [reporting](https://github.com/samyfodil/jitllm/issues).
+The CPU and GPU add floating-point numbers in different orders, so logits differ slightly, and greedy decoding can take a different branch at a near-tie. `jitllm verify -devices cuda:0 models/m.jlm` reports every position where they differ and by how much. Small differences at near-ties are expected; a large one is a bug worth [reporting](https://github.com/jitllm/jitllm/issues).
 
 ## Reporting a problem
 

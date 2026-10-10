@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/format/quant"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // TestPackedBatchABBA prices MatMulPacked against the per-row loop it replaces,

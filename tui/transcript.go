@@ -11,7 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/samyfodil/jitllm/common/session"
+	"github.com/jitllm/jitllm/common/session"
 )
 
 // transcript is the conversation in a viewport. Each finished turn is

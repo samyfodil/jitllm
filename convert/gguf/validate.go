@@ -3,7 +3,7 @@ package gguf
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/convert/meta"
 )
 
 // A GGUF is untrusted input downloaded from the internet, and every field below

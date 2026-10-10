@@ -15,10 +15,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/samyfodil/jitllm/convert"
-	"github.com/samyfodil/jitllm/convert/library"
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/convert/library"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // Path is where the rendered page lives, from the module root.

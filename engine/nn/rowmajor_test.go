@@ -3,7 +3,7 @@ package nn
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // The counter's own gate: model-level gates assert the row-major counter reads

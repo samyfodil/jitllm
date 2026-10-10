@@ -3,7 +3,7 @@ package cpu
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // emitA64KMatVec is the k-quant decode matvec: out[r] = dot(row r, activations).

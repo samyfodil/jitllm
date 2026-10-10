@@ -15,11 +15,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/samyfodil/jitllm/dev/bench"
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/dev/bench"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/sched"
 )
 
 // cores reads JITLLM_CORES here, in the command, because sched and nn read no

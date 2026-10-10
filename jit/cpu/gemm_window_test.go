@@ -3,7 +3,7 @@ package cpu
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // The arm64 k-quant GEMM must emit valid code at both activation windows, and

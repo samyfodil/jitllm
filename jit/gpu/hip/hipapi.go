@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ffi"
+	"github.com/jitllm/jitllm/jit/gpu/ffi"
 )
 
 // hipError is hipError_t. Zero is hipSuccess.

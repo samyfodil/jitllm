@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // TestDuelSweepTriesEveryRung drives a duel over the fused-prefetch ladder's

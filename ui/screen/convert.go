@@ -11,11 +11,11 @@ import (
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 
-	"github.com/samyfodil/jitllm/common/catalog"
-	"github.com/samyfodil/jitllm/common/convertjob"
-	"github.com/samyfodil/jitllm/common/discover"
-	"github.com/samyfodil/jitllm/ui/app"
-	"github.com/samyfodil/jitllm/ui/widgets"
+	"github.com/jitllm/jitllm/common/catalog"
+	"github.com/jitllm/jitllm/common/convertjob"
+	"github.com/jitllm/jitllm/common/discover"
+	"github.com/jitllm/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/widgets"
 )
 
 // The Convert screen: the GGUF and safetensors files in the model folders, and

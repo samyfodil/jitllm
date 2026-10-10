@@ -3,12 +3,12 @@
 package cpu
 
 import (
-	"github.com/samyfodil/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/internal/oracle"
 	"math"
 	"math/rand"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 func packVsReference(t *testing.T, wt quant.Type, rows, k int) {

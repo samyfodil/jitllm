@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // TestStepBudgetFollowsTheMeasurement drives the prompt budget with step

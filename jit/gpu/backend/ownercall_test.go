@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
 )
 
 // TestADeviceCallFromInsideASessionCompletes holds the CUDA backend to never

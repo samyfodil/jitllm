@@ -6,9 +6,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/grammar"
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/internal/schemacheck"
+	"github.com/jitllm/jitllm/engine/grammar"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/internal/schemacheck"
 )
 
 // TestGrammarComposesWithLogprobsAndChoices: logprobs on a constrained reply
