@@ -178,7 +178,7 @@ func TestPCoresTakesTheThreadTheMaskAllows(t *testing.T) {
 	}
 }
 
-// TestPoolWidthWithoutAnAffinityMask stands in for a sandbox (Modal's gVisor)
+// TestPoolWidthWithoutAnAffinityMask stands in for a sandbox (gVisor)
 // that answers neither sched_getaffinity nor /sys topology. PCores once returned
 // nothing there and DecodeCores fell back to one CPU, so the shipped engine
 // decoded on one worker. The pool now takes the online list, cut to the cgroup
