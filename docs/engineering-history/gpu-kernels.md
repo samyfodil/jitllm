@@ -5376,6 +5376,70 @@ set built for the grid, HunyuanOCR places no tower block on any of the three
 (`cuMemAlloc`/`vkAllocateMemory` out of memory, and on the Iris "7150082744 of
 3124649984 used").
 
+## The sm_80+ prompt: what the 0.07-0.33 rows were, and the staged GEMMs
+
+A board taken with `scripts/vs-llamacpp.sh` on A10G, L4, L40S and A100
+cards read jitllm's prefill at 0.07-0.33 of llama.cpp's (Llama-3.2-1B Q4_K_M
+3994 against 17413 tok/s on the A10G), while the V100 board, taken with
+`jitllm speed`, read 1.04-1.38. Two causes, counted on the RTX 3050 Ti
+(sm_86), the one Ampere card at hand:
+
+- **The harness timed a cold engine against a warm one.** Prefill mode ran
+  `jitllm run -n 1` and took its "prompt" figure: the first prompt of a fresh
+  process. `speed.go` already said that figure is not a prefill rate. A CPU
+  profile of the first 512-row prompt in a process: 30 ms of ~200 growing the
+  KV pool (`allocPages` -> `growKVLayer`), 43 ms outside the kernels in all,
+  against 155-165 ms warm. llama-bench runs a warm-up and never times
+  context creation. That fixed cost is a larger share the faster the card,
+  so it compressed the big-card rows most. The jitllm arm is now
+  `jitllm speed -p N -n 0 -r 1` (JITLLM_PP_COLD=1 keeps the old one). On the
+  laptop, both arms warm against the old cold arm, same pass:
+
+      Llama-3.2-1B Q4_K_M   cold 0.44 (REJECTED, IQR 0.114)   warm 0.59
+      Qwen3-0.6B Q8_0       cold 0.38                         warm 0.75
+      Qwen3.5-0.8B Q4_K_M   cold 0.77 (REJECTED, IQR 0.124)   warm 0.91 (REJECTED, IQR 0.163)
+
+- **Every prompt matvec on sm_80/86/89 was MatVecMMA**, the unstaged int8
+  kernel: each warp reads its weights and its activations from global memory
+  inside the MMA loop and decodes every weight once per 32 tokens. sm_70 had
+  GemmVolta (shared-memory staged, binary16) and the newer cards never
+  reached it, since voltaMV runs only where the integer instruction is
+  missing (rows.go `voltaMV`'s `!(g.mmaOff || g.NoMMA)`). Per-launch device
+  time of a warm 512-row Llama-3.2-1B prompt (nsys sees no kernels through
+  goffi and ncu needs counters this box withholds, so
+  `backend.SetCUDAKernelTiming` now times launches outside a capture): 105 of
+  165 ms in the FFN's three projections, 26 in the attention (FMA
+  accumulate 15, m16n8k16 scores 5.6, softmax 5.7), 12 in the activation
+  conversions and SiLU.
+
+What was built, every kernel generated:
+
+- **GemmVolta on m16n8** (`VoltaTile.F16K`: 16 from sm_80, 8 on sm_75): the
+  same staging, lane (g, q) reading chunk q of rows g and g+8 and token g as
+  one 16-byte load each. The k order inside a chunk needs no permutation:
+  word 4q+2s+h of A meets the same word of B.
+- **GemmInt8**: MatVecMMA's arithmetic staged as llama.cpp's MMQ stages it:
+  a trip of 32 elements decoded once a workgroup to signed bytes with
+  float32 scales and minimums per sub-block, the int8 activations with their
+  scales and sums beside them, a lane's two words one 8-byte load. Bit for
+  bit the dp4a matvec unsplit. The default on sm_80 and later.
+- **PagedAttnAccMMA**: the weighted sum of V on m16n8k8 behind the m16n8k16
+  scores: 6.5 ms where the FMA tiles read 15.
+- **The tile and split by the card** (`fillTile`, `fillSplit`): about one
+  workgroup an SM, sm_70's measured bar, so a 1024-row projection does not
+  leave a 142-SM card with one workgroup on every second SM.
+
+What the laptop could and could not show. On the RTX 3050 Ti the three GEMMs
+read 8-15 TFLOPS in isolation (`TestGemmF16Speed`, 512 rows), interleaved and
+noisy: the binary16 GEMM sits at GA107's float32-accumulate ceiling (~15
+TFLOPS at 1.5 GHz, half the binary16-accumulate rate on a GeForce part), and
+the int8 GEMM and MatVecMMA land in the same band, so on this card the
+change of kernel is inside the noise of the warm board (Llama-3.2-1B 0.59
+before, 0.63 after with the binary16 GEMM). Its ceilings are not the
+A100's (binary16 with float32 sums at the full rate, int8 at twice it) or
+an Ada card's (int8 at four times the float32-accumulate rate), and the rows
+that matter have to be taken there.
+
 ## Measurements once cited in jit/gpu/tier's comments
 
 The tier's comments state the engineering reason and the class of card; the
