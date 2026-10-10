@@ -9,8 +9,6 @@
 <a href="#memory-and-placement"><img src="docs/assets/readme/experts.gif" width="400" alt="Expert pages: each expert of a mixture is its own page, so a token reads only the routed experts that are not resident"></a>
 </p>
 
-# jitllm
-
 **An operating system for LLM inference: generate the compute for your hardware,
 page models larger than memory, and move execution without losing the conversation.**
 
@@ -38,7 +36,7 @@ are [desktop](#desktop-app) and [terminal](#terminal-app) apps too.
 |---|---|
 | Serving models over an API | [Quick start](#quick-start) · [Server reference](docs/server.md) |
 | Containers | [Docker](#docker) |
-| Inference inside a Go program | [Embed it in Go](#embed-it-in-go) |
+| Inference inside a Go program | [Go library guide](docs/embedding-go.md) |
 | Chatting, and watching where each block runs | [Desktop app](#desktop-app) · [Terminal app](#terminal-app) |
 
 ## Install
@@ -162,6 +160,7 @@ classes and 17 vision projectors; anything else is refused at conversion, by nam
 | **State-space and hybrid** | Mamba, Mamba-2, Jamba, Falcon-H1, Granite 4 hybrid, Nemotron-H, LFM2 |
 | **Vision** | SmolVLM, LLaVA, Qwen2/2.5/3-VL, Qwen3.5, GLM-4.xV, Kimi-VL, HunyuanOCR, Gemma 3/3n/4, InternVL, MiniCPM-V, Janus-Pro, Pixtral/Mistral 3, Phi-4 vision, Llama 4 |
 | **Embeddings** | BERT family, nomic-embed-text, Qwen3-Embedding, EmbeddingGemma |
+| **Decision models** | Laya (ModernBERT), d1-3B, Lev 4B, answering one question against fixed labels through `/v1/systemone` |
 
 Weights: F32, F16, BF16, Q4_0, Q5_0, Q5_1, Q8_0, Q3_K-Q6_K and MXFP4. The full list, generated
 from the code, is [docs/models.md](docs/models.md); the [vision guide](docs/vision.md) covers pictures.
@@ -183,77 +182,8 @@ and their limitations; [scripts/vs-llamacpp.sh](scripts/vs-llamacpp.sh) measures
 - [Contributing](CONTRIBUTING.md) · [Project rules](AGENTS.md)
 
 <a id="the-five-principles"></a>
+<a id="how-it-works"></a>
 <a id="memory-and-placement"></a>
-## How it works
-
-```mermaid
-flowchart LR
-    S[GGUF or Hugging Face weights] --> C[convert once]
-    C --> M[.jlm container]
-    M --> R[runtime: placement, paging, batching]
-    R <--> CPU[CPU: AVX2, SSE, NEON]
-    R <--> GPU[GPU: CUDA, Vulkan, Metal]
-```
-
-A `.jlm` container holds the weights, configuration, tokenizer and chat template
-in the layout the kernels read. At load the runtime generates every kernel for
-the hardware in front of it, then decides which blocks run where, pages weights
-and KV through disk, RAM and VRAM under the budgets you set, and moves a block
-between devices mid-conversation with its attention or recurrent state.
-
-Five principles hold on every path: **kernels generated at run time, no
-interpreted compute, relocatable state, paging by design, and low to no Go
-allocation** (a warm decode token allocates nothing on the engine's heap). See
-[the five principles](docs/runtime.md#the-five-principles),
-[how it works](docs/runtime.md#how-it-works) and
-[memory and placement](docs/placement.md).
-
-## Embed it in Go
-
-The CLI, server and desktop app use the same engine. This example applies the
-model's chat template and generates a greedy response:
-
-```go
-package main
-
-import (
-    "fmt"
-    "log"
-
-    "github.com/jitllm/jitllm/engine/model"
-)
-
-func main() {
-    m, err := model.Open("models/qwen3.jlm")
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer m.Close()
-
-    ids, err := m.ChatIDs([]model.ChatMessage{
-        {Role: "user", Content: "Why is the sky blue?"},
-    }, true)
-    if err != nil {
-        log.Fatal(err)
-    }
-    state := m.NewState(8192)
-    defer state.Close()
-
-    logits, err := state.Prefill(ids)
-    for err == nil && state.Pos() < 8192 {
-        id := model.Greedy(logits)
-        if m.Vocab.IsEOG(id) {
-            break
-        }
-        fmt.Print(m.Vocab.Decode([]int32{id}))
-        logits, err = state.Forward(id)
-    }
-    if err != nil {
-        log.Fatal(err)
-    }
-    fmt.Println()
-}
-```
-
-See the [Go library guide](docs/embedding-go.md) for budgets, devices, KV caching,
-embeddings and batching.
+The [five principles](docs/runtime.md#the-five-principles) govern every execution
+path. See [how it works](docs/runtime.md#how-it-works) for the runtime, or
+[memory and placement](docs/placement.md) for budgets and relocation.
