@@ -117,6 +117,7 @@ gemma-3-1b-it-Q4_K_M.gguf                          unsloth/gemma-3-1b-it-GGUF   
 google_gemma-3-1b-it-Q4_K_M.gguf                   bartowski/google_gemma-3-1b-it-GGUF                    google_gemma-3-1b-it-Q4_K_M.gguf                                                806058496    default
 gemma-3-4b-it-Q4_K_M.gguf                          ggml-org/gemma-3-4b-it-GGUF                            gemma-3-4b-it-Q4_K_M.gguf                                                       2489757856   default
 Phi-3.5-mini-instruct-Q4_K_M.gguf                  bartowski/Phi-3.5-mini-instruct-GGUF                   Phi-3.5-mini-instruct-Q4_K_M.gguf                                               2393232672   default
+DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf          bartowski/DeepSeek-R1-Distill-Qwen-1.5B-GGUF           DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf                                       1117320800   default
 Mistral-7B-Instruct-v0.3-Q4_K_M.gguf               bartowski/Mistral-7B-Instruct-v0.3-GGUF                Mistral-7B-Instruct-v0.3-Q4_K_M.gguf                                            4372812000   default
 Mistral-7B-Instruct-v0.3/tokenizer_config.json     mistralai/Mistral-7B-Instruct-v0.3                     tokenizer_config.json                                                           140874       default
 olmoe-1b-7b-0924-instruct-Q4_K_M.gguf              allenai/OLMoE-1B-7B-0924-Instruct-GGUF                 olmoe-1b-7b-0924-instruct-q4_k_m.gguf                                           4213512672   default

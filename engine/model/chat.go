@@ -70,11 +70,18 @@ func (m *Model) ChatPrompt(msgs []ChatMessage, addGenerationPrompt bool) (string
 
 // ChatPromptTools is ChatPrompt with tool definitions (see ChatIDsTools).
 func (m *Model) ChatPromptTools(msgs []ChatMessage, tools []byte, addGenerationPrompt bool) (string, error) {
+	return m.ChatPromptToolChoice(msgs, tools, ToolChoice{}, addGenerationPrompt)
+}
+
+// ChatPromptToolChoice is ChatPromptTools with the request's tool_choice,
+// handed to a template that reads it (Kimi-K3's tells the model it MUST
+// call). The zero ToolChoice passes none.
+func (m *Model) ChatPromptToolChoice(msgs []ChatMessage, tools []byte, choice ToolChoice, addGenerationPrompt bool) (string, error) {
 	var mk imageMarkers
 	if tw := m.Tower(); tw != nil {
 		mk = imageMarkersOf[tw.Cfg.Projector]
 	}
-	return m.renderChat(msgs, tools, addGenerationPrompt, mk)
+	return m.renderChat(msgs, tools, choice, addGenerationPrompt, mk)
 }
 
 // chatTemplateFor picks the template a request renders with, as transformers'
@@ -128,13 +135,31 @@ func pickChatTemplate(ts []jlm.ChatTemplate, tools bool) (string, error) {
 
 // renderChat is ChatPrompt with the text a string-content template gets in
 // place of each image.
-func (m *Model) renderChat(msgs []ChatMessage, tools []byte, addGenerationPrompt bool, mk imageMarkers) (string, error) {
+func (m *Model) renderChat(msgs []ChatMessage, tools []byte, choice ToolChoice, addGenerationPrompt bool, mk imageMarkers) (string, error) {
 	src, err := m.chatTemplateFor(len(tools) > 0)
 	if err != nil {
 		return "", err
 	}
+	tpl, err := m.compiledTemplate(src)
+	if err != nil {
+		return "", err
+	}
 	bos, eos := m.specialText()
-	return renderChatTemplate(src, bos, eos, m.opt.chatClock, msgs, tools, addGenerationPrompt, mk)
+	return renderCompiled(tpl, src, bos, eos, m.opt.chatClock, msgs, tools, choice, addGenerationPrompt, mk)
+}
+
+// compiledTemplate is src compiled, once per model: a compiled template is
+// read-only while it renders, so every request and session shares it.
+func (m *Model) compiledTemplate(src string) (*jinja.Template, error) {
+	if t, ok := m.chatTemplates.Load(src); ok {
+		return t.(*jinja.Template), nil
+	}
+	tpl, err := jinja.Compile(src)
+	if err != nil {
+		return nil, fmt.Errorf("model: chat template (%d bytes): %w", len(src), err)
+	}
+	t, _ := m.chatTemplates.LoadOrStore(src, tpl)
+	return t.(*jinja.Template), nil
 }
 
 // renderChatTemplate renders msgs through the template src. The context is
@@ -143,11 +168,18 @@ func (m *Model) renderChat(msgs []ChatMessage, tools []byte, addGenerationPrompt
 // add_generation_prompt, the special tokens, and strftime_now when clock is set.
 func renderChatTemplate(src, bos, eos string, clock func() time.Time, msgs []ChatMessage, tools []byte,
 	addGenerationPrompt bool, mk imageMarkers) (string, error) {
-	ph := mk.placeholder
 	tpl, err := jinja.Compile(src)
 	if err != nil {
 		return "", fmt.Errorf("model: chat template (%d bytes): %w", len(src), err)
 	}
+	return renderCompiled(tpl, src, bos, eos, clock, msgs, tools, ToolChoice{}, addGenerationPrompt, mk)
+}
+
+// renderCompiled is renderChatTemplate over src already compiled, with the
+// request's tool_choice in the context when it gives one.
+func renderCompiled(tpl *jinja.Template, src, bos, eos string, clock func() time.Time, msgs []ChatMessage,
+	tools []byte, choice ToolChoice, addGenerationPrompt bool, mk imageMarkers) (string, error) {
+	ph := mk.placeholder
 	ctx := map[string]any{
 		"tools":                 nil,
 		"documents":             nil,
@@ -173,6 +205,9 @@ func renderChatTemplate(src, bos, eos string, clock func() time.Time, msgs []Cha
 			return "", fmt.Errorf("model: tools: %w", err)
 		}
 		ctx["tools"] = tv
+		if v := choice.templateValue(); v != nil {
+			ctx["tool_choice"] = v
+		}
 	}
 	parts := wantsContentParts(tpl)
 	msgs = foldSystem(tpl, ctx, parts, msgs)
@@ -286,6 +321,12 @@ func (m *Model) ChatIDs(msgs []ChatMessage, addGenerationPrompt bool) ([]int32, 
 // parameters}}]), handed to the template as `tools` with its key order kept.
 // nil or empty renders exactly what ChatIDs does.
 func (m *Model) ChatIDsTools(msgs []ChatMessage, tools []byte, addGenerationPrompt bool) ([]int32, error) {
+	return m.ChatIDsToolChoice(msgs, tools, ToolChoice{}, addGenerationPrompt)
+}
+
+// ChatIDsToolChoice is ChatIDsTools with the request's tool_choice
+// (ChatPromptToolChoice).
+func (m *Model) ChatIDsToolChoice(msgs []ChatMessage, tools []byte, choice ToolChoice, addGenerationPrompt bool) ([]int32, error) {
 	if m.Vocab == nil {
 		return nil, fmt.Errorf("model: no tokenizer: %v", m.TokErr)
 	}
@@ -295,7 +336,7 @@ func (m *Model) ChatIDsTools(msgs []ChatMessage, tools []byte, addGenerationProm
 				"path for that, since an image is embeddings and not ids", i)
 		}
 	}
-	text, err := m.ChatPromptTools(msgs, tools, addGenerationPrompt)
+	text, err := m.ChatPromptToolChoice(msgs, tools, choice, addGenerationPrompt)
 	if err != nil {
 		return nil, err
 	}
@@ -601,7 +642,7 @@ func (m *Model) ChatSpansParts(msgs []ChatMessage, images [][]Span, addGeneratio
 	if !ok {
 		return nil, fmt.Errorf("model: no image markers for projector %q", tw.Cfg.Projector)
 	}
-	text, err := m.renderChat(msgs, nil, addGenerationPrompt, mk)
+	text, err := m.renderChat(msgs, nil, ToolChoice{}, addGenerationPrompt, mk)
 	if err != nil {
 		return nil, err
 	}

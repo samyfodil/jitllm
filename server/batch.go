@@ -212,6 +212,8 @@ type row struct {
 	reset     bool
 	echo      bool
 	ephemeral bool
+	// tools reads the row's tool calls (Started.Tools).
+	tools     *model.ToolStream
 	sampler   model.Sampler
 	logprobs  *model.Logprobs // nil unless the request asked for logprobs
 	maxTokens int
@@ -598,6 +600,7 @@ func (r *row) started() {
 		Prefill:      r.prefill,
 		Execution:    ExecutionParallel,
 		Batched:      true,
+		Tools:        r.tools,
 	}})
 	if r.echo {
 		r.push(Event{Kind: EventToken, Token: &Token{ID: -1, Text: lm.m.Vocab.Decode(r.ids), Index: -1}})
@@ -1102,6 +1105,7 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 	}
 	now := time.Now()
 	r := &row{
+		tools:     lm.toolStream(o),
 		s:         s,
 		ids:       ids,
 		restored:  restored,

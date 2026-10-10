@@ -3,9 +3,13 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/samyfodil/jitllm/engine/grammar"
+	"github.com/samyfodil/jitllm/engine/model"
+	"github.com/samyfodil/jitllm/tok"
 )
 
 // Structured output: a generate constrained to a grammar (GBNF, or a JSON
@@ -24,6 +28,10 @@ type grammars struct {
 	// toks is the model's tokenizer indexed for the masks, built on the
 	// first grammar and shared by every one.
 	toks *grammar.Tokens
+	// toolToks is toks with the model's tool-call markers (toolMatcher).
+	toolToks *grammar.Tokens
+	// toolForced counts the generates a forced tool call constrained.
+	toolForced atomic.Int64
 }
 
 // maxGrammars is how many compiled grammars a model keeps.
@@ -115,4 +123,105 @@ func oaResponseFormat(raw json.RawMessage) (string, error) {
 		return src, nil
 	}
 	return "", fmt.Errorf("%w: response_format type %q: text, json_object or json_schema", ErrInvalid, rf.Type)
+}
+
+// toolStream reads a generate's tool calls, when its chat declares tools.
+func (lm *LoadedModel) toolStream(o GenerateOptions) *model.ToolStream {
+	ch := o.Prompt.Chat
+	if o.Prompt.Kind != PromptChat || ch == nil || len(ch.Tools) == 0 || lm.m.Vocab == nil {
+		return nil
+	}
+	return lm.m.NewToolStream(model.ParseToolSet(ch.Tools))
+}
+
+// toolConstraint is the constraint a chat whose tool_choice forces a call
+// generates under (model.ToolGrammar): the model's own tool-call syntax
+// around the called tool's schema, through the same matcher and mask as
+// structured output. nil when the choice forces nothing.
+func (lm *LoadedModel) toolConstraint(o GenerateOptions, ids []int32) (*constraint, error) {
+	ch := o.Prompt.Chat
+	if o.Prompt.Kind != PromptChat || ch == nil || len(ch.Tools) == 0 || !ch.ToolChoice.Forces() {
+		return nil, nil
+	}
+	if o.Grammar != "" {
+		return nil, fmt.Errorf("%w: a forced tool call and response_format are one constraint each; give one",
+			ErrInvalid)
+	}
+	// The prompt's end, as raw text, says whether the reply starts inside
+	// a reasoning block.
+	var tail strings.Builder
+	for _, id := range ids[max(0, len(ids)-32):] {
+		tail.WriteString(lm.m.Vocab.Literal(id))
+	}
+	src, err := lm.m.ToolGrammar(model.ParseToolSet(ch.Tools), ch.ToolChoice, tail.String())
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	m, err := lm.toolMatcher(src)
+	if err != nil {
+		return nil, err
+	}
+	lm.grammars.toolForced.Add(1)
+	return &constraint{m: m, st: m.Start()}, nil
+}
+
+// toolMatcher is matcher over the tool tokens: the model's tokenizer with
+// its syntax's control-token markers offered by their literal text, which
+// a structured-output grammar never sees (a JSON string must not be able to
+// spell <|call|>).
+func (lm *LoadedModel) toolMatcher(src string) (*grammar.Matcher, error) {
+	g := &lm.grammars
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	key := "tools\x00" + src
+	if m, ok := g.m[key]; ok {
+		return m, nil
+	}
+	gr, err := grammar.Parse(src)
+	if err != nil {
+		return nil, fmt.Errorf("server: a tool-call grammar does not parse: %v", err)
+	}
+	if g.m == nil || len(g.m) >= maxGrammars {
+		g.m = map[string]*grammar.Matcher{}
+	}
+	if g.toolToks == nil {
+		g.toolToks = grammar.IndexTokens(markedVocab{lm.m.Vocab, markers(lm.m.Vocab, lm.m.ToolSyntax())})
+	}
+	m := grammar.NewMatcher(gr, g.toolToks)
+	g.m[key] = m
+	return m, nil
+}
+
+// markedVocab is a tokenizer whose marker control tokens have a piece: their
+// literal text.
+type markedVocab struct {
+	v     *tok.Vocab
+	marks map[int32]string
+}
+
+func (x markedVocab) Size() int { return x.v.Size() }
+
+func (x markedVocab) Piece(id int32) (string, bool) {
+	if s, ok := x.marks[id]; ok {
+		return s, true
+	}
+	return x.v.Piece(id)
+}
+
+func (x markedVocab) IsEOG(id int32) bool { return x.v.IsEOG(id) }
+
+// markers are syn's marker texts that v holds as single tokens with no
+// piece of their own.
+func markers(v *tok.Vocab, syn model.ToolSyntax) map[int32]string {
+	out := map[int32]string{}
+	for _, s := range syn.ToolMarkers() {
+		id, ok := v.ID(s)
+		if !ok || v.Literal(id) != s {
+			continue
+		}
+		if _, plain := v.Piece(id); !plain {
+			out[id] = s
+		}
+	}
+	return out
 }
