@@ -133,8 +133,26 @@ func (m *Model) renderChat(msgs []ChatMessage, tools []byte, addGenerationPrompt
 	if err != nil {
 		return "", err
 	}
+	tpl, err := m.compiledTemplate(src)
+	if err != nil {
+		return "", err
+	}
 	bos, eos := m.specialText()
-	return renderChatTemplate(src, bos, eos, m.opt.chatClock, msgs, tools, addGenerationPrompt, mk)
+	return renderCompiled(tpl, src, bos, eos, m.opt.chatClock, msgs, tools, addGenerationPrompt, mk)
+}
+
+// compiledTemplate is src compiled, once per model: a compiled template is
+// read-only while it renders, so every request and session shares it.
+func (m *Model) compiledTemplate(src string) (*jinja.Template, error) {
+	if t, ok := m.chatTemplates.Load(src); ok {
+		return t.(*jinja.Template), nil
+	}
+	tpl, err := jinja.Compile(src)
+	if err != nil {
+		return nil, fmt.Errorf("model: chat template (%d bytes): %w", len(src), err)
+	}
+	t, _ := m.chatTemplates.LoadOrStore(src, tpl)
+	return t.(*jinja.Template), nil
 }
 
 // renderChatTemplate renders msgs through the template src. The context is
@@ -143,11 +161,17 @@ func (m *Model) renderChat(msgs []ChatMessage, tools []byte, addGenerationPrompt
 // add_generation_prompt, the special tokens, and strftime_now when clock is set.
 func renderChatTemplate(src, bos, eos string, clock func() time.Time, msgs []ChatMessage, tools []byte,
 	addGenerationPrompt bool, mk imageMarkers) (string, error) {
-	ph := mk.placeholder
 	tpl, err := jinja.Compile(src)
 	if err != nil {
 		return "", fmt.Errorf("model: chat template (%d bytes): %w", len(src), err)
 	}
+	return renderCompiled(tpl, src, bos, eos, clock, msgs, tools, addGenerationPrompt, mk)
+}
+
+// renderCompiled is renderChatTemplate over src already compiled.
+func renderCompiled(tpl *jinja.Template, src, bos, eos string, clock func() time.Time, msgs []ChatMessage,
+	tools []byte, addGenerationPrompt bool, mk imageMarkers) (string, error) {
+	ph := mk.placeholder
 	ctx := map[string]any{
 		"tools":                 nil,
 		"documents":             nil,
