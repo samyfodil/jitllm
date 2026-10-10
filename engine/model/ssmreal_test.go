@@ -54,7 +54,7 @@ func TestSSMRealModelsTeacherForced(t *testing.T) {
 	if lcpp == "" {
 		t.Skip("set JITLLM_LCPP to a llama.cpp build directory holding llama-completion")
 	}
-	bin := filepath.Join(lcpp, "llama-completion")
+	bin := lcppBin(lcpp, "llama-completion")
 	if _, err := os.Stat(bin); err != nil {
 		t.Skipf("llama-completion is not in JITLLM_LCPP (%s)", lcpp)
 	}

@@ -11,12 +11,14 @@ import (
 	"github.com/samyfodil/jitllm/jit/gpu/ir"
 )
 
-// amdTargets are the four generations the offline gate generates for: CDNA2
-// (MI250, wave64, sdot4), CDNA3 (MI300X), RDNA3 (RX 7900, wave32, sudot4) and
-// RDNA4 (RX 9070), with the target features those cards report.
+// amdTargets are the generations the offline gate generates for: CDNA2
+// (MI250, wave64, sdot4), CDNA3 (MI300X), RDNA2 (V620 and RX 6000, wave32,
+// sdot4), RDNA3 (RX 7900, wave32, sudot4) and RDNA4 (RX 9070), with the target
+// features those cards report.
 var amdTargets = []string{
 	"gfx90a:sramecc+:xnack-",
 	"gfx942:sramecc+:xnack-",
+	"gfx1030",
 	"gfx1100",
 	"gfx1201",
 }
@@ -53,7 +55,7 @@ func TestAMDGPULowersForEveryTarget(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Run(tg.Base(), func(t *testing.T) {
-			maxV, maxS := 0, 0
+			maxV, maxS, compiled := 0, 0, 0
 			for _, n := range names {
 				k := ks[n]
 				src, err := amdgpu.Lower(k, tg)
@@ -88,10 +90,29 @@ func TestAMDGPULowersForEveryTarget(t *testing.T) {
 				if g := k.Group[0]; m.MaxGroup != g {
 					t.Errorf("%s: max workgroup %d, the kernel declares %d", n, m.MaxGroup, g)
 				}
+				// The hardware's limits, from each ISA's reference guide: 256
+				// VGPRs a wave (512 with the AGPRs on CDNA, which share the
+				// file), 108 SGPRs counting VCC as the metadata does, 64 KiB of LDS a workgroup. The code
+				// generator should never exceed them; a code object that did
+				// would fail to launch, not merely run slowly.
+				vmax := 256
+				if m.AGPRs > 0 || tg.Wave == 64 && (tg.Base() == "gfx90a" || tg.Base() == "gfx942") {
+					vmax = 512
+				}
+				if m.VGPRs+max(m.AGPRs, 0) > vmax || m.SGPRs > 108 || m.LDS > 64<<10 {
+					t.Errorf("%s: %d VGPRs + %d AGPRs, %d SGPRs, %d bytes of LDS: past %s's limits",
+						n, m.VGPRs, m.AGPRs, m.SGPRs, m.LDS, tg.Base())
+				}
 				maxV, maxS = max(maxV, m.VGPRs), max(maxS, m.SGPRs)
+				compiled++
 			}
-			t.Logf("%s (wave%d, dot4 %s): %d kernels, at most %d VGPRs and %d SGPRs",
-				tg.Arch, tg.Wave, tg.Dot4, len(names), maxV, maxS)
+			// A gate that compiled nothing would pass: the count is the claim.
+			if compiled != len(names) || compiled < 100 {
+				t.Errorf("%d of %d kernels became code objects; the gate expects every one, and at least 100",
+					compiled, len(names))
+			}
+			t.Logf("%s (wave%d, dot4 %s): %d kernels compiled, at most %d VGPRs and %d SGPRs",
+				tg.Arch, tg.Wave, tg.Dot4, compiled, maxV, maxS)
 		})
 	}
 }

@@ -142,7 +142,28 @@ func (l *lowerer) lower() (string, error) {
 	g := k.Group[0] * max(k.Group[1], 1) * max(k.Group[2], 1)
 	fmt.Fprintf(&s, "attributes #0 = { \"amdgpu-flat-work-group-size\"=\"%d,%d\" "+
 		"\"uniform-work-group-size\"=\"true\" \"target-features\"=\"+wavefrontsize%d\" }\n", g, g, l.t.Wave)
+	s.WriteString("\n!0 = !{}\n")
 	return s.String(), nil
+}
+
+// invariant is the metadata a load of buffer value buf at index idx carries.
+//
+// A parameter is never written by a kernel that reads it (ir.Validate refuses
+// a kernel that reads a buffer it writes, RULE 13), so every load from one is
+// invariant for the launch. Only a load at a lane-independent index is marked:
+// that is a value the whole wave shares, which LLVM may then read once, with a
+// scalar load, and keep out of the loop it sits in. Without the mark LICM
+// hoisted the ADDRESS of each unrolled load of flash attention's query row --
+// one 64-bit pointer per element, 128 VGPRs for a 64-wide head -- and spilled
+// it on gfx1030. Marking every parameter load hoists lane-varying loads too,
+// which spilled the gated delta rule on every target: the mark is a register
+// decision as much as a memory one, and shared memory, written and read by one
+// kernel, carries none.
+func (l *lowerer) invariant(buf, idx ir.Value) string {
+	if l.space[buf] != 1 || l.k.LaneDependent(idx) {
+		return ""
+	}
+	return ", !invariant.load !0"
 }
 
 // matchEnd is the EndLoop closing the Loop at op i.
@@ -452,7 +473,7 @@ func (l *lowerer) op(i int, o ir.Op, v ir.Value) error {
 		l.dot4(r, a0, a1, a2)
 	case ir.OpLoad:
 		p, _ := l.gep(a0, a1, o.Imm, ty(o.Type))
-		l.emit("%s = load %s, ptr addrspace(%d) %s, align 4", r, ty(o.Type), l.space[a0], p)
+		l.emit("%s = load %s, ptr addrspace(%d) %s, align 4%s", r, ty(o.Type), l.space[a0], p, l.invariant(a0, a1))
 	case ir.OpStore:
 		t := ty(l.typeOf(a2))
 		p, _ := l.gep(a0, a1, o.Imm, t)
@@ -462,7 +483,7 @@ func (l *lowerer) op(i int, o ir.Op, v ir.Value) error {
 		t := ty(o.Type)
 		p, _ := l.gep(a0, a1, off, t)
 		vec := fmt.Sprintf("%%vec%d", v)
-		l.emit("%s = load <%d x %s>, ptr addrspace(%d) %s, align %d", vec, n, t, l.space[a0], p, 4*n)
+		l.emit("%s = load <%d x %s>, ptr addrspace(%d) %s, align %d%s", vec, n, t, l.space[a0], p, 4*n, l.invariant(a0, a1))
 		l.emit("%s = extractelement <%d x %s> %s, i32 0", r, n, t, vec)
 	case ir.OpLoadVGet:
 		_, n := ir.VecOf(l.k.Ops[a0-1])
