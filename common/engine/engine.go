@@ -124,16 +124,43 @@ func (e *Engine) run() {
 
 // do runs one command. A panic in it is reported (package crash) and ends the
 // command, not the worker: the window stays up to show the report, and a
-// later command -- Close above all -- still runs. A reply cut off by it is no
-// longer streaming.
+// later command -- Close above all -- still runs.
+//
+// What a command counts it uncounts in a defer (busyEnd, the load list,
+// Streaming), and defers run on a panic, so those stay consistent by
+// construction. What they cannot vouch for is the chat's session: a panic
+// mid-step leaves its KV history and position wherever the step stopped. So
+// the session is closed and nothing is active; the models stay open, and
+// choosing one builds a fresh session.
 func (e *Engine) do(fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
 			crash.Handle("engine worker", r, debug.Stack())
-			e.st.Streaming.Set(false)
+			e.afterPanic()
 		}
 	}()
 	fn()
+}
+
+// afterPanic drops the chat's session after a command panicked. A second
+// panic while closing it is reported too: the worker must survive both.
+func (e *Engine) afterPanic() {
+	defer func() {
+		if r := recover(); r != nil {
+			crash.Handle("engine worker, closing the session after a panic", r, debug.Stack())
+			e.sess, e.active = nil, nil
+			e.gpu, e.m, e.path, e.sessMax = nil, nil, "", 0
+		}
+	}()
+	e.loadingPath = ""
+	e.releaseSession()
+	e.active = nil
+	e.unpublish()
+	e.sh.Post(func() {
+		e.st.Streaming.Set(false)
+		e.st.Busy.Set(e.busyJobs.Load() > 0)
+	})
+	e.status("the engine stopped on an error; choose a model to carry on")
 }
 
 // post queues work for the worker. It reports whether the queue took it: a

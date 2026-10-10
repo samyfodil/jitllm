@@ -30,6 +30,8 @@ func TestAPanickingCommandIsReportedAndTheWorkerLives(t *testing.T) {
 	if !strings.Contains(r.Text, "a command fell over") || !strings.Contains(r.Text, "crash_test.go") {
 		t.Errorf("report lacks the panic or its stack:\n%s", r.Text)
 	}
+	e.Close()
+	sh.DrainQueue(0)
 	if sh.Store.Streaming.Get() {
 		t.Error("a reply cut off by a panic is still streaming")
 	}
