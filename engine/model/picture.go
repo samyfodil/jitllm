@@ -35,6 +35,60 @@ type Picture struct {
 	Key ImageKey
 }
 
+// ChatPictureSpans renders msgs through the model's chat template with imgs,
+// the conversation's pictures in message order, standing where the template
+// puts its image markers: each picture laid out as its tower takes it -- Llama
+// 4's tiles (Llama4Spans), MiniCPM-V's overview and slices (PictureSpans), or
+// one Picture preprocessed on this State's vision segment. The prompt's
+// prefill encodes them, or the image cache answers.
+func (s *State) ChatPictureSpans(msgs []ChatMessage, imgs []image.Image, addGenerationPrompt bool) ([]Span, error) {
+	tw := s.m.Tower()
+	if tw == nil {
+		return nil, fmt.Errorf("model: %d image(s) and this model has no vision tower", len(imgs))
+	}
+	if tw.Cfg.Kind != jlm.ProjLlama4 && tw.Cfg.PosBuckets == 0 {
+		pics := make([]Image, len(imgs))
+		for i, img := range imgs {
+			pc, err := s.Picture(img)
+			if err != nil {
+				return nil, fmt.Errorf("model: image %d: %w", i, err)
+			}
+			pics[i] = Image{Picture: pc}
+		}
+		return s.m.ChatSpansImages(msgs, pics, addGenerationPrompt)
+	}
+	parts := make([][]Span, len(imgs))
+	for i, img := range imgs {
+		sp, err := tw.pictureRun(s.m, i, img)
+		if err != nil {
+			return nil, fmt.Errorf("model: image %d: %w", i, err)
+		}
+		parts[i] = sp
+	}
+	return s.m.ChatSpansParts(msgs, parts, addGenerationPrompt)
+}
+
+// pictureRun is the i-th picture's run of the prompt, markers included, for
+// a tower that cuts a picture into pieces.
+func (t *Tower) pictureRun(m *Model, i int, img image.Image) ([]Span, error) {
+	if t.Cfg.Kind == jlm.ProjLlama4 {
+		rows, cols, pieces, err := t.Llama4Pieces(img)
+		if err != nil {
+			return nil, err
+		}
+		return m.Llama4Spans(rows, cols, pieces)
+	}
+	lay, err := t.Layout(img.Bounds().Dx(), img.Bounds().Dy())
+	if err != nil {
+		return nil, err
+	}
+	pieces, err := t.PicturePieces(img, lay)
+	if err != nil {
+		return nil, err
+	}
+	return m.PictureSpans(lay, i, true, pieces)
+}
+
 // Picture preprocesses img for this State's vision segment and names it. The
 // result goes into a prompt as Span.Picture (or Image.Picture), which encodes
 // it when the span is prefilled.
