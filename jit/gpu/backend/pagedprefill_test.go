@@ -141,8 +141,8 @@ type prefillForm struct {
 	mmaNT      int // PagedAttnScoresMMA's key tiles a warp, 0 for none
 	voltaMT    int // PagedAttnScoresMMA70 and PagedAttnAccMMA70's tiles, 0 for neither
 	voltaNT    int
-	voltaAccMT int // PagedAttnAccMMA70's own dim tile, 0 for voltaMT (the tier's is 1)
-	accQT      int // PagedAttnAccTiled's query tile
+	voltaAccMT int    // PagedAttnAccMMA70's own dim tile, 0 for voltaMT (the tier's is 1)
+	accQT      int    // PagedAttnAccTiled's query tile
 	accMMA     [2]int // PagedAttnAccMMA's dim and query tiles (mt, nt), zero for the tiled accumulate
 	smLanes    int
 	groupMerge bool // FlashAttentionMerge rather than its wide form
