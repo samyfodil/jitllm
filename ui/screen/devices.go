@@ -15,6 +15,7 @@ import (
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 
+	"github.com/jitllm/jitllm/common/crash"
 	"github.com/jitllm/jitllm/common/hardware"
 	"github.com/jitllm/jitllm/common/session"
 	"github.com/jitllm/jitllm/ui/app"
@@ -301,6 +302,7 @@ func Reprobe(sh *app.Shell) {
 	// own device creation.
 	sh.Post(func() {
 		go func() {
+			defer crash.Recover("hardware probe")
 			defer probing.Store(false)
 			r := depsOf(sh).Machine.Probe()
 			// Published on the UI goroutine, not here. A Set is safe from any

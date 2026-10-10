@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/jitllm/jitllm/common/crash"
 	"github.com/jitllm/jitllm/ui/app"
 	"github.com/jitllm/jitllm/ui/screen"
 )
@@ -246,6 +247,27 @@ func Scenarios() []Scenario {
 					}
 					return ""
 				}},
+		}},
+		{Name: "crash", Tab: app.TabSession, Steps: []Step{
+			{Name: "reported", Do: func(sh *app.Shell, _ *Engine) {
+				// A real recovered panic on a goroutine, as a worker's would be.
+				crash.OnReport(sh.ShowCrash)
+				go func() {
+					defer crash.Recover("a mock worker")
+					var rows []int
+					fmt.Println(rows[3])
+				}()
+			}, Until: func(sh *app.Shell) bool { return sh.Store.Crash.Get().Text != "" },
+				Shows: []string{"jitllm crashed", "Copy report", "Open an issue", "Dismiss", "index out of range"}},
+			{Name: "dismissed", Do: func(sh *app.Shell, _ *Engine) {
+				crash.OnReport(nil)
+				sh.Store.Crash.Set(crash.Report{})
+			}, Want: func(sh *app.Shell) string {
+				if sh.Store.Crash.Get().Text != "" {
+					return "the report is still up"
+				}
+				return ""
+			}},
 		}},
 	}
 }

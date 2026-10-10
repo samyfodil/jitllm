@@ -57,7 +57,7 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - -s -w
+      - -s -w -X main.version={{ .Version }}
     mod_timestamp: "{{ .CommitTimestamp }}"
     goos: [linux]
     goarch: [amd64, arm64]
@@ -74,7 +74,7 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - -s -w -H=windowsgui
+      - -s -w -H=windowsgui -X main.version={{ .Version }}
     mod_timestamp: "{{ .CommitTimestamp }}"
     goos: [windows]
     goarch: [amd64, arm64]
@@ -97,7 +97,7 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - -s -w
+      - -s -w -X main.version={{ .Version }}
     mod_timestamp: "{{ .CommitTimestamp }}"
     goos: [darwin]
     goarch: [amd64, arm64]
