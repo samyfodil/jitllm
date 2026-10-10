@@ -7,6 +7,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"os"
 
@@ -35,9 +36,24 @@ func register(sh *app.Shell, d screen.Deps) {
 	sh.OnFilesDropped(func(paths []string) { screen.DropFiles(sh, paths) })
 }
 
+// version is the release's, set by the linker (-X main.version).
+var version = "dev"
+
 func main() {
 	mockMode := flag.Bool("mock", false, "run against package mock: no model, no GPU, fixtures only")
+	showVersion := flag.Bool("version", false, "print the version and exit, opening no window")
 	flag.Parse()
+	if *showVersion {
+		// Before the log moves to a file: a portable copy is checked by
+		// running it with -version, which must answer on standard output.
+		// A GUI program started from a console has no standard output of its
+		// own; one whose output is redirected keeps the redirection.
+		if _, err := os.Stdout.Stat(); err != nil {
+			attachParentConsole()
+		}
+		fmt.Println("jitllm-desktop", version)
+		return
+	}
 	logToFileWithoutAConsole()
 	app.UseEnv(app.Env{Models: os.Getenv("JITLLM_MODELS"), DataHome: os.Getenv("XDG_DATA_HOME")})
 	cfg := app.LoadConfig()
