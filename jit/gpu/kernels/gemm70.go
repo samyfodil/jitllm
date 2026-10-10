@@ -8,14 +8,29 @@ import (
 )
 
 // VoltaTile is GemmVolta's blocking: a workgroup of WM*WN warps, each warp MT
-// m-tiles of 32 rows by NT n-tiles of 8 tokens, and KB sub-blocks of k staged
-// per trip. The workgroup covers WM*MT*32 rows by WN*NT*8 tokens.
+// m-tiles of 32 rows (16 with F16K) by NT n-tiles of 8 tokens, and KB
+// sub-blocks of k staged per trip. The workgroup covers WM*MT*32 rows by
+// WN*NT*8 tokens.
+//
+// F16K picks the warp's matrix instruction: 0 is sm_70's m8n8k4
+// (ir.MMAVolta), 16 is m16n8k16 (sm_80 on) and 8 is m16n8k8 (sm_75's
+// binary16 shape). The staging is the same for all three; only the fragment
+// reads, the instruction and the epilogue's lane map differ.
 type VoltaTile struct {
 	MT, NT, WM, WN, KB int
+	F16K               int
+}
+
+// mRows is one m-tile's rows.
+func (t VoltaTile) mRows() int {
+	if t.F16K != 0 {
+		return 16
+	}
+	return 32
 }
 
 // Rows and Toks are the workgroup's block of the output.
-func (t VoltaTile) Rows() int { return t.WM * t.MT * 32 }
+func (t VoltaTile) Rows() int { return t.WM * t.MT * t.mRows() }
 func (t VoltaTile) Toks() int { return t.WN * t.NT * 8 }
 
 // Threads is the workgroup width.
@@ -103,7 +118,7 @@ func GemmVolta(s MatVecShape, t VoltaTile) (*ir.Kernel, error) {
 		return nil, fmt.Errorf("kernels: GemmVolta: a grouped shape takes no split (ntok %d split %d)",
 			s.NTok, s.Split)
 	}
-	if t.MT < 1 || t.NT < 1 || t.WM < 1 || t.WN < 1 || t.KB < 1 {
+	if t.MT < 1 || t.NT < 1 || t.WM < 1 || t.WN < 1 || t.KB < 1 || t.F16K != 0 && t.F16K != 8 && t.F16K != 16 {
 		return nil, fmt.Errorf("kernels: GemmVolta: tile %+v", t)
 	}
 	split := max(s.Split, 1)
@@ -126,6 +141,11 @@ func GemmVolta(s MatVecShape, t VoltaTile) (*ir.Kernel, error) {
 	if C&(C-1) != 0 || C < 2 || subC < 1 {
 		return nil, fmt.Errorf("kernels: GemmVolta: %d chunks a trip; KB*sub must be 16, 32, 64 or more by powers of two", C)
 	}
+	if t.F16K != 0 && C != 4 {
+		// Lane q of an m16n8 fragment reads chunk q of its row: four chunks
+		// are one trip, and a wider trip puts rows g and g+1 on one bank set.
+		return nil, fmt.Errorf("kernels: GemmVolta: an m16n8 tile stages 32 elements a trip, not %d", 8*C)
+	}
 	if sh := 2 * (BM + BN) * kHalf * 4; sh > 48<<10 {
 		return nil, fmt.Errorf("kernels: GemmVolta: %d bytes of shared memory, over the 48 KiB a kernel may declare", sh)
 	}
@@ -135,6 +155,9 @@ func GemmVolta(s MatVecShape, t VoltaTile) (*ir.Kernel, error) {
 
 	name := fmt.Sprintf("gemmvolta_%s_%dx%d_t%d_m%dn%dw%dx%dk%d_s%d", strings.ToLower(s.T.String()),
 		s.Rows, s.K, s.NTok, t.MT, t.NT, t.WM, t.WN, t.KB, split)
+	if t.F16K != 0 {
+		name += fmt.Sprintf("_f%d", t.F16K)
+	}
 	if grouped {
 		name += fmt.Sprintf("_e%d", s.Experts)
 	}
@@ -290,17 +313,48 @@ func GemmVolta(s MatVecShape, t VoltaTile) (*ir.Kernel, error) {
 	wm := b.Rem(ir.U32, warp, c(int64(t.WM)))
 	wn := b.Div(ir.U32, warp, c(int64(t.WM)))
 	v := voltaLane{b, b.And(ir.U32, tid, c(31))}
-	q8 := b.Shl(ir.U32, v.quad(), c(3))
-	rowW := b.Add(ir.U32, b.Mul(ir.U32, wm, c(int64(32*t.MT))), q8)
-	tokW := b.Mul(ir.U32, wn, c(int64(8*t.NT)))
-	rowL := b.Add(ir.U32, rowW, v.row())
-	tokL := b.Add(ir.U32, tokW, v.row())
-	fragA, fragB := chunkAt(voltaSwizzle(b, rowL, C, true)), chunkAt(voltaSwizzle(b, tokL, C, false))
-	baseA := b.Mul(ir.U32, rowL, c(int64(kHalf)))
-	baseB := b.Mul(ir.U32, tokL, c(int64(kHalf)))
-	for j := range fragA {
-		fragA[j] = b.Add(ir.U32, baseA, fragA[j])
-		fragB[j] = b.Add(ir.U32, baseB, fragB[j])
+	var rowW, tokW ir.Value
+	var fragA, fragB []ir.Value
+	// m16n8's lane (g, q): g = lane/4 is the A row (and g+8) and the B token,
+	// q = lane%4 the k pair. fragA16 holds rows g and g+8, chunk q each.
+	var fragA16 [2]ir.Value
+	var fragB16, lq, lg ir.Value
+	if t.F16K == 0 {
+		q8 := b.Shl(ir.U32, v.quad(), c(3))
+		rowW = b.Add(ir.U32, b.Mul(ir.U32, wm, c(int64(32*t.MT))), q8)
+		tokW = b.Mul(ir.U32, wn, c(int64(8*t.NT)))
+		rowL := b.Add(ir.U32, rowW, v.row())
+		tokL := b.Add(ir.U32, tokW, v.row())
+		fragA, fragB = chunkAt(voltaSwizzle(b, rowL, C, true)), chunkAt(voltaSwizzle(b, tokL, C, false))
+		baseA := b.Mul(ir.U32, rowL, c(int64(kHalf)))
+		baseB := b.Mul(ir.U32, tokL, c(int64(kHalf)))
+		for j := range fragA {
+			fragA[j] = b.Add(ir.U32, baseA, fragA[j])
+			fragB[j] = b.Add(ir.U32, baseB, fragB[j])
+		}
+	} else {
+		// Lane q reads chunk q of its row and of its token: chunk q holds the
+		// trip's words 4q..4q+3, and word 4q+2s+h feeds step s's k pair q
+		// (h = 0) or q+4 (h = 1) in both operands alike, so every word of A
+		// meets the same word of B whatever order the staging wrote k in.
+		// The swizzle depends on row bits 1-3, so rows g and g+8 take one
+		// each and the m-tiles (16 rows on) share them; tokens use bit 1 only.
+		lg = b.Shr(ir.U32, v.lane, c(2))
+		lq = b.And(ir.U32, v.lane, c(3))
+		rowW = b.Mul(ir.U32, wm, c(int64(16*t.MT)))
+		tokW = b.Mul(ir.U32, wn, c(int64(8*t.NT)))
+		for h := 0; h < 2; h++ {
+			r := add(b.Add(ir.U32, rowW, lg), int64(8*h))
+			fragA16[h] = b.Add(ir.U32, b.Mul(ir.U32, r, c(int64(kHalf))),
+				b.Shl(ir.U32, b.Xor(ir.U32, lq, voltaSwizzle(b, r, C, true)), c(2)))
+		}
+		tk := b.Add(ir.U32, tokW, lg)
+		fragB16 = b.Add(ir.U32, b.Mul(ir.U32, tk, c(int64(kHalf))),
+			b.Shl(ir.U32, b.Xor(ir.U32, lq, voltaSwizzle(b, tk, C, false)), c(2)))
+	}
+	nAcc := 8
+	if t.F16K != 0 {
+		nAcc = 4
 	}
 
 	// One trip's global words into registers: each A item's packed words then
@@ -395,7 +449,7 @@ func GemmVolta(s MatVecShape, t VoltaTile) (*ir.Kernel, error) {
 	for i := range accs {
 		accs[i] = make([][]ir.Value, t.NT)
 		for j := range accs[i] {
-			z := make([]ir.Value, 8)
+			z := make([]ir.Value, nAcc)
 			for x := range z {
 				z[x] = b.Phi(ir.F32, zeroF)
 			}
@@ -428,7 +482,39 @@ func GemmVolta(s MatVecShape, t VoltaTile) (*ir.Kernel, error) {
 		d[i] = make([][]ir.Value, t.NT)
 		copy(d[i], accs[i])
 	}
-	for ch := 0; ch < C; ch++ {
+	if t.F16K != 0 {
+		pa0, pa1 := b.Add(ir.U32, fragA16[0], curA), b.Add(ir.U32, fragA16[1], curA)
+		pb := b.Add(ir.U32, fragB16, curB)
+		a0 := make([][]ir.Value, t.MT)
+		a1 := make([][]ir.Value, t.MT)
+		for i := range a0 {
+			a0[i] = b.LoadV(ir.U32, shA, pa0, int64(16*i*kHalf), 4)
+			a1[i] = b.LoadV(ir.U32, shA, pa1, int64(16*i*kHalf), 4)
+		}
+		bf := make([][]ir.Value, t.NT)
+		for j := range bf {
+			bf[j] = b.LoadV(ir.U32, shB, pb, int64(8*j*kHalf), 4)
+		}
+		for st := 0; st < 2; st++ {
+			w0, w1 := 2*st, 2*st+1
+			for i := 0; i < t.MT; i++ {
+				for j := 0; j < t.NT; j++ {
+					if t.F16K == 16 {
+						d[i][j] = b.MMA(ir.MMAShape{M: 16, N: 8, K: 16, Kind: ir.MMAF16},
+							[]ir.Value{a0[i][w0], a1[i][w0], a0[i][w1], a1[i][w1]},
+							[]ir.Value{bf[j][w0], bf[j][w1]}, d[i][j])
+						continue
+					}
+					// m16n8k8 takes one word of each operand: the pair q.
+					for _, w := range []int{w0, w1} {
+						d[i][j] = b.MMA(ir.MMAShape{M: 16, N: 8, K: 8, Kind: ir.MMAF16},
+							[]ir.Value{a0[i][w], a1[i][w]}, []ir.Value{bf[j][w]}, d[i][j])
+					}
+				}
+			}
+		}
+	}
+	for ch := 0; ch < C && t.F16K == 0; ch++ {
 		pa, pb := b.Add(ir.U32, fragA[ch], curA), b.Add(ir.U32, fragB[ch], curB)
 		af := make([][]ir.Value, t.MT)
 		for i := range af {
@@ -453,7 +539,7 @@ func GemmVolta(s MatVecShape, t VoltaTile) (*ir.Kernel, error) {
 	b.Barrier()
 	for i := 0; i < t.MT; i++ {
 		for j := 0; j < t.NT; j++ {
-			for x := 0; x < 8; x++ {
+			for x := 0; x < nAcc; x++ {
 				b.SetPhi(accs[i][j][x], d[i][j][x])
 			}
 		}
@@ -489,15 +575,30 @@ func GemmVolta(s MatVecShape, t VoltaTile) (*ir.Kernel, error) {
 	}
 	rowG := b.Add(ir.U32, rowBlk, rowW)
 	tokG := b.Add(ir.U32, tokBlk, tokW)
-	dRow := []ir.Value{b.Add(ir.U32, rowG, v.dRow(0)), b.Add(ir.U32, rowG, v.dRow(2))}
-	dCol := []ir.Value{b.Add(ir.U32, tokG, v.dCol(0)), b.Add(ir.U32, tokG, v.dCol(1)),
-		b.Add(ir.U32, tokG, v.dCol(4)), b.Add(ir.U32, tokG, v.dCol(5))}
+	// rowOf and tokOf are accumulator comp's output row and token, before the
+	// tile offsets.
+	var rowOf, tokOf func(comp int) ir.Value
+	if t.F16K == 0 {
+		dRow := []ir.Value{b.Add(ir.U32, rowG, v.dRow(0)), b.Add(ir.U32, rowG, v.dRow(2))}
+		dCol := []ir.Value{b.Add(ir.U32, tokG, v.dCol(0)), b.Add(ir.U32, tokG, v.dCol(1)),
+			b.Add(ir.U32, tokG, v.dCol(4)), b.Add(ir.U32, tokG, v.dCol(5))}
+		rowOf = func(comp int) ir.Value { return dRow[(comp>>1)&1] }
+		tokOf = func(comp int) ir.Value { return dCol[(comp&1)+2*(comp>>2)] }
+	} else {
+		// m16n8: c0 and c1 are row g at tokens 2q and 2q+1, c2 and c3 row g+8.
+		r0 := b.Add(ir.U32, rowG, lg)
+		dRow := []ir.Value{r0, add(r0, 8)}
+		t0 := b.Add(ir.U32, tokG, b.Shl(ir.U32, lq, c(1)))
+		dCol := []ir.Value{t0, add(t0, 1)}
+		rowOf = func(comp int) ir.Value { return dRow[comp>>1] }
+		tokOf = func(comp int) ir.Value { return dCol[comp&1] }
+	}
 	nrows := c(int64(s.Rows))
 	for i := 0; i < t.MT; i++ {
 		for j := 0; j < t.NT; j++ {
-			for comp := 0; comp < 8; comp++ {
-				rr := add(dRow[(comp>>1)&1], int64(32*i))
-				tok := add(dCol[(comp&1)+2*(comp>>2)], int64(8*j))
+			for comp := 0; comp < nAcc; comp++ {
+				rr := add(rowOf(comp), int64(t.mRows()*i))
+				tok := add(tokOf(comp), int64(8*j))
 				val := d[i][j][comp]
 				if s.Bias {
 					// A grouped bias is a bank, [expert][row]; adding it here

@@ -101,7 +101,7 @@ func towerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Model, *Tow
 				t.Fatalf("NMSE %v on %s: the comparison is degenerate", nm, spec)
 			}
 			bound := 5e-5
-			if g.Stats().VoltaGemm > 0 {
+			if st := g.Stats(); st.VoltaGemm+st.GemmF16 > 0 {
 				bound = 5e-4
 			}
 			if nm > bound {

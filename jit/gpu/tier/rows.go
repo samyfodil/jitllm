@@ -465,7 +465,7 @@ type ragKey struct {
 // card, with a Reduce after.
 func (g *devTier) ragMV(m mv, ntok int) (mv, bool) {
 	if _, _, ok := g.mmaTile(m.rows, ntok); ok && !kernels.IsFloat(m.q) {
-		return g.batchMV(m, ntok, 1)
+		return g.intBatchMV(m, ntok, 1)
 	}
 	if bm, ok := g.voltaMV(m, ntok); ok {
 		return bm, true
@@ -953,10 +953,74 @@ var voltaTiles = []kernels.VoltaTile{
 func (g *devTier) voltaGemm(m mv, ntok int) (mv, bool) {
 	// A build reached from inside a submission takes g.mu (subLock).
 	defer g.subUnlock(g.subLock())
+	return g.stagedGemm(m, ntok, voltaTiles, 0)
+}
+
+// f16Tiles are GemmVolta's m16n8 blockings, widest first: four warps as 2x2,
+// each four m-tiles of 16 rows by up to eight n-tiles of 8 tokens, so a
+// 128-row block meets 128, 64 or 32 tokens. The 96- and 32-row blocks serve
+// matrices no 128-row block divides.
+var f16Tiles = []kernels.VoltaTile{
+	{MT: 4, NT: 4, WM: 2, WN: 2}, {MT: 4, NT: 2, WM: 2, WN: 2},
+	{MT: 3, NT: 4, WM: 2, WN: 2}, {MT: 3, NT: 2, WM: 2, WN: 2},
+	{MT: 2, NT: 4, WM: 2, WN: 2}, {MT: 2, NT: 2, WM: 2, WN: 2}, {MT: 1, NT: 2, WM: 2, WN: 2},
+}
+
+// f16GemmK is the k of the m16n8 binary16 instruction this device lowers
+// (16 from sm_80, 8 on sm_75), or 0 where it lowers neither. Probed once by a
+// compile: the PTX target decides, and a refusal is the device's, not the
+// shape's. Callers hold g.mu.
+func (g *devTier) f16GemmK() int {
+	if g.f16K == 0 {
+		g.f16K = -1
+		if g.dev.API() == "ptx" {
+			for _, k := range []int{16, 8} {
+				ker, err := kernels.GemmVolta(kernels.MatVecShape{Center: g.center, T: kernels.Q8_0, K: 32, Rows: 32, NTok: 32},
+					kernels.VoltaTile{MT: 1, NT: 2, WM: 2, WN: 2, KB: 1, F16K: k})
+				if err != nil {
+					continue
+				}
+				if c, err := g.dev.Compile(ker); err == nil {
+					c.Close()
+					g.f16K = k
+					break
+				}
+			}
+		}
+	}
+	return max(g.f16K, 0)
+}
+
+// f16Gemm is m's batched twin as GemmVolta on the m16n8 binary16
+// instruction (sm_75 on): the weights dequantized once a workgroup into
+// shared memory with their scales folded in, the activations ActF16T's, and
+// the dot accumulated in float32 over the whole k. MatVecMMA reads both
+// operands from global memory inside its loop, re-dequantizes a weight for
+// every 32 tokens and pays a float epilogue per sub-block per instruction;
+// this form pays neither. False where the device lowers no m16n8 shape, the
+// format has no binary16 dequant, or no tile divides the shape. NoVolta
+// refuses it, as it refuses every binary16-activation twin.
+func (g *devTier) f16Gemm(m mv, ntok int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
+	if g.NoVolta || m.slots > 0 || !kernels.Volta70OK(m.q) {
+		return mv{}, false
+	}
+	k := g.f16GemmK()
+	if k == 0 {
+		return mv{}, false
+	}
+	return g.stagedGemm(m, ntok, f16Tiles, k)
+}
+
+// stagedGemm builds m's GemmVolta twin from the first of tiles that divides
+// the shape and compiles, with instruction f16k (VoltaTile.F16K). Callers
+// hold g.mu.
+func (g *devTier) stagedGemm(m mv, ntok int, tiles []kernels.VoltaTile, f16k int) (mv, bool) {
 	sub, _, _, _ := kernels.Layout(m.q)
 	kbN := max(32/sub, 1)
-	for _, tl := range voltaTiles {
-		tl.KB = kbN
+	for _, tl := range tiles {
+		tl.KB, tl.F16K = kbN, f16k
 		s := kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: ntok, Bias: m.bias != nil}
 		if m.rows%tl.Rows() != 0 || ntok%tl.Toks() != 0 {
 			continue
@@ -969,7 +1033,7 @@ func (g *devTier) voltaGemm(m mv, ntok int) (mv, bool) {
 		for ; split >= 1; split /= 2 {
 			s.Split = split
 			key := ragKey{kind: "gemmvolta", q: m.q, k: m.k, rows: m.rows, ntok: ntok,
-				tile: [5]int{tl.MT, tl.NT, tl.WM, tl.WN, tl.KB}, split: split, bias: s.Bias}
+				tile: [5]int{tl.MT, tl.NT, tl.WM, tl.WN, tl.KB}, split: split, bias: s.Bias, r: f16k}
 			k, ok := g.ragK[key]
 			if !ok {
 				ker, err := kernels.GemmVolta(s, tl)
@@ -1013,6 +1077,10 @@ func (g *devTier) voltaGemm(m mv, ntok int) (mv, bool) {
 				!g.sizePart(m.rows*ntok*split) {
 				return mv{}, false
 			}
+		}
+		if f16k != 0 {
+			g.GemmF16++
+			return out, true
 		}
 		g.VoltaMV++
 		g.VoltaGemm++

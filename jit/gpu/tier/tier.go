@@ -165,7 +165,9 @@ type Config struct {
 	NoMMA bool
 	// NoVolta refuses sm_70's f16 tensor-core matvec (kernels.MatVecMMA70),
 	// which a card without the integer matrix instruction -- or NoMMA -- takes
-	// before the dp4a tile. The A/B arm and the bisection switch for it.
+	// before the dp4a tile, and the m16n8 binary16 GEMM (devTier.f16Gemm) that
+	// sm_75 and later take before MatVecMMA. The A/B arm and the bisection
+	// switch for both.
 	//
 	// It refuses Metal's kernels.GemmTile too (tileMV, tileMoE): both are the
 	// binary16-activation twin of the int8 matvec, and a gate that holds the
@@ -625,6 +627,9 @@ type Stats struct {
 	// VoltaGemm counts those of them that are the shared-memory-staged
 	// kernels.GemmVolta rather than MatVecMMA70.
 	VoltaGemm int
+	// GemmF16 counts batched matvecs built as GemmVolta on the m16n8 binary16
+	// instruction (sm_75 on, devTier.f16Gemm) rather than MatVecMMA.
+	GemmF16 int
 	// GroupedVolta counts a batched mixture's expert matvecs run as grouped
 	// GemmVolta on sm_70's tensor cores, or grouped GemmTile on Metal, rather
 	// than the dp4a grouped matvec.
@@ -1006,6 +1011,7 @@ func (s *Stats) add(o Stats) {
 	s.LinearFused += o.LinearFused
 	s.RecShared += o.RecShared
 	s.VoltaGemm += o.VoltaGemm
+	s.GemmF16 += o.GemmF16
 	s.GroupedVolta += o.GroupedVolta
 	s.MLAScores70 += o.MLAScores70
 	s.MLAAcc70 += o.MLAAcc70
@@ -1583,6 +1589,9 @@ type devShared struct {
 	// voltaMoE is the grouped tensor-core mixture's probe (voltaOn): 0 not yet
 	// asked, 1 this device runs it, -1 it does not.
 	voltaMoE int8
+	// f16K is f16GemmK's probe: 0 not yet asked, -1 no m16n8 binary16
+	// instruction, else its k.
+	f16K int
 }
 
 // GPU serves decode matvecs and whole blocks from one or more devices. It is a

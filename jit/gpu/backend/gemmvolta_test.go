@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/samyfodil/jitllm/jit/gpu/backend"
+	"github.com/samyfodil/jitllm/jit/gpu/ir"
 	"github.com/samyfodil/jitllm/jit/gpu/kernels"
 )
 
@@ -67,6 +69,72 @@ func TestGemmVoltaMatchesTheReference(t *testing.T) {
 	}
 	if ran == 0 {
 		t.Skip("no backend lowers the m8n8k4 shape here")
+	}
+}
+
+// TestGemmF16MatchesTheReference holds GemmVolta's m16n8 forms (F16K 16 on
+// sm_80 on, 8 on sm_75) to the reference MatVecMMA70 is held to: every
+// staging nesting, a block of one trip and of three, a narrow tile of one
+// m-tile and one n-tile, 96-row blocks, a k-split with and without a bias,
+// and the formats whose dequant differs. A shape the device does not lower
+// is refused on every k; on a card that lowers m16n8k16 a refusal of it is
+// a failure.
+func TestGemmF16MatchesTheReference(t *testing.T) {
+	gpuLock(t)
+	devs := backend.Open()
+	if len(devs) == 0 {
+		t.Skip("no GPU backend on this host")
+	}
+	ran := 0
+	for _, d := range devs {
+		defer d.Close()
+		for _, f16k := range []int{16, 8} {
+			for _, q := range []kernels.Quant{kernels.Q4_K, kernels.Q6_K, kernels.Q8_0, kernels.Q5_K, kernels.Q4_0, kernels.Q5_0, kernels.Q5_1} {
+				sub, _, _, _ := kernels.Layout(q)
+				kb := max(32/sub, 1)
+				refused := false
+				for _, sh := range []struct {
+					rows, k, ntok, split int
+					tl                   kernels.VoltaTile
+					bias                 bool
+				}{
+					{128, 512, 64, 1, kernels.VoltaTile{MT: 4, NT: 4, WM: 2, WN: 2}, false},
+					{256, 768, 128, 1, kernels.VoltaTile{MT: 4, NT: 8, WM: 2, WN: 2}, true},
+					{32, 256, 32, 1, kernels.VoltaTile{MT: 1, NT: 2, WM: 2, WN: 2}, true},
+					{192, 512, 32, 2, kernels.VoltaTile{MT: 3, NT: 2, WM: 2, WN: 2}, true},
+					{256, 768, 32, 3, kernels.VoltaTile{MT: 1, NT: 4, WM: 4, WN: 1}, false},
+					{64, 1024, 128, 1, kernels.VoltaTile{MT: 4, NT: 4, WM: 1, WN: 4}, false},
+				} {
+					sh.tl.KB, sh.tl.F16K = kb, f16k
+					s := kernels.MatVecShape{T: q, K: sh.k, Rows: sh.rows, NTok: sh.ntok, Split: sh.split, Bias: sh.bias}
+					kk, err := kernels.GemmVolta(s, sh.tl)
+					if err != nil {
+						// A staging nesting the block does not admit (a 96-row
+						// block of two-sub-block trips) is the tier's next tile.
+						if !strings.Contains(err.Error(), "do not tile") {
+							t.Fatalf("%v %+v: %v", q, sh, err)
+						}
+						continue
+					}
+					kern, err := d.Compile(kk)
+					if err != nil {
+						t.Logf("%s %s f%d: %v", d.API(), d.Name(), f16k, err)
+						refused = true
+						break
+					}
+					ran++
+					mma70Case(t, d, kern, s, fmt.Sprintf("gemm f%d %+v", f16k, sh.tl),
+						kernels.GemmVoltaGroups(s, sh.tl), sh.tl.Threads(), true)
+					kern.Close()
+				}
+				if refused && d.API() == "ptx" && ptxSM(d.Name()) >= mmaMinSM(ir.MMAShape{M: 16, N: 8, K: f16k, Kind: ir.MMAF16}) {
+					t.Fatalf("%s lowers m16n8k%d and refused it", d.Name(), f16k)
+				}
+			}
+		}
+	}
+	if ran == 0 {
+		t.Skip("no backend lowers an m16n8 binary16 shape here")
 	}
 }
 

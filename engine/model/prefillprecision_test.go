@@ -12,9 +12,10 @@ import (
 )
 
 // TestPrefillPrecisionArms is a probe (JITLLM_PREC_MODEL=<file>) for reading
-// `jitllm verify -prefill`'s batched-vs-per-token max|dlogit| on an sm_70 card.
+// `jitllm verify -prefill`'s batched-vs-per-token max|dlogit| on a CUDA card.
 // The two arms use different arithmetic (per-token: int8 activations; batched:
-// binary16 via GemmVolta and binary16 attention), so each is compared against
+// binary16 via GemmVolta, m8n8k4 on sm_70 and m16n8 from sm_75, and binary16
+// attention), so each is compared against
 // a more precise third arm (binary16 activations, float32 attention) and the
 // host. A batched-path defect shows as batched-vs-reference far above
 // per-token-vs-reference.
@@ -81,7 +82,7 @@ func TestPrefillPrecisionArms(t *testing.T) {
 			t.Fatalf("the device was demoted; this arm is the host")
 		}
 		st := g.Stats()
-		t.Logf("arm noBatch=%v: VoltaGemm %d, attention on the matrix unit %v", noBatch, st.VoltaGemm, st.AttnMMA)
+		t.Logf("arm noBatch=%v: VoltaGemm %d, GemmF16 %d, attention on the matrix unit %v", noBatch, st.VoltaGemm, st.GemmF16, st.AttnMMA)
 		return out
 	}
 	noVolta := tier.WithConfig(func(c *tier.Config) { c.NoVolta = true })

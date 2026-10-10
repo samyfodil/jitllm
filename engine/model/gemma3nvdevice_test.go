@@ -140,7 +140,7 @@ func TestGemma3nTowerOnDeviceMatchesHost(t *testing.T) {
 				t.Skipf("%s: not present", spec)
 			}
 			ran++
-			if n := a.st.VoltaMV + a.st.TileMV; n != 0 {
+			if n := a.st.VoltaMV + a.st.TileMV + a.st.GemmF16; n != 0 {
 				t.Fatalf("%s: the int8 arm built %d matvecs on binary16 activations", spec, n)
 			}
 			t.Logf("%s, int8: block by block worst NMSE %.3e at block %d against the host", spec, a.worst, a.at)
@@ -167,7 +167,7 @@ func TestGemma3nTowerOnDeviceMatchesHost(t *testing.T) {
 			}
 
 			f, _ := g3nvOnDevice(t, tw, g, spec, stem, host, f16Arm)
-			if f.st.VoltaMV+f.st.TileMV == 0 {
+			if f.st.VoltaMV+f.st.TileMV+f.st.GemmF16 == 0 {
 				t.Logf("%s: no binary16 twin on this device; its int8 arm is what it ships", spec)
 				return
 			}
@@ -175,7 +175,7 @@ func TestGemma3nTowerOnDeviceMatchesHost(t *testing.T) {
 			fq, _ := nmse32(g.Image.EmbdQ8, f.out)
 			aq, _ := nmse32(g.Image.EmbdQ8, a.out)
 			t.Logf("%s, f16 (%d matvecs): block by block worst NMSE %.3e at block %d, all blocks %.3e against the host; "+
-				"against f32 activations %.3e, the int8 arm %.3e", spec, f.st.VoltaMV+f.st.TileMV, f.worst, f.at, fh, fq, aq)
+				"against f32 activations %.3e, the int8 arm %.3e", spec, f.st.VoltaMV+f.st.TileMV+f.st.GemmF16, f.worst, f.at, fh, fq, aq)
 			if math.IsNaN(f.worst) || f.worst > 1e-3 || math.IsNaN(fh) || fh > 1e-3 {
 				t.Fatalf("%s: the binary16 twin reads %.3e at block %d and %.3e over the tower against the host",
 					spec, f.worst, f.at, fh)

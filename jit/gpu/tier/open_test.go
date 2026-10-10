@@ -237,8 +237,11 @@ func TestIntegratedDeviceStillTakesBlocks(t *testing.T) {
 	two := twoBlockBytes(t, p)
 
 	card, igpu := thisBox()
-	// Two blocks each, eight offered: the host takes the rest.
-	slots := planSlots([]backend.Device{card, igpu}, []uint64{two, two},
+	// Two blocks each, eight offered: the host takes the rest. Each device's
+	// two blocks are sized on its own API: a PTX device's prompt chunk takes
+	// the m16n8 GEMM, whose binary16 activation scratch the others lack.
+	twoCard := twoBlockBytesOn(t, &fakeDev{api: card.api}, p)
+	slots := planSlots([]backend.Device{card, igpu}, []uint64{twoCard, two},
 		openOpts{host: boxHost, hostSet: true})
 	g, err := New(slots, WithDeviceTune(TuneOff))
 	if err != nil {

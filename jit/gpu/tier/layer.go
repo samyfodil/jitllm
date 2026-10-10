@@ -9235,11 +9235,25 @@ func (g *devTier) actWinFor(ntok int) int {
 	return 32
 }
 
-// batchMV compiles one matvec's batched twin: the matrix instruction wherever
-// the device has one (MatVecMMA is faster than the dp4a tile and bit-identical to
-// it), then the other tiled forms, then the dp4a tile. The widest admissible
-// warp tile is a divisor calculation (mmaTile), not a search.
+// batchMV compiles one matvec's batched twin for a prompt chunk: the staged
+// binary16 GEMM on the m16n8 instruction where the device has it (f16Gemm),
+// then intBatchMV's forms.
 func (g *devTier) batchMV(m mv, ntok, tok int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
+	if bm, ok := g.f16Gemm(m, ntok); ok {
+		return bm, true
+	}
+	return g.intBatchMV(m, ntok, tok)
+}
+
+// intBatchMV is batchMV without the m16n8 GEMM: the integer matrix
+// instruction wherever the device has one (MatVecMMA is faster than the dp4a
+// tile and bit-identical to it), then the other tiled forms, then the dp4a
+// tile. The widest admissible warp tile is a divisor calculation (mmaTile),
+// not a search. A ragged step takes it directly (ragMV): its few rows a
+// sequence are decode's, and keep decode's int8 arithmetic.
+func (g *devTier) intBatchMV(m mv, ntok, tok int) (mv, bool) {
 	// A build reached from inside a submission takes g.mu (subLock).
 	defer g.subUnlock(g.subLock())
 	// A float weight has no tensor-core kernel. Asking would fail, and a

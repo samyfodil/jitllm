@@ -66,7 +66,8 @@ func TestForwardBatchGreedyMatchesEachSequenceAlone(t *testing.T) {
 		opt   []tier.Option
 		volta bool
 	}{{"default", nil, false},
-		// no-mma takes sm_70's f16 tensor-core matvec; no-volta the dp4a tile.
+		// no-mma takes a binary16 tensor-core matvec (sm_70's m8n8k4, the
+		// m16n8 GEMM from sm_75); no-volta the dp4a tile.
 		{"no-mma", []tier.Option{tier.WithConfig(func(c *tier.Config) { c.NoMMA = true })}, true},
 		{"no-mma-no-volta", []tier.Option{tier.WithConfig(func(c *tier.Config) { c.NoMMA, c.NoVolta = true, true })}, false}} {
 		got, after, volta := batchGreedy(t, m, ids, gen, seq, arm.opt)
@@ -187,7 +188,7 @@ func batchGreedy(t *testing.T, m *Model, ids [][]int32, gen, seq int, opt []tier
 				}
 			}
 			lastBatchStats, lastBatchName = g.Stats(), g.Name()
-			return got, after, lastBatchStats.VoltaMV
+			return got, after, lastBatchStats.VoltaMV + lastBatchStats.GemmF16
 		}
 		out, err := st.ForwardBatchGreedy(feed)
 		if err != nil {
