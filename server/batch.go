@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -130,6 +131,12 @@ type batchCounters struct {
 }
 
 // errUnloaded ends a request still waiting for a row when its model goes.
+// errPromptCancelled ends a row whose request left before its prompt was in
+// and whose sequence started with it: no GenerateStarted is sent, the State
+// is reset, and the request returns its context's error, as a prefill
+// interrupted alone does (Generate).
+var errPromptCancelled = errors.New("server: the request left during its prompt")
+
 var errUnloaded = fmt.Errorf("%w: the model was unloaded before this request got a row", ErrNotFound)
 
 // batchWidth is the most requests the loop holds rows for: the configured
@@ -188,6 +195,9 @@ type row struct {
 	// has the row's prompt offered to the store once it has run.
 	restored int
 	seal     bool
+	// fresh says the row's sequence starts with its prompt (no
+	// continue_session), so a prompt cut short is reset rather than kept.
+	fresh bool
 
 	// admitted closes when the loop takes the row; done when it lets go of
 	// the row for good, after its last event is in the outbox.
@@ -567,8 +577,19 @@ func (lp *stepLoop) promptUnits(units []unit, budget int) []unit {
 		if !r.prompting() {
 			continue
 		}
-		// A request that left mid-prompt is not fed the rest: it ends here,
-		// its history holding what was fed, as a cancel mid-decode leaves it.
+		// A request that left mid-prompt is not fed the rest. One whose
+		// sequence starts here sends no GenerateStarted and gives its State
+		// back reset, as a prefill interrupted alone does; one that continues
+		// a sequence, or never began its prompt, keeps its history as it is.
+		if r.cancelled.Load() && (r.fresh || !r.begun) {
+			if r.fresh {
+				r.s.st.Reset()
+			}
+			lp.finish(r, FinishCancelled, "", errPromptCancelled)
+			continue
+		}
+		// A continuing request that left mid-prompt ends here, its history
+		// holding what was fed, as a cancel mid-decode leaves it.
 		if r.cancelled.Load() {
 			if r.begun {
 				r.prefill = time.Since(r.promptStart)
@@ -843,6 +864,7 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 		fed:       restored,
 		seal:      store,
 		reset:     !o.Continue && restored == 0,
+		fresh:     !o.Continue,
 		echo:      o.Echo,
 		ephemeral: ephemeral,
 		sampler:   sampler,
@@ -923,6 +945,9 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 	e.applyPageBudget(s.lm, nil)
 	if emitErr != nil {
 		return emitErr
+	}
+	if errors.Is(res.err, errPromptCancelled) {
+		return context.Cause(ctx)
 	}
 	if res.err != nil {
 		return res.err

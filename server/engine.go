@@ -1393,6 +1393,12 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		return fmt.Errorf("%w: continue_session with no prompt has no token to run", ErrInvalid)
 	}
 
+	// A request whose client has already gone does no prompt work and sends
+	// no GenerateStarted, on whichever path would have run it.
+	if err := ctx.Err(); err != nil {
+		return context.Cause(ctx)
+	}
+
 	// Room for this generate's history, parking idle sessions of the model
 	// if its KV budget is short (preempt.go), and this session back if it
 	// was the one parked.

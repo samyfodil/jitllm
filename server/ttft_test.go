@@ -360,6 +360,98 @@ func TestACancelledPrefillLeavesThePooledStateClean(t *testing.T) {
 	}
 }
 
+// TestACancelledRequestDoesNoPromptWorkOnAnyPath: a request whose context is
+// done before Generate sends no GenerateStarted and returns the context's
+// error on each path a prompt can take -- the step loop's row, the prefill
+// alone, and speculation -- and computes no position.
+func TestACancelledRequestDoesNoPromptWorkOnAnyPath(t *testing.T) {
+	for _, arm := range []struct {
+		name string
+		cfg  Config
+		spec *Speculation
+	}{
+		{"row", Config{NoMemCache: true}, nil},
+		{"alone", Config{NoMemCache: true, MaxBatchRows: 1}, nil},
+		{"speculation", Config{NoMemCache: true, MaxBatchRows: 1}, &Speculation{Enabled: true, Draft: 4}},
+	} {
+		t.Run(arm.name, func(t *testing.T) {
+			e, lm := ttftEngine(t, smallModel, arm.cfg, LoadOptions{})
+			if (lm.loop != nil) != (arm.cfg.MaxBatchRows != 1) {
+				t.Fatalf("the %s arm has step loop %v", arm.name, lm.loop != nil)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			for range 20 {
+				started := false
+				err := e.Generate(ctx, GenerateOptions{ModelID: "m", Prompt: idsPrompt(longPrompt(lm.m)), MaxTokens: 8,
+					Speculation: arm.spec}, func(ev Event) error { started = started || ev.Kind == EventStarted; return nil })
+				if !errors.Is(err, context.Canceled) || started {
+					t.Fatalf("a cancelled request returned %v, started %v", err, started)
+				}
+			}
+			if n := lm.tokensPrefilled.Load(); n != 0 {
+				t.Fatalf("cancelled requests computed %d positions", n)
+			}
+		})
+	}
+}
+
+// TestACancelledRowLeavesItsPromptUnrun: the step loop's half of a cancel,
+// which the check at Generate's entry cannot reach -- a row the loop admitted
+// before its request saw the context go (the request's select between
+// admission and cancellation picks either when both are ready). Its prompt,
+// begun or not, is not fed; it pushes no GenerateStarted; its State is reset;
+// and it ends with errPromptCancelled, which generateBatched turns into the
+// context's error.
+func TestACancelledRowLeavesItsPromptUnrun(t *testing.T) {
+	e, lm := ttftEngine(t, smallModel, Config{NoMemCache: true}, LoadOptions{})
+	lp := lm.loop
+	if lp == nil {
+		t.Fatal("the model has no step loop")
+	}
+	p := longPrompt(lm.m)
+	for _, begun := range []bool{false, true} {
+		s, err := e.CreateSession(SessionOptions{ModelID: "m"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fed := 0
+		if begun {
+			fed = 4
+			if _, err := s.st.Prefill(p[:fed]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		r := &row{s: s, ids: p, fed: fed, begun: begun, fresh: true, reset: true,
+			stream: newStreamText(lm.m.Vocab.NewChatStream().Next, nil),
+			done:   make(chan struct{}), notify: make(chan struct{}, 1)}
+		r.cancelled.Store(true)
+		// Nothing is waiting, so the loop goroutine is parked in awaitWork
+		// and its rows are this goroutine's.
+		lp.rows = append(lp.rows, r)
+		if units := lp.promptUnits(nil, model.MaxStepRows); len(units) != 0 {
+			t.Fatalf("begun %v: a cancelled row was fed %d unit(s)", begun, len(units))
+		}
+		select {
+		case <-r.done:
+		default:
+			t.Fatalf("begun %v: the cancelled row was not finished", begun)
+		}
+		for _, ev := range r.take() {
+			if ev.Kind == EventStarted {
+				t.Fatalf("begun %v: a cancelled row sent GenerateStarted", begun)
+			}
+		}
+		if !errors.Is(r.result.err, errPromptCancelled) || r.result.reason != FinishCancelled {
+			t.Fatalf("begun %v: the row ended %v, %v", begun, r.result.reason, r.result.err)
+		}
+		if pos := s.st.Pos(); pos != 0 {
+			t.Fatalf("begun %v: the cancelled row left its State at position %d", begun, pos)
+		}
+		e.CloseSession(s.id)
+	}
+}
+
 // TestARequestsPriorityFavoursItsModel: priority "high" makes the request's
 // model the favoured one with priority on, so it holds all but an eighth of
 // the host budget; "normal" changes nothing; anything else is the caller's
