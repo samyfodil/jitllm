@@ -104,6 +104,9 @@ type LayerWeights struct {
 	// the same op as AttnNorm with a different weight. LayerPlan.PostNorm says
 	// the model has them so a tier can decline before uploading anything.
 	PostAttnNorm, PostFFNNorm []float32
+	// ResidNorm and ResidNormB are a post-norm block's last LayerNorm, over x
+	// + mlp(x) (LayerPlan.PostResidNorm): BERT's output norm. nil elsewhere.
+	ResidNorm, ResidNormB []float32
 	// Gemma 4's mixture block (LayerPlan.DenseMoE): the experts' pre-norm, the
 	// dense MLP's and the experts' post-norms and the router input's norm,
 	// NEmbd wide, and one weight factor per expert. nil elsewhere.
@@ -335,6 +338,16 @@ type Head struct {
 	SampleVals []float32
 	SampleIDs  []uint32
 	Sampled    bool
+	// Pick, when non-empty, asks for the logits at these vocabulary ids alone
+	// in place of the row: a decision readout's label ids. A tier that serves
+	// it fills PickVals (as long as Pick at least), leaves Logits untouched
+	// and sets Picked; one that cannot fills Logits as always. The values are
+	// the projection's own, capped where the head caps (Softcap): a head bias
+	// and a logit scale are the caller's, which is why a caller with either
+	// does not ask. See model.Decider.
+	Pick     []int32
+	PickVals []float32
+	Picked   bool
 	// Tokens is RowsDevice.LayersRows' output: each row's greedy token.
 	Tokens []int32
 	// RowLogits asks LayersRows to read every row's logits back as well, into
@@ -442,6 +455,20 @@ func (p *LayerPlan) RopeAt(li int) bool {
 // host trusts history the device returns only from the window start of
 // (its last position - 1 - KVWindowSlack), which this margin guarantees.
 const KVWindowSlack = 64
+
+// LocalRope reports whether block li rotates by the local table (csSWA):
+// the blocks SWALocal names when it is set -- ModernBERT's are all but every
+// SWAPeriod'th from the first, which the period's own expression does not
+// say -- and otherwise the SWAPeriod pattern's.
+func (p *LayerPlan) LocalRope(li int) bool {
+	if p.SWAPeriod <= 0 {
+		return false
+	}
+	if p.SWALocal != nil {
+		return p.SWALocal(li)
+	}
+	return li%p.SWAPeriod < p.SWAPeriod-1
+}
 
 // Window is block li's sliding window in keys, or 0 when it attends its whole
 // causal history.
@@ -603,7 +630,8 @@ type LayerPlan struct {
 	FinalSoftcap float32
 	// SWAPeriod is the repeating local/global layer pattern, 0 when the
 	// architecture has one kind of layer. Layer il is local when
-	// il%SWAPeriod < SWAPeriod-1 (model.Config.SWA's expression). It picks
+	// il%SWAPeriod < SWAPeriod-1 (model.Config.SWA's expression), or where
+	// SWALocal is set when it says so (LocalRope). It picks
 	// between the two rotary tables Layers is handed, because gemma3 trains its
 	// local and global layers at different rotary bases.
 	SWAPeriod int
@@ -633,6 +661,13 @@ type LayerPlan struct {
 	// PostNorm says the block RMSNorms the attention output and the FFN output
 	// before each residual add -- gemma2 and gemma3's two extra norms.
 	PostNorm bool
+	// PostResidNorm says the block's norms come after its residual adds, on
+	// the residual itself (BERT's post-norm order): x = LN(x + attn(x)) with
+	// FFNNorm, whose output is both the FFN's input and the residual, then
+	// x = LN(x + mlp(x)) with LayerWeights.ResidNorm. The attention reads the
+	// block input as it is (no AttnNorm; NoPreNorm). Built on the non-causal
+	// path, the one encoders run.
+	PostResidNorm bool
 	// NoPreNorm says some block has no pre-norms (OLMo 2, EXAONE 4): attention
 	// and the FFN read the residual as it is and only their outputs are
 	// normalised (LayerWeights.AttnNorm and FFNNorm are nil). A tier copies the
@@ -1091,6 +1126,16 @@ type ConvDevice interface {
 // the runs, and the caller fails the call rather than running it unmasked.
 type KeyRunDevice interface {
 	SetKeyRuns(full, windowed []KeyRun) bool
+}
+
+// RowWindowDevice is an optional LayerDevice that takes one window a row for
+// the NonCausal calls that follow, until replaced: row r attends inside
+// wins[r] on its Windowed blocks. A symmetric sliding window (ModernBERT's
+// local layers) is this; its rows' windows overlap, so it is not a partition
+// KeyRunDevice can state. It replaces whatever runs SetKeyRuns gave, and
+// false is a device that cannot take them.
+type RowWindowDevice interface {
+	SetRowWindows(wins []KeyRun) bool
 }
 
 // RowsReserver is an optional LayerDevice whose NonCausal blocks are built for

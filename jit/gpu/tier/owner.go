@@ -142,6 +142,8 @@ func (g *devTier) releaseModel() {
 	sw := g.scratchWin()
 	g.closeSample()
 	g.lane0.freeSample()
+	g.closePick()
+	g.lane0.freePick()
 	sw.close()
 	// The capacity, the widest block and the retune mark are the model's
 	// plan, read the first time a device sees one.

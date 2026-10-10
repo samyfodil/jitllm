@@ -612,6 +612,9 @@ type Stats struct {
 	// SampleReads counts tokens whose sampler ran on the device and read
 	// back k candidates instead of the vocabulary (nn.Head.SampleK).
 	SampleReads int
+	// PickReads counts heads whose label pick ran on the device and read
+	// back the picked logits instead of the vocabulary (nn.Head.Pick).
+	PickReads int
 	// SampleLaunches counts the sampler's launches: two top-k passes a
 	// token, and the penalty's when it runs.
 	SampleLaunches int
@@ -981,6 +984,7 @@ func (s *Stats) add(o Stats) {
 	s.RagGateFused += o.RagGateFused
 	s.RagHeadOne += o.RagHeadOne
 	s.SampleReads += o.SampleReads
+	s.PickReads += o.PickReads
 	s.SampleLaunches += o.SampleLaunches
 	s.GroupedMoE += o.GroupedMoE
 	s.GroupedFloat += o.GroupedFloat
@@ -1478,8 +1482,10 @@ type devShared struct {
 	// over the head's rows and, per k, the two top-k passes (sample.go).
 	samplePenK backend.Kernel
 	sampleKs   map[int]sampleKerns
-	hostA      []uint32
-	hostAX     []float32
+	// pickK is the label pick's gather over the head's rows (pick.go).
+	pickK  backend.Kernel
+	hostA  []uint32
+	hostAX []float32
 
 	// Host-side scratch, reused rather than allocated per matvec. It is per
 	// device even though it is host memory, because lastX/staged say "the
@@ -2148,6 +2154,8 @@ func (g *devTier) Close() {
 	}
 	g.closeSample()
 	g.lane0.freeSample()
+	g.closePick()
+	g.lane0.freePick()
 	for _, k := range g.recCopies {
 		k.Close()
 	}

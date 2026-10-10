@@ -41,11 +41,40 @@ func (g *GPU) setKeyRuns(sid uint64, full, windowed []nn.KeyRun) bool {
 		ss := d.sessOf(sid)
 		ss.bidir = append(ss.bidir[:0], full...)
 		ss.winRuns = append(ss.winRuns[:0], windowed...)
+		ss.winPerRow = false
 		d.mu.Unlock()
 		// Staged now, so a picture whose windows the device cannot hold is
 		// refused here; staged again at each of the session's tower calls
 		// (layersCall), since another session's picture may be staged in
 		// between.
+		if !d.setWindowsFor(sid) {
+			return false
+		}
+	}
+	return true
+}
+
+// SetRowWindows records one window a row for the NonCausal calls that follow
+// on every device (nn.RowWindowDevice): row r of a call attends inside
+// wins[r] on its Windowed blocks. A symmetric sliding window is this
+// (ModernBERT's local layers: the keys within half the window either side),
+// and its rows' windows overlap, which SetKeyRuns' partition cannot say.
+func (g *GPU) SetRowWindows(wins []nn.KeyRun) bool {
+	return g.setRowWindows(0, wins)
+}
+
+// setRowWindows is SetRowWindows for session sid.
+func (g *GPU) setRowWindows(sid uint64, wins []nn.KeyRun) bool {
+	g.mu.Lock()
+	ds := g.devs
+	g.mu.Unlock()
+	for _, d := range ds {
+		d.mu.Lock()
+		ss := d.sessOf(sid)
+		ss.bidir = ss.bidir[:0]
+		ss.winRuns = append(ss.winRuns[:0], wins...)
+		ss.winPerRow = true
+		d.mu.Unlock()
 		if !d.setWindowsFor(sid) {
 			return false
 		}
@@ -100,17 +129,17 @@ func (g *devTier) setWindowsFor(sid uint64) bool {
 	}
 	v0 := v.borrowLane0()
 	defer v.returnLane0(v0)
-	return v0.setWindowsLocked(v0.winRuns)
+	return v0.setWindowsLocked(v0.winRuns, v0.winPerRow)
 }
 
 // setWindowsLocked stages runs -- [lo, hi) row pairs partitioning a
-// non-causal call's rows -- as each row's window, in the non-causal
-// geometry's scratch set, building the mask and its buffers on the first
-// call. A device with no non-causal block takes nothing; nil forgets the
+// non-causal call's rows, or with perRow one window a row -- as each row's
+// window, in the non-causal geometry's scratch set, building the mask and its
+// buffers on the first call. A device with no non-causal block takes nothing; nil forgets the
 // windows, so a windowed block is refused rather than run under the last
 // picture's. Callers hold g.mu, in a view over the lane holding the tower's
 // set (lane0).
-func (g *devTier) setWindowsLocked(runs []nn.KeyRun) bool {
+func (g *devTier) setWindowsLocked(runs []nn.KeyRun, perRow bool) bool {
 	home := g.geoCur
 	defer g.useGeom(home)
 	g.useGeom(geoNonCausal)
@@ -122,19 +151,23 @@ func (g *devTier) setWindowsLocked(runs []nn.KeyRun) bool {
 		bs.vwinRows = 0
 		return true
 	}
-	segs := g.winSegs[:0]
-	for _, r := range runs {
-		segs = append(segs, r.Lo, r.Hi)
-	}
-	g.winSegs = segs
 	fail := func(f string, a ...any) bool {
 		g.LastErr = fmt.Sprintf(f, a...)
 		return false
 	}
-	if len(segs)%2 != 0 || len(segs) == 0 {
-		return fail("windowed runs: %d bounds, want [lo, hi) pairs", len(segs))
+	// n is the call's rows: the partition's end, or one window a row.
+	n := len(runs)
+	segs := g.winSegs[:0]
+	if !perRow {
+		for _, r := range runs {
+			segs = append(segs, r.Lo, r.Hi)
+		}
+		g.winSegs = segs
+		if len(segs)%2 != 0 || len(segs) == 0 {
+			return fail("windowed runs: %d bounds, want [lo, hi) pairs", len(segs))
+		}
+		n = segs[len(segs)-1]
 	}
-	n := segs[len(segs)-1]
 	if n > bs.rows {
 		return fail("windowed runs over %d rows on a scratch of %d", n, bs.rows)
 	}
@@ -177,9 +210,22 @@ func (g *devTier) setWindowsLocked(runs []nn.KeyRun) bool {
 	}
 	// Every row's window, the scratch's padded rows past n given the whole
 	// image: they are never read, and a row with no key would softmax to NaN.
-	buf := make([]byte, bs.rows*8)
+	if cap(g.winBuf) < bs.rows*8 {
+		g.winBuf = make([]byte, bs.rows*8)
+	}
+	buf := g.winBuf[:bs.rows*8]
 	for r := 0; r < bs.rows; r++ {
+		binary.LittleEndian.PutUint32(buf[8*r:], 0)
 		binary.LittleEndian.PutUint32(buf[8*r+4:], uint32(n))
+	}
+	if perRow {
+		for r, w := range runs {
+			if w.Lo < 0 || w.Hi <= w.Lo || w.Hi > n || r < w.Lo || r >= w.Hi {
+				return fail("row windows: row %d's [%d, %d) is not a window of %d rows holding the row", r, w.Lo, w.Hi, n)
+			}
+			binary.LittleEndian.PutUint32(buf[8*r:], uint32(w.Lo))
+			binary.LittleEndian.PutUint32(buf[8*r+4:], uint32(w.Hi))
+		}
 	}
 	prev := 0
 	for i := 0; i < len(segs); i += 2 {
