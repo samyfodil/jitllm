@@ -23,12 +23,11 @@ func TestMain(m *testing.M) {
 		}
 		switch os.Getenv("CRASH_CHILD_KIND") {
 		case "panic":
-			done := make(chan struct{})
 			go func() {
-				defer close(done)
 				panic("boom in a worker reading " + filepath.Join(home, "models"))
 			}()
-			<-done
+			// Waits for the panic to end the process; nothing else does.
+			select {}
 		case "overflow":
 			debug.SetMaxStack(1 << 20)
 			var f func(int) int
