@@ -70,9 +70,9 @@ type Config struct {
 	// of the requests' waits, 0 to 100 (batchfair.go): 0 serves first come
 	// first served and runs each row to its end, the most tokens a second;
 	// above it rows are time-sliced (parked for a waiting request after a
-	// quantum that shrinks with the level), every admitted prompt is fed
-	// each step, and priority is a head start that age overtakes. nil takes
-	// DefaultFairness.
+	// quantum that shrinks with the level), the prompts admitted after the
+	// oldest are fed beside it, and priority is a head start that age
+	// overtakes. nil takes DefaultFairness.
 	Fairness *int
 
 	// JointSteps is how a decode step whose rows could run as one joint step

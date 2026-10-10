@@ -30,8 +30,9 @@ import (
 //     one it would have given unparked. The quantum shrinks with the level,
 //     from fairQuantumMax tokens at 1 to fairQuantumMin at 100.
 //   - Fair prompt feeding. The level's share of a step's prompt budget is
-//     split evenly across every admitted prompt, the rest fed oldest first as
-//     at 0, so a long prompt no longer holds every later one at zero.
+//     split evenly across the prompts admitted after the oldest, a window of
+//     one to three (fairWindow), the rest fed oldest first as at 0, so the
+//     oldest prompt does not hold the next ones at zero while it runs.
 //   - Ordering. The queue -- new requests and parked rows alike -- is served
 //     by the time each began waiting (a parked row's is when it was parked),
 //     a high-priority request (jitllm_priority) counted as having waited
@@ -87,8 +88,24 @@ func rowPriority(p string) int {
 	return 0
 }
 
-// fairShare is the prompt tokens of a budget the level splits evenly.
-func fairShare(f, budget int) int { return budget * f / 100 }
+// fairShare is the prompt tokens of a budget the level splits evenly across
+// its window: a quarter of the budget at 100.
+func fairShare(f, budget int) int { return budget * max(f, 0) / 400 }
+
+// fairWindow is how many prompts after the oldest the level's share goes
+// to: none at 0, one from 1, three at 100. The window is bounded on purpose.
+// Feeding every admitted prompt each step is processor sharing, and prompts
+// of near-equal length then all finish late: on a V100 at 64 concurrent
+// requests (Llama 3.1 8B) it held 56 prompts prefilling at once, 512 prompt
+// rows over 59 sessions a step at about 2 s a step, and no prompt finished
+// before its request timed out; at 16 concurrent it raised the first token's
+// median from 9.0 s to 14.1 s. Time slices are what bound a wait.
+func fairWindow(f int) int {
+	if f <= 0 {
+		return 0
+	}
+	return 1 + (f-1)*2/99
+}
 
 // key is when r counts as having begun to wait, its priority's head start
 // taken off: the queue is served smallest first.

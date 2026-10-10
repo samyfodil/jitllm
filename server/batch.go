@@ -140,6 +140,9 @@ type batchCounters struct {
 	// parkFreed is the card's room for history, in positions, that parking
 	// gave back.
 	parkFreed atomic.Int64
+	// shortResumes counts resumes the card took back only in part, parked
+	// again to wait.
+	shortResumes atomic.Int64
 	// promptRowsFed counts, per step, the prompting rows it fed: a gate reads
 	// it against the prompting rows the step had.
 	promptRowsFed, promptRowsHad atomic.Int64
@@ -480,6 +483,23 @@ func (lp *stepLoop) admit() {
 					lp.mu.Lock()
 					continue
 				}
+				if !stepsJointly(r.s.st) && len(lp.rows) > 0 {
+					// The card took back fewer of its blocks than it had: a
+					// split row steps alone and re-streams its history every
+					// token, and holds none of the card's room, so more would
+					// be admitted behind it. It parks again and waits for
+					// rows to retire; alone on the card it runs split.
+					if err := lp.e.parkLocked(r.s); err != nil {
+						lp.mu.Unlock()
+						lp.finish(r, FinishError, "", err)
+						lp.mu.Lock()
+						continue
+					}
+					r.parked = true
+					lp.stats.shortResumes.Add(1)
+					lp.waiting = append([]*row{r}, lp.waiting...)
+					break
+				}
 			} else {
 				r.waited = time.Since(r.enqueued)
 				lp.stats.admissions.Add(1)
@@ -698,8 +718,8 @@ func (lp *stepLoop) decodeUnits() []unit {
 }
 
 // promptUnits is admission: the admitted prompts' next chunks, the fairness
-// level's share of the budget split evenly across them and the rest oldest first,
-// at most budget tokens in all, or a token a prompt above level 0 when there
+// level's share of the budget split evenly across a window of them (allot) and the rest oldest first,
+// at most budget tokens in all, or a token a prompt of the window when there
 // are more prompts than that. They ride in the step the decoding rows take
 // (model.StepRuns), each chunk as rows of its own session at its next
 // positions, so a new prompt never holds the decoding rows up by more than the
@@ -784,9 +804,11 @@ func (lp *stepLoop) promptUnits(units []unit, budget int) []unit {
 
 // allot shares budget prompt tokens across lp.prompts into lp.alloc (a
 // pipelined chunk, already negative, takes none).
-// The fairness level's share goes evenly, at least a token to every prompt,
-// its remainder turning round from step to step; the rest goes oldest first,
-// as at level 0, so a prompt whose rest fits its turn ends at its last row.
+// The fairness level's share (fairShare) goes evenly to the prompts admitted
+// after the oldest, as many as its window (fairWindow), at least a token
+// each, its remainder turning round from step to step; the rest goes oldest
+// first, as at level 0, so a prompt whose rest fits its turn ends at its last
+// row. Prompts past the window wait their turn as at level 0.
 func (lp *stepLoop) allot(budget int) {
 	var plain int
 	for _, k := range lp.alloc {
@@ -794,20 +816,25 @@ func (lp *stepLoop) allot(budget int) {
 			plain++
 		}
 	}
-	if lp.fair > 0 && plain > 0 {
-		share := max(fairShare(lp.fair, budget), plain)
-		budget = max(budget, plain)
-		per, rem := share/plain, share%plain
-		j := 0
+	if win := min(plain-1, fairWindow(lp.fair)); win > 0 {
+		share := min(max(fairShare(lp.fair, budget), win), max(budget, win))
+		budget = max(budget, win)
+		per, rem := share/win, share%win
+		j := -1 // the oldest plain prompt is not in the window
 		for i, r := range lp.prompts {
 			if lp.alloc[i] != 0 {
 				continue
 			}
+			if j++; j == 0 {
+				continue
+			}
+			if j > win {
+				break
+			}
 			k := per
-			if (j+plain-lp.rr%plain)%plain < rem {
+			if (j-1+win-lp.rr%win)%win < rem {
 				k++
 			}
-			j++
 			k = min(k, len(r.ids)-r.fed, budget)
 			lp.alloc[i] = k
 			budget -= k
