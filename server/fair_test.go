@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // The fairness level's gates (batchfair.go). The policy's arithmetic is gated
