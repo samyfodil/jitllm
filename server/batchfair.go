@@ -42,8 +42,16 @@ import (
 // A parked row's history is on the host while it waits, so a swap costs the
 // bus its history twice; that is the throughput the level spends.
 const (
-	// DefaultFairness is Config.Fairness's default.
-	DefaultFairness = 50
+	// DefaultFairness is Config.Fairness's default: the level that measured
+	// best on a V100 (CUDA, Llama 3.1 8B Q4_K_M, httpbench, prompts of 128
+	// and 512 words, 128 tokens generated). At 64 concurrent requests, level
+	// 100 against 0: 0 errors against 144 of 256, 81.0 tok/s against 20.9,
+	// the first token at 61 s median and 78 s p99 against 102 s and 575 s;
+	// level 50 gave 47-49 tok/s, 80-85 s and 400-414 s. At 16 concurrent
+	// the three were within 4% on tok/s and 100 had the shortest first
+	// token. Its cost is the inter-token tail: a parked row's gap is its
+	// wait, 1.7 s p99 at 64 concurrent against 0.6 s.
+	DefaultFairness = 100
 	// fairQuantumMax and fairQuantumMin are the time slice at level 1 and at
 	// level 100, in generated tokens; between them it falls geometrically.
 	fairQuantumMax = 256

@@ -125,7 +125,7 @@ func TestFairFeedingAdvancesTheWindow(t *testing.T) {
 		}
 		return short, steps, most
 	}
-	for _, level := range []int{1, DefaultFairness, 100} {
+	for _, level := range []int{1, 50, 100} {
 		short, steps, most := run(level)
 		t.Logf("level %d (window %d): %d of %d steps fed fewer than the oldest and its window; at most %d prompts a step",
 			level, fairWindow(level), short, steps, most)
@@ -175,7 +175,7 @@ func TestFairnessLevelIsMonotonic(t *testing.T) {
 // cost anyone. The violation, the queue in arrival order, fails each.
 func TestFairQueueOrder(t *testing.T) {
 	t0 := time.Now()
-	boost := fairBoost(DefaultFairness)
+	boost := fairBoost(50)
 	early := &row{since: t0.Add(-time.Second)}
 	parked := &row{since: t0, parked: true}
 	late := &row{since: t0.Add(time.Second)}
@@ -191,7 +191,7 @@ func TestFairQueueOrder(t *testing.T) {
 		}
 		return nil
 	}
-	if err := check(fairLoop(DefaultFairness, 4)); err != nil {
+	if err := check(fairLoop(50, 4)); err != nil {
 		t.Fatal(err)
 	}
 	if err := check(fairLoop(0, 4)); err == nil {
