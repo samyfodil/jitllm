@@ -169,7 +169,7 @@ func reportGPU() {
 	backend.SetVerbose(os.Getenv("JITLLM_GPU_VERBOSE") != "")
 	// The same call tier.Open makes. Opening and closing every backend is
 	// covered by backend.TestCloseThenSpawnThreads.
-	hipCfg := backend.HIPConfig{Path: os.Getenv("JITLLM_ROCM")}
+	hipCfg := backend.HIPConfig{Path: rocmDir()}
 	devs := backend.OpenWith(backend.Opts{HIP: hipCfg})
 	defer func() {
 		for _, d := range devs {

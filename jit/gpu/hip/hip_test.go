@@ -24,11 +24,11 @@ func TestBogusROCmIsNoDevices(t *testing.T) {
 		if rt != nil {
 			t.Errorf("%s: Open returned a runtime with no ROCm behind it", p)
 		}
-		// Off Linux the runtime is refused before any load is tried, and Why
+		// Off Linux and Windows the runtime is refused before any load is tried, and Why
 		// says so; on Linux it names the load that failed.
 		want := "not loadable"
-		if runtime.GOOS != "linux" {
-			want = "ROCm is a Linux runtime"
+		if _, ok := layouts[runtime.GOOS]; !ok {
+			want = "ROCm runs on Linux and Windows"
 		}
 		if why := Why(Config{Path: p}); !strings.Contains(why, want) {
 			t.Errorf("%s: Why = %q, want it to say %q", p, why, want)
@@ -44,7 +44,8 @@ func TestBogusROCmIsNoDevices(t *testing.T) {
 // ROCm than the one asked for.
 func TestNamedPathIsTheOnlyOneTried(t *testing.T) {
 	dir := filepath.Join(string(filepath.Separator)+"x", "lib")
-	got := candidates(Config{Path: dir}, HIPNames)
+	lo := layouts[runtime.GOOS]
+	got := candidates(Config{Path: dir}, lo, false)
 	if len(got) != len(HIPNames) {
 		t.Fatalf("candidates = %v", got)
 	}
@@ -53,7 +54,7 @@ func TestNamedPathIsTheOnlyOneTried(t *testing.T) {
 			t.Errorf("candidate %q is outside the named directory", c)
 		}
 	}
-	def := candidates(Config{}, HIPNames)
+	def := candidates(Config{}, lo, false)
 	if len(def) < len(HIPNames) || def[0] != HIPNames[0] {
 		t.Errorf("the default search does not start with the bare sonames: %v", def)
 	}

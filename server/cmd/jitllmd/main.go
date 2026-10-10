@@ -265,7 +265,7 @@ func serve(args []string) {
 		DefaultMaxSeq:    *maxSeq,
 		Version:          *version,
 		// The ROCm library directory; the server package reads no environment.
-		ROCm: os.Getenv("JITLLM_ROCM"),
+		ROCm: rocmDir(),
 
 		NoMemCache:    *noStore,
 		MemCacheBytes: storeBytes,
