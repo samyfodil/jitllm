@@ -285,11 +285,32 @@ jitllm_pp_ntok() { ${PIN[@]+"${PIN[@]}"} "$JITLLM" run -devices "$JITLLM_DEV" ${
 lcpp_pp() { ${PIN[@]+"${PIN[@]}"} "$LCPP/llama-bench" -m "$MODEL" "${LCPP_ARGS[@]}" -p "$PPTOK" -n 0 -r 1 2>/dev/null \
               | awk -F'|' '/pp'"$PPTOK"'/{gsub(/ /,"",$(NF-1)); split($(NF-1),a,"±"); print a[1]}'; }
 
+# ★ AND THE PREFILL ARM IS WARM, AS llama-bench's IS. jitllm_pp times the first
+# prompt of a fresh `jitllm run` process: its KV pages are allocated, its pinned
+# staging grown and its first chunk's buffers sized inside the timed window,
+# all of which llama-bench does before its warm-up run and never times (on an
+# RTX 3050 Ti, Llama-3.2-1B, the first prompt of a process spent 43 ms outside
+# its kernels, 30 of them growing the KV pool). The faster the card, the larger
+# that fixed share of the row; the V100 board, taken with `jitllm speed`, is
+# the warm figure. `jitllm speed -p N -n 0 -r 1` is
+# llama-bench's pp: one untimed warm-up of the same prompt length on a fresh
+# State, then the timed prompt on another. JITLLM_PP_COLD=1 keeps the
+# first-prompt-of-a-process figure, which is a time-to-first-token measurement
+# and is labelled as one.
+jitllm_pp_warm() { ${PIN[@]+"${PIN[@]}"} "$JITLLM" speed -devices "$JITLLM_DEV" ${JITLLM_EXTRA[@]+"${JITLLM_EXTRA[@]}"} -p "$PPTOK" -n 0 -r 1 "$JITLLM_PATH" 2>/dev/null \
+              | sed -n 's|^pp[0-9]* \([0-9.]*\).*|\1|p'; }
+
 if [ "$MODE" = prefill ]; then
   PP="$(python3 -c 'import sys; print(" ".join(["the quick brown fox jumps over the lazy dog"]*int(sys.argv[1])))' "$PPREPS")"
   PPTOK="$(jitllm_pp_ntok)"
   [ -n "$PPTOK" ] || { echo "could not determine jitllm's prompt token count" >&2; exit 1; }
-  jitllm_run() { jitllm_pp; }
+  if [ -n "${JITLLM_PP_COLD:-}" ]; then
+    echo "  prefill: jitllm's first prompt of a fresh process (cold, JITLLM_PP_COLD) against llama-bench's warm pp"
+    jitllm_run() { jitllm_pp; }
+  else
+    echo "  prefill: both arms warm (jitllm speed -n 0 -r 1, llama-bench -n 0 -r 1)"
+    jitllm_run() { jitllm_pp_warm; }
+  fi
   lcpp_run() { lcpp_pp; }
   DEPTH=0
   N="$PPTOK"
