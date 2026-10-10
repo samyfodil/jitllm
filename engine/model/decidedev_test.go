@@ -137,9 +137,7 @@ type decisionDevViolation struct {
 }
 
 var decisionDevViolations = map[string]decisionDevViolation{
-	// The rotary pairing is not one: the device builds its table from the
-	// model's folded planes (ropeTabPlanes), and flipping the Config moved
-	// nothing. The norm's epsilon is the plan's (LayerPlan.RMSEps).
+	// The norm's epsilon is read into the plan (LayerPlan.RMSEps).
 	"d1-3B": {"a norm epsilon of 1", func(m *Model) func() {
 		return cfgMut(m, func(c *Config) { c.RMSEps = 1 })
 	}},
@@ -224,9 +222,14 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 						if !ok {
 							t.Fatalf("%s has no device violation", c.name)
 						}
+						// A fresh device: the clean arm's blocks stay resident on g
+						// for whoever attaches next (a decoder State's Close
+						// leaves them), and would be shared rather than offered.
+						gv := open()
 						undo := v.cut(m)
-						bad, n, _, _ := decideOn(t, m, g, -1, all)
+						bad, n, _, _ := decideOn(t, m, gv, -1, all)
 						undo()
+						gv.Close()
 						if bad == nil {
 							t.Fatalf("%s: the device held %d of %d blocks", v.name, n, nb)
 						}
