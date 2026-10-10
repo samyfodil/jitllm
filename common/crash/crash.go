@@ -62,10 +62,25 @@ func SetInfo(i Info) {
 }
 
 // SetGPU records the GPU a report names.
+// The GPU is also written beside crash.log, so the report of a fatal error,
+// built by the next launch before it has a window, names the GPU the crashed
+// run had.
 func SetGPU(gpu string) {
 	mu.Lock()
 	info.GPU = gpu
+	d := dir
 	mu.Unlock()
+	if d != "" {
+		// A report without the GPU is still a report; nothing to do on failure.
+		os.WriteFile(filepath.Join(d, gpuFile), []byte(gpu), 0o644)
+	}
+}
+
+// GPU is the GPU a report of this run names.
+func GPU() string {
+	mu.Lock()
+	defer mu.Unlock()
+	return info.GPU
 }
 
 // OnReport sets the function a recovered panic's report is handed to, on the
@@ -82,6 +97,8 @@ const (
 	fatalFile = "crash.log"
 	// reportFile is the last report, as it was shown.
 	reportFile = "crash-report.txt"
+	// gpuFile is the GPU the last run had (SetGPU).
+	gpuFile = "gpu.txt"
 )
 
 // Arm makes fatal errors reach d: every goroutine's stack is printed
@@ -108,7 +125,11 @@ func Arm(d string, logTail []string, noConsole bool) (*Report, error) {
 	fatal := filepath.Join(d, fatalFile)
 	var rep *Report
 	if b, err := os.ReadFile(fatal); err == nil && crashed(b) {
-		r := build("the previous run", string(b), logTail)
+		prevGPU, err := os.ReadFile(filepath.Join(d, gpuFile))
+		if err != nil {
+			prevGPU = nil
+		}
+		r := build("the previous run", string(b), logTail, string(prevGPU))
 		rep = &r
 		rep.Path = save(r.Text)
 	}
@@ -160,7 +181,7 @@ func Recover(where string) {
 // it to the [OnReport] handler.
 func Handle(where string, r any, stack []byte) Report {
 	body := fmt.Sprintf("panic: %v [recovered in %s]\n\n%s", r, where, stack)
-	rep := build(where, body, nil)
+	rep := build(where, body, nil, GPU())
 	rep.Path = save(rep.Text)
 	mu.Lock()
 	h := handler
@@ -172,11 +193,10 @@ func Handle(where string, r any, stack []byte) Report {
 }
 
 // build is the report's text: a header, the traceback, the log tail.
-func build(where, trace string, logTail []string) Report {
+func build(where, trace string, logTail []string, gpu string) Report {
 	mu.Lock()
 	in := info
 	mu.Unlock()
-	gpu := in.GPU
 	if gpu == "" {
 		gpu = "unknown"
 	}
@@ -236,11 +256,17 @@ func save(text string) string {
 // Both slash directions are handled: a Windows path may be written either way.
 func Scrub(s string) string {
 	home, err := os.UserHomeDir()
-	if err == nil && len(home) > 1 {
-		for _, h := range []string{home, filepath.ToSlash(home), strings.ReplaceAll(home, "/", `\`)} {
+	if err != nil || len(home) < 2 {
+		return s
+	}
+	forms := pathForms(home)
+	for _, f := range forms {
+		for _, h := range []string{f, filepath.ToSlash(f), strings.ReplaceAll(f, "/", `\`)} {
 			s = replaceFold(s, h, "~")
 		}
-		if name := filepath.Base(home); len(name) > 2 {
+	}
+	for _, f := range forms {
+		if name := filepath.Base(f); len(name) > 2 {
 			s = replaceFold(s, name, "<user>")
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The child half of the fatal tests: it arms the directory and dies the way
@@ -21,6 +22,7 @@ func TestMain(m *testing.M) {
 		if err != nil {
 			panic(err)
 		}
+		SetGPU("Test Adapter (Vulkan, DiscreteGPU)")
 		switch os.Getenv("CRASH_CHILD_KIND") {
 		case "panic":
 			go func() {
@@ -85,7 +87,7 @@ func TestFatalCrashIsReportedOnTheNextLaunch(t *testing.T) {
 			if rep == nil {
 				t.Fatal("no report from a run that crashed")
 			}
-			for _, w := range []string{c.want, "goroutine ", "crash_test.go", "os: ", "last log lines:", "loaded ~"} {
+			for _, w := range []string{c.want, "goroutine ", "crash_test.go", "os: ", "last log lines:", "loaded ~", "gpu: Test Adapter (Vulkan, DiscreteGPU)"} {
 				if !strings.Contains(rep.Text, w) {
 					t.Errorf("report lacks %q:\n%s", w, rep.Text)
 				}
@@ -141,7 +143,12 @@ func TestRecoverReportsAndKeepsTheProcess(t *testing.T) {
 		var m map[string]int
 		m["x"] = 1
 	}()
-	r := <-got
+	var r Report
+	select {
+	case r = <-got:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the recovered panic was never reported")
+	}
 	for _, w := range []string{"assignment to entry in nil map", "recovered in test worker", "crash_test.go", "goroutine "} {
 		if !strings.Contains(r.Text, w) {
 			t.Errorf("report lacks %q:\n%s", w, r.Text)
