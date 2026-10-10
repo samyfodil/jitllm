@@ -78,10 +78,10 @@ type pagedPrefill struct {
 type prefillMode int
 
 const (
-	prefillTiled prefillMode = iota // FMA scores and accumulate
-	prefillMMA                      // m16n8k16 scores, FMA accumulate
-	prefillMMAAcc                   // m16n8k16 scores, m16n8k8 accumulate
-	prefillMMA70                    // sm_70's m8n8k4, both products
+	prefillTiled  prefillMode = iota // FMA scores and accumulate
+	prefillMMA                       // m16n8k16 scores, FMA accumulate
+	prefillMMAAcc                    // m16n8k16 scores, m16n8k8 accumulate
+	prefillMMA70                     // sm_70's m8n8k4, both products
 )
 
 // accMMANT is PagedAttnAccMMA's query tiles a warp: 16 queries, the scores

@@ -953,7 +953,7 @@ var voltaTiles = []kernels.VoltaTile{
 func (g *devTier) voltaGemm(m mv, ntok int) (mv, bool) {
 	// A build reached from inside a submission takes g.mu (subLock).
 	defer g.subUnlock(g.subLock())
-	return g.stagedGemm(m, ntok, voltaTiles, 0)
+	return g.stagedGemm(m, ntok, voltaTiles, 0, 0)
 }
 
 // f16Tiles are GemmVolta's m16n8 blockings, widest first: four warps as 2x2,
@@ -1010,22 +1010,81 @@ func (g *devTier) f16Gemm(m mv, ntok int) (mv, bool) {
 	if k == 0 {
 		return mv{}, false
 	}
-	return g.stagedGemm(m, ntok, f16Tiles, k)
+	// About a workgroup an SM: a sixteenth of the threads the card holds
+	// resident (Slots, asked of the driver; 1536 or 2048 an SM, 128 a
+	// workgroup). The card decides it, not the shape: the 128x64 block gives
+	// a 1024x1024 projection at 512 rows 64 workgroups, three an SM of an
+	// RTX 3050 Ti's 20 and fewer than one an SM of a 142-SM card. The bar is
+	// sm_70's measured one (kb0Split: a V100's 128-row blocks were fastest
+	// unsplit from 64 workgroups on 80 SMs), not full residency: a staged
+	// block's shared memory holds an SM to a few of them anyway.
+	return g.stagedGemm(m, ntok, f16Tiles, k, g.dev.Slots()/16)
+}
+
+// fillTile is the tile stagedGemm tries first, on instruction f16k, for a grid of at least fill
+// threads: the first of tiles (widest first) that divides the shape and
+// reaches it, else the dividing tile with the most workgroups, whose grid a
+// k-split (fillSplit) then widens. -1 where none divides.
+func fillTile(tiles []kernels.VoltaTile, f16k, rows, ntok, fill int) int {
+	best, most := -1, 0
+	for i, tl := range tiles {
+		tl.F16K = f16k // an m-tile's rows depend on it
+		if rows%tl.Rows() != 0 || ntok%tl.Toks() != 0 {
+			continue
+		}
+		groups := (rows / tl.Rows()) * (ntok / tl.Toks())
+		if groups*tl.Threads() >= fill {
+			return i
+		}
+		if groups > most {
+			best, most = i, groups
+		}
+	}
+	return best
+}
+
+// fillSplit is the k-split that brings threads up to fill: doubled while the
+// grid is short of it and the halves still divide the trips, at most 8.
+func fillSplit(trips, threads, fill int) int {
+	split := 1
+	for threads*split < fill && trips%(2*split) == 0 && split < 8 {
+		split *= 2
+	}
+	return split
 }
 
 // stagedGemm builds m's GemmVolta twin from the first of tiles that divides
-// the shape and compiles, with instruction f16k (VoltaTile.F16K). Callers
-// hold g.mu.
-func (g *devTier) stagedGemm(m mv, ntok int, tiles []kernels.VoltaTile, f16k int) (mv, bool) {
+// the shape and compiles, with instruction f16k (VoltaTile.F16K). With fill
+// > 0 the tile and split are chosen for a grid of at least fill threads
+// (fillTile, fillSplit) and the others are the fallbacks; with 0, tiles'
+// order and kb0Split decide. Callers hold g.mu.
+func (g *devTier) stagedGemm(m mv, ntok int, tiles []kernels.VoltaTile, f16k, fill int) (mv, bool) {
 	sub, _, _, _ := kernels.Layout(m.q)
 	kbN := max(32/sub, 1)
-	for _, tl := range tiles {
+	first := -1
+	if fill > 0 {
+		first = fillTile(tiles, f16k, m.rows, ntok, fill)
+	}
+	// i = -1 is the fill's tile, then the list in order without it.
+	for i := -1; i < len(tiles); i++ {
+		if i < 0 && first < 0 || i >= 0 && i == first {
+			continue
+		}
+		idx := i
+		if i < 0 {
+			idx = first
+		}
+		tl := tiles[idx]
 		tl.KB, tl.F16K = kbN, f16k
 		s := kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: ntok, Bias: m.bias != nil}
 		if m.rows%tl.Rows() != 0 || ntok%tl.Toks() != 0 {
 			continue
 		}
-		split := kb0Split(m.k/sub/kbN, (m.rows/tl.Rows())*(ntok/tl.Toks()))
+		groups := (m.rows / tl.Rows()) * (ntok / tl.Toks())
+		split := kb0Split(m.k/sub/kbN, groups)
+		if fill > 0 {
+			split = fillSplit(m.k/sub/kbN, groups*tl.Threads(), fill)
+		}
 		if f := g.kb.batch.Split; f >= 1 {
 			split = f
 		}
