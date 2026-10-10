@@ -451,7 +451,8 @@ type State struct {
 	// counter for both would read "batched" while half the FFN looped.
 	moeDownBatched, moeDownLooped atomic.Int64
 	blogits                       []float32 // nseq * NVocab, ForwardBatch's output
-	retireErr                     error     // a device reset Retire could not make; see Retire
+	retireErr                     error     // a device reset Retire or Reset could not make; see Retire
+	allRows                       []int     // 0..nseq-1, the rows Reset zeroes on a device
 	// placing is true while SetDeviceLayers offers blocks, when WithPlacement's
 	// map applies; placeErr is what it could not do.
 	placing  bool
@@ -3050,6 +3051,20 @@ func (s *State) Reset() {
 	for i := 0; i < s.nseq; i++ {
 		s.ResetRecurrent(i)
 	}
+	// A placed linear block keeps its running state on the device, and the
+	// next prompt would start from the last one's summary: zeroed there too,
+	// as Retire zeroes a row's. A failure is the next call's error.
+	if s.recurrent() && s.devLinear() {
+		if len(s.allRows) != s.nseq {
+			s.allRows = make([]int, s.nseq)
+			for i := range s.allRows {
+				s.allRows[i] = i
+			}
+		}
+		if rr, ok := s.ld.(nn.RecRowsDevice); !ok || !rr.ResetRecRows(s.allRows) {
+			s.retireErr = fmt.Errorf("model: the recurrent state on the device could not be reset")
+		}
+	}
 	s.kv.reset()
 	s.kvErr.Store(nil)
 	s.kvSkipped = 0
@@ -3129,6 +3144,10 @@ func (s *State) Forward(token int32) ([]float32, error) {
 	defer s.m.enterPager()()
 	if int(token) < 0 || int(token) >= s.c.NVocab {
 		return nil, errToken{token, s.c.NVocab}
+	}
+	if err := s.retireErr; err != nil {
+		s.retireErr = nil
+		return nil, err
 	}
 	s.kv.note(s.bpos[0], token)
 	s.tok = token
