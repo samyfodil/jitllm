@@ -44,9 +44,14 @@ func TestBogusROCmIsNoDevices(t *testing.T) {
 // ROCm than the one asked for.
 func TestNamedPathIsTheOnlyOneTried(t *testing.T) {
 	dir := filepath.Join(string(filepath.Separator)+"x", "lib")
-	lo := layouts[runtime.GOOS]
+	lo, ok := layouts[runtime.GOOS]
+	if !ok {
+		// No ROCm layout here (macOS): the search logic is the same on any
+		// host, so it is checked against Linux's.
+		lo = layouts["linux"]
+	}
 	got := candidates(Config{Path: dir}, lo, false)
-	if len(got) != len(HIPNames) {
+	if len(got) != len(lo.hip) {
 		t.Fatalf("candidates = %v", got)
 	}
 	for _, c := range got {
@@ -55,7 +60,7 @@ func TestNamedPathIsTheOnlyOneTried(t *testing.T) {
 		}
 	}
 	def := candidates(Config{}, lo, false)
-	if len(def) < len(HIPNames) || def[0] != HIPNames[0] {
+	if len(def) < len(lo.hip) || def[0] != lo.hip[0] {
 		t.Errorf("the default search does not start with the bare sonames: %v", def)
 	}
 }
