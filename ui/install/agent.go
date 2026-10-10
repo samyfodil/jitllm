@@ -6,6 +6,7 @@ import (
 	"html"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -27,12 +28,13 @@ type Agent struct {
 
 // Plist is where the agent's property list is written.
 func (a Agent) Plist() string {
-	return filepath.Join(a.Home, "Library", "LaunchAgents", AgentLabel+".plist")
+	// A launchd path, so slash-separated wherever this is built.
+	return path.Join(a.Home, "Library", "LaunchAgents", AgentLabel+".plist")
 }
 
 // Log is where jitllmd's output goes while it runs under launchd.
 func (a Agent) Log() string {
-	return filepath.Join(a.Home, "Library", "Logs", "jitllm", "jitllmd.log")
+	return path.Join(a.Home, "Library", "Logs", "jitllm", "jitllmd.log")
 }
 
 // Installed reports whether the agent's property list is in place.

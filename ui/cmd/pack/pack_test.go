@@ -148,6 +148,9 @@ func TestBundleCarriesTheCLIs(t *testing.T) {
 			t.Error(err)
 		}
 	}
+	if runtime.GOOS == "windows" {
+		return // no execute bits to read; the bundle is checked on macOS and Linux
+	}
 	for _, p := range []string{"MacOS/jitllm-desktop", "Resources/bin/jitllm", "Resources/bin/jitllmd"} {
 		if fi, err := os.Stat(filepath.Join(app, "Contents", p)); err == nil && fi.Mode()&0o111 == 0 {
 			t.Errorf("%s is not executable", p)
