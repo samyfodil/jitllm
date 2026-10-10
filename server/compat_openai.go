@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"net/http"
 	"strings"
 	"time"
@@ -171,28 +172,50 @@ type oaErrorBody struct {
 // oaContent accepts both content shapes the API has shipped: a bare string,
 // and the content-part array every SDK sends. A shim that only took
 // the string form rejects the default request of the official python client.
-func oaContent(raw json.RawMessage) (string, error) {
+// The text parts are joined; each image_url part is returned in order with its
+// index, for the caller to decode. A part the model cannot be shown (audio, a
+// file) is refused by index rather than dropped, so a request never succeeds
+// with the model having seen less than the client sent.
+func oaContent(raw json.RawMessage) (string, []oaImagePart, error) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return "", nil
+		return "", nil, nil
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
-		return s, nil
+		return s, nil, nil
 	}
 	var parts []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		ImageURL *struct {
+			URL string `json:"url"`
+		} `json:"image_url"`
 	}
 	if err := json.Unmarshal(raw, &parts); err != nil {
-		return "", fmt.Errorf("content must be a string or an array of content parts")
+		return "", nil, fmt.Errorf("content must be a string or an array of content parts")
 	}
 	var b strings.Builder
-	for _, p := range parts {
-		if p.Type == "text" || p.Type == "" {
+	var imgs []oaImagePart
+	for i, p := range parts {
+		switch p.Type {
+		case "text", "":
 			b.WriteString(p.Text)
+		case "image_url":
+			if p.ImageURL == nil || p.ImageURL.URL == "" {
+				return "", nil, fmt.Errorf("content[%d] is an image_url part with no image_url.url", i)
+			}
+			imgs = append(imgs, oaImagePart{index: i, url: p.ImageURL.URL})
+		case "input_audio", "file", "input_file":
+			return "", nil, fmt.Errorf("content[%d] is a %q part, which this server does not take", i, p.Type)
 		}
 	}
-	return b.String(), nil
+	return b.String(), imgs, nil
+}
+
+// oaImagePart is an image_url part of a message's content.
+type oaImagePart struct {
+	index int
+	url   string
 }
 
 // oaStop accepts `"x"` and `["x","y"]`, both of which the API allows.
@@ -254,13 +277,24 @@ func (e *compat) openAIChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	chat := &ChatInput{AddGenerationPrompt: true}
-	for _, m := range req.Messages {
-		c, err := oaContent(m.Content)
+	pics := &pictures{p: e.img}
+	for i, m := range req.Messages {
+		c, imgs, err := oaContent(m.Content)
 		if err != nil {
-			oaFail(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+			oaFail(w, http.StatusBadRequest, fmt.Sprintf("messages[%d].%v", i, err), "invalid_request_error")
 			return
 		}
+		for _, ip := range imgs {
+			err := pics.add(fmt.Sprintf("messages[%d].content[%d].image_url", i, ip.index), func() (image.Image, error) {
+				return e.img.imageURL(r.Context(), ip.url)
+			})
+			if err != nil {
+				oaFail(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+				return
+			}
+		}
 		cm := chatMessage(m.Role, c)
+		cm.Images = len(imgs)
 		cm.ToolCallID, cm.Name = m.ToolCallID, m.Name
 		for _, tc := range m.ToolCalls {
 			cm.ToolCalls = append(cm.ToolCalls, model.ToolCall{ID: tc.ID, Name: tc.Function.Name,
@@ -268,6 +302,7 @@ func (e *compat) openAIChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		chat.Messages = append(chat.Messages, cm)
 	}
+	chat.Images = pics.imgs
 	if t, err := oaTools(req.Tools, req.ToolChoice); err != nil {
 		oaFail(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
 		return

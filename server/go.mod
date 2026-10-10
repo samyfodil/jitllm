@@ -11,6 +11,7 @@ require (
 
 require (
 	github.com/go-webgpu/goffi v0.6.3 // indirect
+	golang.org/x/image v0.45.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 )
 

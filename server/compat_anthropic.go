@@ -2,9 +2,11 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"net/http"
 	"strings"
 
@@ -75,6 +77,17 @@ type anInBlock struct {
 	Input     json.RawMessage `json:"input"`
 	ToolUseID string          `json:"tool_use_id"`
 	Content   json.RawMessage `json:"content"`
+	// Source is an image block's picture.
+	Source *anImageSource `json:"source"`
+}
+
+// anImageSource is where an image block's picture is: base64 data of a
+// media type, or a URL.
+type anImageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
+	URL       string `json:"url"`
 }
 
 // anOutBlock is a response content block: text, or a tool_use carrying its
@@ -173,9 +186,15 @@ func anText(raw json.RawMessage) (string, error) {
 		return "", errors.New("content must be a string or an array of content blocks")
 	}
 	var b strings.Builder
-	for _, bl := range blocks {
-		if bl.Type == "text" || bl.Type == "" {
+	for i, bl := range blocks {
+		switch bl.Type {
+		case "text", "":
 			b.WriteString(bl.Text)
+		case "image", "document":
+			// A picture here would never reach the model; refused rather than
+			// dropped.
+			return "", fmt.Errorf("content[%d] is an %s block, which is taken only in a message's "+
+				"own content", i, bl.Type)
 		}
 	}
 	return b.String(), nil
@@ -219,14 +238,16 @@ func (e *compat) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	} else if sys != "" {
 		chat.System, chat.HasSystem = sys, true
 	}
-	for _, m := range req.Messages {
-		ms, err := anMessages(m)
+	pics := &pictures{p: e.img}
+	for i, m := range req.Messages {
+		ms, err := e.anMessages(r.Context(), i, m, pics)
 		if err != nil {
 			anFail(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 			return
 		}
 		chat.Messages = append(chat.Messages, ms...)
 	}
+	chat.Images = pics.imgs
 	if t, err := anTools(req.Tools, req.ToolChoice); err != nil {
 		anFail(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
@@ -465,23 +486,33 @@ func anFailErr(w http.ResponseWriter, err error) {
 
 // anMessages turns one Anthropic message into chat turns. A tool_result block
 // becomes a "tool" turn of its own -- the shape every chat template reads --
-// and tool_use blocks become the assistant turn's calls.
-func anMessages(m anMessage) ([]model.ChatMessage, error) {
+// and tool_use blocks become the assistant turn's calls. An image block's
+// picture is decoded into pics, and the turn counts it.
+func (e *compat) anMessages(ctx context.Context, mi int, m anMessage, pics *pictures) ([]model.ChatMessage, error) {
 	var blocks []anInBlock
 	if json.Unmarshal(m.Content, &blocks) != nil {
 		c, err := anText(m.Content)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("messages[%d].%v", mi, err)
 		}
 		return []model.ChatMessage{chatMessage(m.Role, c)}, nil
 	}
 	var out []model.ChatMessage
 	var text strings.Builder
 	var calls []model.ToolCall
-	for _, b := range blocks {
+	images := 0
+	for bi, b := range blocks {
 		switch b.Type {
 		case "text", "":
 			text.WriteString(b.Text)
+		case "image":
+			part := fmt.Sprintf("messages[%d].content[%d].source", mi, bi)
+			if err := pics.add(part, func() (image.Image, error) { return e.img.anImage(ctx, b.Source) }); err != nil {
+				return nil, err
+			}
+			images++
+		case "document":
+			return nil, fmt.Errorf("messages[%d].content[%d] is a document block, which this server does not take", mi, bi)
 		case "tool_use":
 			args := string(b.Input)
 			if args == "" || args == "null" {
@@ -491,14 +522,15 @@ func anMessages(m anMessage) ([]model.ChatMessage, error) {
 		case "tool_result":
 			c, err := anText(b.Content)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("messages[%d].content[%d].%v", mi, bi, err)
 			}
 			out = append(out, model.ChatMessage{Role: "tool", Content: c, ToolCallID: b.ToolUseID})
 		}
 	}
-	if text.Len() > 0 || len(calls) > 0 || len(out) == 0 {
+	if text.Len() > 0 || len(calls) > 0 || images > 0 || len(out) == 0 {
 		cm := chatMessage(m.Role, text.String())
 		cm.ToolCalls = calls
+		cm.Images = images
 		out = append(out, cm)
 	}
 	return out, nil
@@ -534,4 +566,27 @@ func anTools(tools []anTool, choice json.RawMessage) ([]byte, error) {
 		out[i] = tool{"function", fn{t.Name, t.Description, schema}}
 	}
 	return json.Marshal(out)
+}
+
+// anImage decodes an image block's source: base64 data of a declared media
+// type, or a URL fetched when the policy allows it.
+func (p ImagePolicy) anImage(ctx context.Context, src *anImageSource) (image.Image, error) {
+	if src == nil {
+		return nil, errors.New("is missing: an image block carries a source")
+	}
+	switch src.Type {
+	case "base64":
+		mt, ok := imageMediaType(src.MediaType)
+		if !ok {
+			return nil, fmt.Errorf("has media_type %q; the pictures accepted are image/png, image/jpeg, "+
+				"image/webp and image/gif", src.MediaType)
+		}
+		return p.decodeBase64Image(src.Data, mt)
+	case "url":
+		if _, ok := cutPrefixFold(strings.TrimSpace(src.URL), "data:"); ok {
+			return nil, errors.New("is a url source holding a data: URL; send it as a base64 source")
+		}
+		return p.imageURL(ctx, src.URL)
+	}
+	return nil, fmt.Errorf("has type %q; the sources taken are base64 and url", src.Type)
 }

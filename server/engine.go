@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
 	"os"
 	"path/filepath"
 	"sort"
@@ -95,6 +96,10 @@ type Config struct {
 	// prompt prefixes; nil refuses such a session. jitllmd's -kv-cache is a
 	// model.FileStore.
 	PromptStore model.KVStore
+
+	// Images bounds the pictures the HTTP shims accept in a chat request, and
+	// says whether a picture named by a remote URL is fetched (images.go).
+	Images ImagePolicy
 
 	// Version is reported by GetServerInfo.
 	Version string
@@ -1129,6 +1134,11 @@ type ChatInput struct {
 	HasSystem           bool
 	AddGenerationPrompt bool
 	TemplateName        string
+	// Images is the conversation's pictures in the order the client sent
+	// them; Messages[i].Images says how many are message i's. The engine lays
+	// them out where the model's chat template puts its image markers
+	// (Engine.pictureSpans), so a chat with pictures runs as PromptSpans.
+	Images []image.Image
 	// Tools is the tool list the template renders, a JSON array in the
 	// OpenAI shape ([{"type": "function", "function": {...}}]); nil for none.
 	Tools []byte
@@ -1409,6 +1419,13 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		return fmt.Errorf("server: model %q has no tokenizer: %v", lm.id, lm.m.TokErr)
 	}
 
+	if o.Prompt.Kind == PromptChat && o.Prompt.Chat != nil && len(o.Prompt.Chat.Images) > 0 {
+		sp, err := pictureSpans(s, o)
+		if err != nil {
+			return err
+		}
+		o.Prompt = Prompt{Kind: PromptSpans, Spans: sp}
+	}
 	if o.Prompt.Kind == PromptSpans {
 		if o.Continue {
 			return fmt.Errorf("%w: a span prompt starts its sequence; it cannot continue one", ErrInvalid)
@@ -1734,8 +1751,8 @@ func (e *Engine) generateN(ctx context.Context, o GenerateOptions, emit func(Eve
 		return fmt.Errorf("%w: several choices run on fresh sessions of a model; "+
 			"a named session or continue_session takes one", ErrInvalid)
 	}
-	if o.Prompt.Kind == PromptSpans {
-		return fmt.Errorf("%w: several choices of a span prompt are not built", ErrInvalid)
+	if o.Prompt.Kind == PromptSpans || o.Prompt.Chat != nil && len(o.Prompt.Chat.Images) > 0 {
+		return fmt.Errorf("%w: several choices of a prompt with a picture are not built", ErrInvalid)
 	}
 	if o.Speculation != nil && o.Speculation.Enabled {
 		return fmt.Errorf("%w: speculation with several choices is not built: the choices prefill "+
@@ -1840,6 +1857,55 @@ func (e *Engine) encode(lm *LoadedModel, p Prompt) ([]int32, error) {
 		return nil, nil
 	}
 	return nil, fmt.Errorf("%w: unknown prompt kind %d", ErrInvalid, p.Kind)
+}
+
+// acceptsImages refuses a picture for a model with no vision tower by name.
+func acceptsImages(lm *LoadedModel) error {
+	if lm.m.Tower() == nil {
+		return fmt.Errorf("%w: model %q does not accept images: its container carries no vision tower",
+			ErrInvalid, lm.id)
+	}
+	return nil
+}
+
+// pictureSpans lays a chat with pictures out as spans on s's State: the
+// template's text, and each picture where the template puts its image markers.
+// A model with no vision tower is refused by name, never run with the picture
+// left out. Such a prompt runs alone rather than as a row of the step loop,
+// as every span prompt does.
+func pictureSpans(s *Session, o GenerateOptions) ([]model.Span, error) {
+	lm, chat := s.lm, o.Prompt.Chat
+	if err := acceptsImages(lm); err != nil {
+		return nil, err
+	}
+	if !lm.m.ChatCapable() {
+		return nil, fmt.Errorf("%w: model %q carries no chat template, which is where a picture's "+
+			"markers go", ErrInvalid, lm.id)
+	}
+	if o.Continue {
+		return nil, fmt.Errorf("%w: a prompt with a picture starts its sequence; it cannot continue one", ErrInvalid)
+	}
+	if len(chat.Tools) > 0 || chat.ToolChoice != (model.ToolChoice{}) {
+		return nil, fmt.Errorf("%w: tools beside a picture are not built: the picture's prompt is "+
+			"rendered without the tool list", ErrInvalid)
+	}
+	n := 0
+	for _, m := range chat.Messages {
+		n += m.Images
+	}
+	if n != len(chat.Images) {
+		return nil, fmt.Errorf("%w: the messages count %d picture(s) and the request carries %d",
+			ErrInvalid, n, len(chat.Images))
+	}
+	msgs := chat.Messages
+	if chat.HasSystem {
+		msgs = append([]model.ChatMessage{{Role: "system", Content: chat.System}}, msgs...)
+	}
+	sp, err := s.st.ChatPictureSpans(msgs, chat.Images, chat.AddGenerationPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	return sp, nil
 }
 
 // ---------------------------------------------------------------- streaming text
