@@ -3,11 +3,21 @@ title: Install
 description: Install jitllm, jitllmd and the two apps from a release on Linux, macOS or Windows, or build them from source.
 ---
 
+import Downloads from '../../../components/Downloads.astro'
+
 Every program is one self-contained binary. There is nothing else to install: no Python, no C library, no CUDA toolkit. GPU backends are loaded at run time from the driver already on the machine.
+
+## Download
+
+The download for this machine comes first; every other platform is listed after it.
+
+<Downloads />
 
 ## macOS: the app
 
 Download `jitllm_<version>_darwin_arm64.dmg` for Apple silicon, or `jitllm_<version>_darwin_amd64.dmg` for Intel, from the [latest release](https://github.com/jitllm/jitllm/releases/latest). Open it and drag **jitllm** onto **Applications**.
+
+The same signed app also comes zipped, without the disk image: `jitllm_<version>_darwin_arm64.app.zip` or `_amd64.app.zip`. Double-click it to unzip and move **jitllm** to **Applications**.
 
 The app carries the CLI and the server inside it. On first launch it offers to link `jitllm` and `jitllmd` into `/usr/local/bin` (asking for your password if that folder needs it, or using `~/.local/bin` if you decline). **Settings > Command line** links or unlinks them later, and **Start the server at login** runs `jitllmd` in the background on `127.0.0.1:8080` through a launchd agent, until you turn it off.
 
@@ -30,6 +40,10 @@ Run `jitllm-setup_<version>_windows_amd64.exe` (or `_arm64.exe` on Arm) from the
 - an entry under **Settings > Apps** whose uninstaller removes all of it. Your models and chats are kept.
 
 With winget, once published: `winget install jitllm.jitllm`.
+
+### The portable desktop app
+
+`jitllm-desktop_<version>_windows_amd64.exe` (or `_arm64.exe`) is the desktop app alone, one file that runs from wherever you save it and installs nothing: no Start menu entry, no `PATH`, no uninstaller. It keeps its settings and chats in the same folder as an installed copy (`%APPDATA%\jitllm`), so the two share them. Delete the file to remove it.
 
 ## First launch of an unsigned build
 

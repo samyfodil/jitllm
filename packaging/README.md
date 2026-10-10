@@ -1,6 +1,7 @@
 # Packaging
 
-How a release becomes `jitllm.app` in a disk image, a Windows setup, a Homebrew
+How a release becomes `jitllm.app` in a disk image and a zip, a Windows setup
+and a portable desktop app, a Homebrew
 tap and a winget manifest. Everything here runs in
 `.github/workflows/release.yml` on a `v*` tag; nothing in it publishes to a
 package manager unless the secrets below are set, and winget is never
@@ -9,6 +10,8 @@ submitted from CI.
 | artifact | built by | where | signed when |
 |---|---|---|---|
 | `jitllm_<v>_darwin_<arch>.dmg` | `ui/cmd/pack app`, then the `macos-app` job adds the CLIs, signs, and runs `macos/dmg.sh` | macOS runner (hdiutil, codesign, notarytool) | `MACOS_SIGN_P12` set: Developer ID; plus `MACOS_NOTARY_*`: notarized and stapled. Otherwise ad-hoc |
+| `jitllm_<v>_darwin_<arch>.app.zip` | the `macos-app` job: the same signed (and stapled) bundle, `ditto -c -k --keepParent` | macOS runner | as the bundle in the dmg |
+| `jitllm-desktop_<v>_windows_<arch>.exe` | the `windows-setup` job: `jitllm-desktop.exe` from the release's zip, renamed | Linux runner | `WINDOWS_SIGN_PFX` set: Authenticode (`windows/sign.sh`). Otherwise unsigned |
 | `jitllm-setup_<v>_windows_<arch>.exe` | `windows/build.sh` (makensis on `windows/jitllm.nsi`) | Linux runner | `WINDOWS_SIGN_PFX` set: Authenticode on every .exe, the uninstaller and the setup. Otherwise unsigned |
 | `Casks/jitllm.rb`, `Formula/jitllm.rb` | `homebrew/generate.sh <tag> checksums.txt <dir>` | the `packages` job, after the release is published | -- |
 | `manifests/j/jitllm/jitllm/<v>/*.yaml` | `winget/generate.sh <tag> checksums.txt <dir>` | the `packages` job | -- |
@@ -58,6 +61,22 @@ other release archive is; the cask picks one with `arch arm:/intel:`.
 `macos/dmg.sh <app> <out.dmg>` stages the bundle beside a link to
 `/Applications` and writes a compressed read-only image with `hdiutil`. It
 runs on macOS only.
+
+The zipped bundle is for those who skip the image. `ditto` keeps the bundle's
+signature, stapled ticket and links, which `zip` does not; Finder's
+double-click (or `ditto -x -k`) unpacks it whole.
+
+## The portable desktop app
+
+`jitllm-desktop_<v>_windows_<arch>.exe` is the release zip's
+`jitllm-desktop.exe` on its own, signed like the setup's programs: it runs
+from wherever it is saved and writes nothing beside itself. Its settings,
+chats and log are in `%APPDATA%\jitllm`, the folder an installed copy uses
+(`os.UserConfigDir`), so the two share them. The app serves its API only when
+**Settings** turns it on, on `127.0.0.1:8080` by default; a second copy, or
+the setup's login server, already on that port makes that copy report "API
+not started" and keep running without it. `-version` prints the version and
+opens no window, which is how the release checks it.
 
 ## The Windows setup
 
@@ -126,7 +145,7 @@ To publish, in order:
    (`wingetcreate submit` does both). Later versions can use `wingetcreate
    update jitllm.jitllm`.
 5. Then drop "once published" from the Homebrew and winget lines in
-   `README.md` and `website/src/content/docs/docs/install.md`.
+   `README.md` and `website/src/content/docs/docs/install.mdx`.
 
 ## First launch of an unsigned build
 
@@ -156,6 +175,12 @@ To publish, in order:
   Start menu, run `uninstall.exe /S` and check they are gone. Under wine the
   PATH step does nothing (no PowerShell); the release's `smoke` job checks it
   on Windows.
+- The release's `smoke` job checks the new assets as shipped: on the Mac it
+  unpacks the `.app.zip` with `ditto -x -k`, verifies the bundle's signature
+  with `codesign --verify --strict --deep` and runs `jitllm version` and
+  `jitllm-desktop -version` from inside it; on both Windows hosts it checks
+  the portable exe's checksum and that `-version` prints the release's
+  version.
 - The bundle and the dmg, on a Mac: sign as `macos-app` does, run `dmg.sh`,
   mount the image, `codesign --verify --deep`, run
   `jitllm.app/Contents/Resources/bin/jitllm version`, `open` the app, and run

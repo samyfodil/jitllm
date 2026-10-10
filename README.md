@@ -34,7 +34,8 @@ are [desktop](#desktop-app) and [terminal](#terminal-app) apps too.
 
 **macOS:** download `jitllm_<version>_darwin_arm64.dmg` (Apple silicon) or
 `_amd64.dmg` (Intel) from the [latest release](https://github.com/jitllm/jitllm/releases/latest),
-open it and drag **jitllm** to Applications. The app carries `jitllm` and
+open it and drag **jitllm** to Applications (or take the signed app alone,
+`jitllm_<version>_darwin_<arch>.app.zip`, and unzip it there). The app carries `jitllm` and
 `jitllmd`; on first launch it offers to put them on your `PATH`, and its
 Settings can start the server at login. With Homebrew (available once the tap
 is published):
@@ -50,7 +51,10 @@ It installs for your account only, with no administrator prompt: the CLI, the
 server and the desktop app into `%LOCALAPPDATA%\Programs\jitllm`, on your
 `PATH`, with Start menu shortcuts, an optional "start the server at login",
 and an uninstaller under Settings > Apps. With winget (available once
-published): `winget install jitllm.jitllm`.
+published): `winget install jitllm.jitllm`. To run the desktop app without
+installing anything, download the portable
+`jitllm-desktop_<version>_windows_amd64.exe` (or `_arm64.exe`) and run it from
+anywhere; it shares its settings and chats with an installed copy.
 
 Until releases are signed, macOS and Windows warn the first time:
 [packaging/README.md](packaging/README.md#first-launch-of-an-unsigned-build)

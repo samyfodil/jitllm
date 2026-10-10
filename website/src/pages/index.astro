@@ -1,5 +1,6 @@
 ---
 import Versus from '../components/Versus.astro'
+import Downloads from '../components/Downloads.astro'
 // BASE_URL is the site's path prefix: empty at a domain's root, /jitllm on a
 // GitHub project page.
 const base = import.meta.env.BASE_URL.replace(/\/$/, '')
@@ -301,6 +302,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '')
           </div>
           <a class="more" href={`${base}/docs/install/`}>Full guide <span aria-hidden="true">→</span></a>
         </div>
+        <Downloads />
         <div class="two">
           <div class="panel step">
             <div class="step-head"><span class="pix sm" data-pixel="probe" aria-hidden="true"></span><h3>Install and fetch a model</h3></div>
