@@ -115,6 +115,12 @@ jobs:
           security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
           rm "$RUNNER_TEMP/sign.p12"
           id=$(security find-identity -v -p codesigning "$kc" | awk -F'"' '/Developer ID Application/{print $2; exit}')
+          if [ -z "$id" ]; then
+            # A self-signed certificate is not a trusted identity, so -v does
+            # not list it; codesign takes it by its hash. Gatekeeper still
+            # treats the app as from an unidentified developer.
+            id=$(security find-identity -p codesigning "$kc" | awk '/^ *[0-9]+\)/{print $2; exit}')
+          fi
           test -n "$id"
           echo "SIGN_ID=$id" >> "$GITHUB_ENV"
       - name: sign, notarize and repack the bundles
