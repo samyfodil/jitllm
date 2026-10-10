@@ -9239,11 +9239,15 @@ func (g *devTier) actWinFor(ntok int) int {
 }
 
 // batchMV compiles one matvec's batched twin for a prompt chunk: the staged
-// binary16 GEMM on the m16n8 instruction where the device has it (f16Gemm),
-// then intBatchMV's forms.
+// int8 GEMM where the device has the int8 m16n8 instruction (int8Gemm, sm_80
+// on), the staged binary16 GEMM on the m16n8 instruction where it has that
+// (f16Gemm, sm_75), then intBatchMV's forms.
 func (g *devTier) batchMV(m mv, ntok, tok int) (mv, bool) {
 	// A build reached from inside a submission takes g.mu (subLock).
 	defer g.subUnlock(g.subLock())
+	if bm, ok := g.int8Gemm(m, ntok); ok {
+		return bm, true
+	}
 	if bm, ok := g.f16Gemm(m, ntok); ok {
 		return bm, true
 	}

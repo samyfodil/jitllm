@@ -63,6 +63,25 @@ func TestGemmF16Speed(t *testing.T) {
 					})
 				}
 			}
+			for _, tl := range []kernels.Int8Tile{
+				{MT: 4, NT: 4, WM: 2, WN: 2}, {MT: 4, NT: 2, WM: 2, WN: 2}, {MT: 2, NT: 4, WM: 2, WN: 2},
+				{MT: 4, NT: 8, WM: 2, WN: 2}, {MT: 2, NT: 2, WM: 2, WN: 2},
+			} {
+				s := kernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok}
+				kk, err := kernels.GemmInt8(s, tl)
+				if err != nil {
+					t.Log(err)
+					continue
+				}
+				kern, err := d.Compile(kk)
+				if err != nil {
+					t.Logf("%+v: %v", tl, err)
+					continue
+				}
+				time1(fmt.Sprintf("int8 gemm %dx%d w%dx%d", tl.MT, tl.NT, tl.WM, tl.WN), func() error {
+					return kern.Launch(kernels.GemmInt8Groups(s, tl), tl.Threads(), bQS, bD, bSC, bB, bAX, out)
+				})
+			}
 			for _, tl := range []kernels.VoltaTile{
 				{MT: 4, NT: 8, WM: 2, WN: 2}, {MT: 4, NT: 4, WM: 2, WN: 2}, {MT: 2, NT: 8, WM: 2, WN: 2},
 				{MT: 8, NT: 4, WM: 2, WN: 2}, {MT: 2, NT: 4, WM: 2, WN: 2}, {MT: 4, NT: 4, WM: 1, WN: 4}, {MT: 8, NT: 2, WM: 1, WN: 4},

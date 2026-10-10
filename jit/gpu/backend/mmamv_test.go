@@ -253,6 +253,19 @@ func mmaMVCaseWin(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, nto
 	if mkern == nil {
 		t.Skipf("no matrix instruction: %v", mmaErr)
 	}
+	// GemmInt8 against the same dp4a arm: the staged int8 GEMM applies the
+	// identical fold, so it is held bit for bit unsplit.
+	gemmInt8Case(t, d, q, nrows, k, ntok, gotD, func(kern backend.Kernel, groups, w, n int) []byte {
+		out := up(n*4, f32bytes(nanFill(n)))
+		if err := kern.Launch(groups, w, bQS, bD, bSC, bA, bAX, out); err != nil {
+			t.Fatal(err)
+		}
+		p := make([]byte, n*4)
+		if err := out.Read(p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	})
 	// One warp per (m,n) tile, 128 threads to a group.
 	warps := (nrows / (16 * mt)) * (ntok / (8 * nt))
 	gotM := run(mkern, warps*32, bMMA)

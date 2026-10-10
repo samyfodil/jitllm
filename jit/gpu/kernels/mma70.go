@@ -578,6 +578,24 @@ func (v *voltaDeq) scalesOf(w []ir.Value, subIdx, row ir.Value) (s2, m2 ir.Value
 // w[1] is the word after it.
 func (v *voltaDeq) scalesOfX(w []ir.Value, x, subIdx, row ir.Value) (s2, m2 ir.Value) {
 	b, qi := v.b, v.qi
+	sc, mn := v.scalesF32X(w, x, subIdx, row)
+	if qi.e8m0 && DSlots(v.t) > 1 {
+		return b.PackF16(sc, sc), b.PackF16(v.zeroF, v.zeroF)
+	}
+	if !qi.biasArray && qi.biasK != 0 {
+		mn = b.Mul(ir.F32, b.ConstF32(qi.biasK), sc)
+	}
+	neg := b.Sub(ir.F32, v.zeroF, mn)
+	return b.PackF16(sc, sc), b.PackF16(neg, neg)
+}
+
+// scalesF32X is the row's sub-block scale and stored minimum in float32, the
+// weight being sc*q - mn: scalesOfX's arithmetic before it packs to binary16,
+// and without the minimum a centred format's bias would add (biasK*sc), which
+// the integer GEMM takes off the weights instead (GemmInt8). mn is 0 where
+// the format stores no minimum.
+func (v *voltaDeq) scalesF32X(w []ir.Value, x, subIdx, row ir.Value) (sc, mn ir.Value) {
+	b, qi := v.b, v.qi
 	c := func(x int64) ir.Value { return b.Const(ir.U32, x) }
 	// The row's super-scale and minimum, following matvec.go's layout.
 	var d, dm ir.Value
@@ -587,7 +605,7 @@ func (v *voltaDeq) scalesOfX(w []ir.Value, x, subIdx, row ir.Value) (s2, m2 ir.V
 			// The stored byte shifted left 23 is the f32 scale (e8m0Store),
 			// and the code carries no bias: frags decodes it to its value.
 			d = b.Bitcast(ir.F32, b.Shl(ir.U32, b.And(ir.U32, b.Shr(ir.U32, w[0], sh), c(0xFF)), c(23)))
-			return b.PackF16(d, d), b.PackF16(v.zeroF, v.zeroF)
+			return d, v.zeroF
 		}
 		d = b.CvtF16H(b.Shr(ir.U32, w[0], sh))
 	} else {
@@ -596,7 +614,7 @@ func (v *voltaDeq) scalesOfX(w []ir.Value, x, subIdx, row ir.Value) (s2, m2 ir.V
 			dm = b.CvtF16H(b.Shr(ir.U32, w[0], c(16)))
 		}
 	}
-	sc, mn := d, v.zeroF
+	sc, mn = d, v.zeroF
 	if ScStream(v.t) && v.carry {
 		bit := b.And(ir.U32, b.Mul(ir.U32, subIdx, c(12)), c(31))
 		scI, mI := scStreamPair(b, x, w[1], bit)
@@ -625,11 +643,7 @@ func (v *voltaDeq) scalesOfX(w []ir.Value, x, subIdx, row ir.Value) (s2, m2 ir.V
 	} else if qi.biasArray {
 		mn = dm // Q5_1: the minimum alone, no sc plane (MinInD)
 	}
-	if !qi.biasArray && qi.biasK != 0 {
-		mn = b.Mul(ir.F32, b.ConstF32(qi.biasK), sc)
-	}
-	neg := b.Sub(ir.F32, v.zeroF, mn)
-	return b.PackF16(sc, sc), b.PackF16(neg, neg)
+	return sc, mn
 }
 
 // frags turns one row's raw words (words' order) into the A-fragment words of

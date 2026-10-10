@@ -187,6 +187,7 @@ func gpuOptions() []tier.Option {
 		{"JITLLM_NO_GPU_MMA", set("JITLLM_NO_GPU_MMA"), func(c *tier.Config) { c.NoMMA = true }},
 		{"JITLLM_GPU_NO_VOLTA", set("JITLLM_GPU_NO_VOLTA"), func(c *tier.Config) { c.NoVolta = true }},
 		{"JITLLM_GPU_NO_VOLTA_MOE", set("JITLLM_GPU_NO_VOLTA_MOE"), func(c *tier.Config) { c.NoVoltaMoE = true }},
+		{"JITLLM_GPU_NO_GEMM_INT8", set("JITLLM_GPU_NO_GEMM_INT8"), func(c *tier.Config) { c.NoGemmInt8 = true }},
 		{"JITLLM_GPU_NO_RAG_GROUP", set("JITLLM_GPU_NO_RAG_GROUP"), func(c *tier.Config) { c.NoRagGroup = true }},
 		{"JITLLM_GPU_NO_RAG_FUSE", set("JITLLM_GPU_NO_RAG_FUSE"), func(c *tier.Config) { c.NoRagFuse = true }},
 		{"JITLLM_GPU_NO_RAG_HEAD_ONE", set("JITLLM_GPU_NO_RAG_HEAD_ONE"), func(c *tier.Config) { c.NoRagHeadOne = true }},

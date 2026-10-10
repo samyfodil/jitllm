@@ -1021,6 +1021,99 @@ func (g *devTier) f16Gemm(m mv, ntok int) (mv, bool) {
 	return g.stagedGemm(m, ntok, f16Tiles, k, g.dev.Slots()/16)
 }
 
+// int8GemmOn reports whether the device lowers GemmInt8, probed once by a
+// compile (the int8 m16n8k32 instruction is sm_80's). Callers hold g.mu.
+func (g *devTier) int8GemmOn() bool {
+	if g.i8Gemm == 0 {
+		g.i8Gemm = -1
+		if g.dev.API() == "ptx" {
+			ker, err := kernels.GemmInt8(kernels.MatVecShape{Center: g.center, T: kernels.Q8_0, K: 32, Rows: 32, NTok: 32},
+				kernels.Int8Tile{MT: 1, NT: 2, WM: 2, WN: 2})
+			if err == nil {
+				if c, err := g.dev.Compile(ker); err == nil {
+					c.Close()
+					g.i8Gemm = 1
+				}
+			}
+		}
+	}
+	return g.i8Gemm > 0
+}
+
+// int8Gemm is m's batched twin as kernels.GemmInt8: MatVecMMA's int8
+// arithmetic and its quantized activations, staged through shared memory as
+// GemmVolta stages, so a workgroup decodes a trip of its rows once for all
+// its tokens. Its blockings are f16Tiles' (the same 16-row m-tiles and 8-token
+// n-tiles), chosen by the same fill. False where the device lacks the
+// instruction, the format has no int8 decode, or no tile divides the shape.
+// NoMMA and NoGemmInt8 refuse it.
+func (g *devTier) int8Gemm(m mv, ntok int) (mv, bool) {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
+	if g.NoMMA || g.NoGemmInt8 || m.slots > 0 || !kernels.Int8OK(m.q) || !g.int8GemmOn() {
+		return mv{}, false
+	}
+	fill := g.dev.Slots() / 16
+	first := fillTile(f16Tiles, 16, m.rows, ntok, fill)
+	for i := -1; i < len(f16Tiles); i++ {
+		if i < 0 && first < 0 || i >= 0 && i == first {
+			continue
+		}
+		idx := i
+		if i < 0 {
+			idx = first
+		}
+		vt := f16Tiles[idx]
+		tl := kernels.Int8Tile{MT: vt.MT, NT: vt.NT, WM: vt.WM, WN: vt.WN}
+		if m.rows%tl.Rows() != 0 || ntok%tl.Toks() != 0 {
+			continue
+		}
+		trips := m.k / 32
+		split := fillSplit(trips, (m.rows/tl.Rows())*(ntok/tl.Toks())*tl.Threads(), fill)
+		if f := g.kb.batch.Split; f >= 1 {
+			split = f
+		}
+		var c backend.Kernel
+		for ; split >= 1; split /= 2 {
+			s := kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: ntok, Split: split, Bias: m.bias != nil}
+			key := ragKey{kind: "gemmint8", q: m.q, k: m.k, rows: m.rows, ntok: ntok,
+				tile: [5]int{tl.MT, tl.NT, tl.WM, tl.WN}, split: split, bias: s.Bias}
+			k, ok := g.ragK[key]
+			if !ok {
+				ker, err := kernels.GemmInt8(s, tl)
+				if err == nil {
+					k, err = g.dev.Compile(ker)
+				}
+				if err != nil {
+					k = nil
+				}
+				if g.ragK == nil {
+					g.ragK = map[ragKey]backend.Kernel{}
+				}
+				g.ragK[key] = k
+			}
+			if c = k; c != nil {
+				break
+			}
+		}
+		if c == nil {
+			continue
+		}
+		s := kernels.MatVecShape{Rows: m.rows, NTok: ntok, Split: split}
+		out := mv{kern: c, rows: m.rows, split: split, bias: m.bias, q: m.q, k: m.k,
+			threads: kernels.GemmInt8Groups(s, tl) * tl.Threads(), redN: m.rows * ntok}
+		if split > 1 {
+			if out.red = g.reduceKernel(m.rows*ntok, split); out.red == nil ||
+				!g.sizePart(m.rows*ntok*split) {
+				return mv{}, false
+			}
+		}
+		g.GemmInt8++
+		return out, true
+	}
+	return mv{}, false
+}
+
 // fillTile is the tile stagedGemm tries first, on instruction f16k, for a grid of at least fill
 // threads: the first of tiles (widest first) that divides the shape and
 // reaches it, else the dividing tile with the most workgroups, whose grid a

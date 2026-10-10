@@ -174,6 +174,10 @@ type Config struct {
 	// device to the int8 path's precision (model's hybrid batch gate) asks for
 	// that with this one knob on every backend.
 	NoVolta bool
+	// NoGemmInt8 refuses the staged int8 GEMM (kernels.GemmInt8), leaving a
+	// prompt chunk the m16n8 binary16 GEMM or MatVecMMA: the A/B arm and the
+	// bisection switch for it.
+	NoGemmInt8 bool
 	// NoVoltaMoE keeps a batched mixture's expert matvecs on the dp4a grouped
 	// kernel where sm_70's grouped GemmVolta -- or Metal's grouped GemmTile --
 	// would run them (moegroup.go): the A/B arm for that, and its bisection
@@ -630,6 +634,9 @@ type Stats struct {
 	// GemmF16 counts batched matvecs built as GemmVolta on the m16n8 binary16
 	// instruction (sm_75 on, devTier.f16Gemm) rather than MatVecMMA.
 	GemmF16 int
+	// GemmInt8 counts batched matvecs built as kernels.GemmInt8, the staged
+	// int8 GEMM (sm_80 on, devTier.int8Gemm).
+	GemmInt8 int
 	// GroupedVolta counts a batched mixture's expert matvecs run as grouped
 	// GemmVolta on sm_70's tensor cores, or grouped GemmTile on Metal, rather
 	// than the dp4a grouped matvec.
@@ -1016,6 +1023,7 @@ func (s *Stats) add(o Stats) {
 	s.RecShared += o.RecShared
 	s.VoltaGemm += o.VoltaGemm
 	s.GemmF16 += o.GemmF16
+	s.GemmInt8 += o.GemmInt8
 	s.GroupedVolta += o.GroupedVolta
 	s.MLAScores70 += o.MLAScores70
 	s.MLAAcc70 += o.MLAAcc70
@@ -1597,6 +1605,9 @@ type devShared struct {
 	// f16K is f16GemmK's probe: 0 not yet asked, -1 no m16n8 binary16
 	// instruction, else its k.
 	f16K int
+	// i8Gemm is int8GemmOn's probe: 0 not yet asked, 1 the device lowers
+	// GemmInt8, -1 it does not.
+	i8Gemm int8
 }
 
 // GPU serves decode matvecs and whole blocks from one or more devices. It is a
