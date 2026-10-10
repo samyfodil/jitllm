@@ -408,6 +408,12 @@ func (g *devTier) pagedPlanFor(bs *blockScratch, keys int) (*pagedVariant, error
 	if plan.Path == kernels.PathFlashKV && g.pickLanes() != ir.SubgroupLanes {
 		plan = kernels.DecodePlan{Path: kernels.PathStaged, Shape: kernels.PagedStagedPlan(pg.shape, keys, g.dev.Slots())}
 	}
+	// A staged plan's planes grow with its keys: past the pass width it is
+	// built for the pass, and a deeper call goes in passes (pagedStreamPrep).
+	if pk := g.stagedPassKeys(bs); plan.Path == kernels.PathStaged && pk > 0 && keys > pk {
+		keys = pk
+		plan.Shape = kernels.PagedStagedPlan(pg.shape, keys, g.dev.Slots())
+	}
 	v, err := g.pagedBuild(bs, plan)
 	// The split count only divides the work, and the partials are rows x
 	// heads x splits x the value's width: a 530-row prompt chunk at 8 splits

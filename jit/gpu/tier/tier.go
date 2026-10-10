@@ -246,6 +246,13 @@ type Config struct {
 	// KVStreamPages forces how many evicted pages one pass over evicted
 	// history uploads (kvevict.go); 0 is every free page the layer has.
 	KVStreamPages int
+	// StagedPassKeys is the most keys one staged paged attention pass
+	// covers; 0 is devStagedPassKeys. The staged plan's score and weight
+	// planes are rows x heads x keys, so a plan sized for the context would
+	// hold gigabytes of a card that a model's histories need (8 GiB of a
+	// V100 for a 256-row chunk of a 131072-position Llama 3.1); a row deeper
+	// than this goes in passes over its pages, folded (pagedstream.go).
+	StagedPassKeys int
 	// FlashSplit sets parallel key partitions for generated attention (0/1: one).
 	// Configure before placing layers; each partition needs a small partial buffer.
 	FlashSplit int
@@ -764,6 +771,9 @@ type Stats struct {
 	KVWindowReleased int
 	// KVStreamPasses counts attention passes over evicted history.
 	KVStreamPasses int
+	// StagedPasses counts attention passes of streamed calls: those over
+	// evicted history and those past Config.StagedPassKeys on the card.
+	StagedPasses int
 	// PipelinePieces counts the pieces of pipelined prompt chunks this device
 	// ran (GPU.pipeline).
 	PipelinePieces int
@@ -1059,6 +1069,7 @@ func (s *Stats) add(o Stats) {
 	s.KVEvictions += o.KVEvictions
 	s.KVWindowReleased += o.KVWindowReleased
 	s.KVStreamPasses += o.KVStreamPasses
+	s.StagedPasses += o.StagedPasses
 	s.PipelinePieces += o.PipelinePieces
 	s.SubsBeside += o.SubsBeside
 	s.RanBeside += o.RanBeside

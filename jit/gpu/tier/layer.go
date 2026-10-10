@@ -6277,7 +6277,8 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			g.pagedStage(pk, p, pk.rows)
 			// A call over evicted history streams (pagedstream.go), through
 			// the staged decode kernels rather than the prefill ones.
-			if e := g.pagedStreamPrep(sid, bs, pk.rows); e != nil {
+			pf := pk.pf != nil && rag == nil && R > 1 && nrow > 0
+			if e := g.pagedStreamPrep(sid, bs, pk.rows, pf); e != nil {
 				return refuse("paged attention: %v", e)
 			}
 			// The lightning indexer scores every position through the

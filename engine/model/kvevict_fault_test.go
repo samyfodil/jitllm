@@ -26,3 +26,21 @@ func TestKVEvictionGateDiscriminates(t *testing.T) {
 		t.Fatalf("the gate passed a stream that uploaded nothing (NMSE %.3e)", dev)
 	}
 }
+
+// TestStagedPassGateDiscriminates runs the staged-pass gate's narrow arm
+// with every pass after the first left unfolded, and demands it fail.
+func TestStagedPassGateDiscriminates(t *testing.T) {
+	eg := newEvictGate(t)
+	wide, _ := eg.stagedPassRun(t, 0)
+	tier.SetPagedFault("passfold")
+	defer tier.SetPagedFault("")
+	narrow, ns := eg.stagedPassRun(t, 128)
+	if ns.StagedPasses == 0 {
+		t.Fatal("no staged pass ran: the violation was never exercised")
+	}
+	dev, at := worstStep(narrow, wide)
+	t.Logf("violation: worst logit NMSE %.3e at step %d", dev, at)
+	if dev < evictNMSE {
+		t.Fatalf("the gate passed passes that were never folded (NMSE %.3e)", dev)
+	}
+}
