@@ -7,7 +7,7 @@ Every program is one self-contained binary. There is nothing else to install: no
 
 ## macOS: the app
 
-Download `jitllm_<version>_darwin_arm64.dmg` for Apple silicon, or `jitllm_<version>_darwin_amd64.dmg` for Intel, from the [latest release](https://github.com/samyfodil/jitllm/releases/latest). Open it and drag **jitllm** onto **Applications**.
+Download `jitllm_<version>_darwin_arm64.dmg` for Apple silicon, or `jitllm_<version>_darwin_amd64.dmg` for Intel, from the [latest release](https://github.com/jitllm/jitllm/releases/latest). Open it and drag **jitllm** onto **Applications**.
 
 The app carries the CLI and the server inside it. On first launch it offers to link `jitllm` and `jitllmd` into `/usr/local/bin` (asking for your password if that folder needs it, or using `~/.local/bin` if you decline). **Settings > Command line** links or unlinks them later, and **Start the server at login** runs `jitllmd` in the background on `127.0.0.1:8080` through a launchd agent, until you turn it off.
 
@@ -22,7 +22,7 @@ The formula's server also runs as a Homebrew service: `brew services start jitll
 
 ## Windows: the setup
 
-Run `jitllm-setup_<version>_windows_amd64.exe` (or `_arm64.exe` on Arm) from the [latest release](https://github.com/samyfodil/jitllm/releases/latest). It installs for your account only and never asks for an administrator:
+Run `jitllm-setup_<version>_windows_amd64.exe` (or `_arm64.exe` on Arm) from the [latest release](https://github.com/jitllm/jitllm/releases/latest). It installs for your account only and never asks for an administrator:
 
 - `jitllm`, `jitllmd` and the desktop app in `%LOCALAPPDATA%\Programs\jitllm`, which is added to your user `PATH`;
 - **jitllm** in the Start menu;

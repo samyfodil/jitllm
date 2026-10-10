@@ -33,7 +33,7 @@ are [desktop](#desktop-app) and [terminal](#terminal-app) apps too.
 ## Install
 
 **macOS:** download `jitllm_<version>_darwin_arm64.dmg` (Apple silicon) or
-`_amd64.dmg` (Intel) from the [latest release](https://github.com/samyfodil/jitllm/releases/latest),
+`_amd64.dmg` (Intel) from the [latest release](https://github.com/jitllm/jitllm/releases/latest),
 open it and drag **jitllm** to Applications. The app carries `jitllm` and
 `jitllmd`; on first launch it offers to put them on your `PATH`, and its
 Settings can start the server at login. With Homebrew (available once the tap
@@ -45,7 +45,7 @@ brew install jitllm/tap/jitllm          # jitllm and jitllmd only
 ```
 
 **Windows:** run `jitllm-setup_<version>_windows_amd64.exe` (or `_arm64.exe`)
-from the [latest release](https://github.com/samyfodil/jitllm/releases/latest).
+from the [latest release](https://github.com/jitllm/jitllm/releases/latest).
 It installs for your account only, with no administrator prompt: the CLI, the
 server and the desktop app into `%LOCALAPPDATA%\Programs\jitllm`, on your
 `PATH`, with Start menu shortcuts, an optional "start the server at login",

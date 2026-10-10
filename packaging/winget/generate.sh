@@ -22,7 +22,7 @@ sums=$2
 out=$3
 case $tag in v*) ;; *) echo "generate: tag $tag does not start with v" >&2; exit 2 ;; esac
 version=${tag#v}
-repo=${JITLLM_REPO:-samyfodil/jitllm}
+repo=${JITLLM_REPO:-jitllm/jitllm}
 # Where the setups are downloaded from; the release's assets unless a check
 # serves them from somewhere else (.github/workflows/winget.yml).
 base=${JITLLM_INSTALLER_BASE:-https://github.com/$repo/releases/download/$tag}
