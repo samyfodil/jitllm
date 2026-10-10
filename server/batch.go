@@ -101,8 +101,9 @@ type stepLoop struct {
 
 	// A gate's violations, false but in a test: feedNext feeds each decoding
 	// row the token sampled for the row after it; dropMaxTokens never
-	// retires a row for reaching its max_tokens.
-	feedNext, dropMaxTokens bool
+	// retires a row for reaching its max_tokens; admitAll admits every
+	// waiting request whatever the card has room for.
+	feedNext, dropMaxTokens, admitAll bool
 
 	stats batchCounters
 }
@@ -399,7 +400,7 @@ func (lp *stepLoop) admit() {
 		for len(lp.waiting) > 0 && len(lp.rows) < lp.width {
 			r := lp.waiting[0]
 			need := rowPages(r, 0, page) * page
-			if page > 0 && len(lp.rows) > 0 && need > room {
+			if page > 0 && len(lp.rows) > 0 && need > room && !lp.admitAll {
 				lp.stats.kvWaits.Add(1)
 				break
 			}

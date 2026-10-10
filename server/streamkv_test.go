@@ -23,8 +23,52 @@ import (
 // Before admission every row was admitted, the oldest pages of most sessions
 // went home, and a step with two sequences' pages at home is refused as one
 // step, so each session ran alone and re-streamed its evicted prefix every
-// token, a Sync a pass.
+// token, a Sync a pass. Its violation is
+// TestSixtyFourRequestsGateDiscriminates.
 func TestSixtyFourRequestsWhoseHistoryStreams(t *testing.T) {
+	for wave, w := range sixtyFour(t, 2, false) {
+		t.Logf("wave %d: %d of 64 requests failed; %d joint steps, %d admissions put off for room, "+
+			"%d refusals, %d evictions, %d streamed passes", wave, w.failed, w.joint, w.waits, w.refusals,
+			w.evictions, w.passes)
+		if w.failed > 0 {
+			t.Fatalf("wave %d: %d of 64 requests failed", wave, w.failed)
+		}
+		if w.joint == 0 {
+			t.Fatalf("wave %d: no joint step ran: the rows stepped one session at a time", wave)
+		}
+		if w.waits == 0 {
+			t.Fatalf("wave %d: no admission was put off: the budget never bound and the gate proved nothing", wave)
+		}
+	}
+}
+
+// TestSixtyFourRequestsGateDiscriminates runs one wave of the gate with every
+// waiting request admitted whatever the card has room for, and demands the
+// gate's checks fail and the card thrash as it did before admission: pages
+// sent home and joint steps refused.
+func TestSixtyFourRequestsGateDiscriminates(t *testing.T) {
+	w := sixtyFour(t, 1, true)[0]
+	t.Logf("violation: %d of 64 requests failed; %d joint steps, %d admissions put off, %d refusals, "+
+		"%d evictions, %d streamed passes", w.failed, w.joint, w.waits, w.refusals, w.evictions, w.passes)
+	if w.waits != 0 {
+		t.Fatalf("%d admissions were put off with admission off", w.waits)
+	}
+	if w.evictions == 0 || w.refusals == 0 {
+		t.Fatalf("with every request admitted the card neither evicted (%d) nor refused a joint step (%d): "+
+			"the load does not bind and the gate cannot tell admission from none", w.evictions, w.refusals)
+	}
+}
+
+// waveCounts is what one wave of sixtyFour did.
+type waveCounts struct {
+	failed                                    int
+	joint, waits, refusals, evictions, passes int64
+}
+
+// sixtyFour loads Llama 3.2 1B wholly onto gpu:0 with the budget 1 GiB past
+// what placement spent, and sends waves of 64 concurrent greedy completions,
+// half of 128 words and half of 512; admitAll is the violation.
+func sixtyFour(t *testing.T, waves int, admitAll bool) []waveCounts {
 	const name = "Llama-3.2-1B-Instruct-Q4_K_M.jlm"
 	path := modelPath(t, name)
 	e := New(Config{Probe: oneCardProbe, Version: "test", DefaultMaxSeq: 1024, MaxBatchRows: 64})
@@ -37,6 +81,7 @@ func TestSixtyFourRequestsWhoseHistoryStreams(t *testing.T) {
 	if lm.loop == nil || lm.gpu == nil {
 		t.Fatal("a model loaded onto a device has no step loop")
 	}
+	lm.loop.admitAll = admitAll
 	requireWholeOnDevice(t, e, lm)
 	c := serveEngine(t, e)
 	if _, err := lm.gpu.SetBudget(lm.gpu.Stats().BudgetUsed + 1<<30); err != nil {
@@ -45,8 +90,10 @@ func TestSixtyFourRequestsWhoseHistoryStreams(t *testing.T) {
 	words := strings.Fields(strings.Repeat("the clerk counted barrels of salt on the upper floor while rain fell ", 50))
 	const n = 64
 	st := &lm.loop.stats
-	for wave := range 2 {
-		j0, w0 := st.jointSteps.Load(), st.kvWaits.Load()
+	var out []waveCounts
+	for wave := range waves {
+		j0, w0, r0 := st.jointSteps.Load(), st.kvWaits.Load(), st.refusals.Load()
+		s0 := lm.gpu.Stats()
 		errs := make([]error, n)
 		var wg sync.WaitGroup
 		for i := range n {
@@ -61,30 +108,21 @@ func TestSixtyFourRequestsWhoseHistoryStreams(t *testing.T) {
 			}()
 		}
 		wg.Wait()
-		failed := 0
+		var wc waveCounts
 		for i, err := range errs {
 			if err != nil {
-				failed++
-				if failed <= 3 {
+				wc.failed++
+				if wc.failed <= 3 && !admitAll {
 					t.Errorf("wave %d, request %d: %v", wave, i, err)
 				}
 			}
 		}
-		ts := lm.gpu.Stats()
-		joint, waits := st.jointSteps.Load()-j0, st.kvWaits.Load()-w0
-		t.Logf("wave %d: %d of %d requests failed; %d joint steps, %d admissions put off for room, "+
-			"%d refusals in all; %d evictions, %d streamed passes in all",
-			wave, failed, n, joint, waits, st.refusals.Load(), ts.KVEvictions, ts.KVStreamPasses)
-		if failed > 0 {
-			t.Fatalf("wave %d: %d of %d requests failed", wave, failed, n)
-		}
-		if joint == 0 {
-			t.Fatalf("wave %d: no joint step ran: the rows stepped one session at a time", wave)
-		}
-		if waits == 0 {
-			t.Fatalf("wave %d: no admission was put off: the budget never bound and the gate proved nothing", wave)
-		}
+		s1 := lm.gpu.Stats()
+		wc.joint, wc.waits, wc.refusals = st.jointSteps.Load()-j0, st.kvWaits.Load()-w0, st.refusals.Load()-r0
+		wc.evictions, wc.passes = int64(s1.KVEvictions-s0.KVEvictions), int64(s1.KVStreamPasses-s0.KVStreamPasses)
+		out = append(out, wc)
 	}
+	return out
 }
 
 // complete64 posts one greedy 128-token completion of prompt and reports
