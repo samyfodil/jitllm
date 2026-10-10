@@ -87,7 +87,7 @@ jobs:
   # seals them): the app links them into PATH and the Homebrew cask links them
   # from there. The signed bundle then goes into jitllm_<version>_darwin_<arch>.dmg
   # (packaging/macos/dmg.sh), itself signed, notarized and stapled under the
-  # same conditions.
+  # same conditions, and, zipped by ditto, into jitllm_<version>_darwin_<arch>.app.zip.
   macos-app:
     needs: goreleaser
     runs-on: macos-15
@@ -187,6 +187,12 @@ jobs:
               xcrun stapler staple "$app"
               rm -f "$work/app.zip"
             fi
+            # The bundle on its own, for those who skip the image: ditto
+            # keeps the signature, the stapled ticket and the links, which
+            # zip(1) does not.
+            appzip="jitllm_${ver}_darwin_${arch}.app.zip"
+            ditto -c -k --keepParent "$app" "$appzip"
+            resum "$appzip"
             dmg="jitllm_${ver}_darwin_${arch}.dmg"
             "$dmgsh" "$app" "$dmg"
             if [ "$id" != "-" ]; then
@@ -212,6 +218,7 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/*.dmg
+            dist/*.app.zip
             dist/checksums.txt
           retention-days: 7
 
@@ -221,8 +228,10 @@ jobs:
   # here on Linux. With WINDOWS_SIGN_PFX (the certificate's .pfx, base64) and
   # WINDOWS_SIGN_PASSWORD set, the three programs, the uninstaller and the
   # setup are Authenticode-signed; without them the setup is unsigned and
-  # SmartScreen warns on first run. After macos-app, which rewrites the same
-  # checksums.txt.
+  # SmartScreen warns on first run. Beside each setup, the portable desktop
+  # app, jitllm-desktop_<version>_windows_<arch>.exe: the GUI alone, signed
+  # the same way, which runs from wherever it is saved and installs nothing.
+  # After macos-app, which rewrites the same checksums.txt.
   windows-setup:
     needs: macos-app
     runs-on: ubuntu-24.04
@@ -252,13 +261,20 @@ jobs:
             export WINDOWS_SIGN_PFX="$RUNNER_TEMP/sign.pfx"
           fi
           ver=${GITHUB_REF_NAME#v}
+          resum() { # asset in dist: replace its checksums.txt line and upload it
+            (cd dist && sum=$(sha256sum "$1" | cut -d' ' -f1) &&
+              { grep -v " $1\$" checksums.txt || true; echo "$sum  $1"; } > checksums.new &&
+              mv checksums.new checksums.txt)
+            gh release upload "$GITHUB_REF_NAME" "dist/$1" --clobber --repo "$GITHUB_REPOSITORY"
+          }
           for arch in amd64 arm64; do
             setup="jitllm-setup_${ver}_windows_${arch}.exe"
             packaging/windows/build.sh "$ver" "$arch" dist "dist/$setup"
-            (cd dist && sum=$(sha256sum "$setup" | cut -d' ' -f1) &&
-              { grep -v " $setup\$" checksums.txt || true; echo "$sum  $setup"; } > checksums.new &&
-              mv checksums.new checksums.txt)
-            gh release upload "$GITHUB_REF_NAME" "dist/$setup" --clobber --repo "$GITHUB_REPOSITORY"
+            resum "$setup"
+            portable="jitllm-desktop_${ver}_windows_${arch}.exe"
+            unzip -q -o -p "dist/jitllm-desktop_${ver}_windows_${arch}.zip" jitllm-desktop.exe > "dist/$portable"
+            if [ -n "$PFX" ]; then packaging/windows/sign.sh "dist/$portable"; fi
+            resum "$portable"
           done
           rm -f "$RUNNER_TEMP/sign.pfx"
           gh release upload "$GITHUB_REF_NAME" dist/checksums.txt --clobber --repo "$GITHUB_REPOSITORY"
@@ -270,6 +286,7 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/*.dmg
+            dist/*.app.zip
             dist/*.exe
             dist/checksums.txt
           retention-days: 7
@@ -378,6 +395,37 @@ jobs:
           "$mnt/jitllm.app/Contents/Resources/bin/jitllm" version
           test -x "$mnt/jitllm.app/Contents/Resources/bin/jitllmd"
           hdiutil detach "$mnt"
+      # The zipped bundle: its checksum, unpacked by ditto as Finder does,
+      # its signature whole, and the programs inside it run.
+      - name: app zip (macos)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          cd dist
+          appzip=$(ls jitllm_*_"${{ matrix.target }}".app.zip)
+          grep " $appzip\$" checksums.txt | shasum -a 256 -c
+          out=$(mktemp -d)
+          ditto -x -k "$appzip" "$out"
+          codesign --verify --strict --deep --verbose=2 "$out/jitllm.app"
+          "$out/jitllm.app/Contents/Resources/bin/jitllm" version
+          "$out/jitllm.app/Contents/MacOS/jitllm-desktop" -version
+      # The portable desktop app: its checksum, a GUI program (subsystem 2),
+      # and -version answering with the release's version without a window.
+      - name: portable (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $arch = '${{ matrix.target }}'.Split('_')[1]
+          $exe = Get-ChildItem "dist/jitllm-desktop_*_windows_$arch.exe" | Select-Object -First 1
+          $want = (Select-String -Path dist/checksums.txt -Pattern (" " + $exe.Name + "$")).Line.Split(' ')[0]
+          if ((Get-FileHash -Algorithm SHA256 $exe.FullName).Hash -ne $want.ToUpper()) { throw "$($exe.Name) does not match its checksum" }
+          $p = Start-Process -Wait -PassThru -NoNewWindow -FilePath $exe.FullName -ArgumentList '-version' -RedirectStandardOutput portable.txt
+          $out = Get-Content portable.txt -Raw
+          Write-Output $out
+          if ($p.ExitCode -ne 0) { throw "$($exe.Name) -version exited $($p.ExitCode)" }
+          $ver = $exe.Name.Split('_')[1]
+          if ($out -notmatch [regex]::Escape("jitllm-desktop $ver")) { throw "$($exe.Name) -version did not print $ver" }
       # The setup as winget runs it: silent, per user. Then what it left --
       # the programs, the user PATH entry, the Add/Remove Programs entry --
       # and the silent uninstall taking all of it away again.
