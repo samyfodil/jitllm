@@ -241,6 +241,19 @@ jobs:
           go run ./cmd/pack syso -arch "$(go env GOARCH)"
           go build -ldflags -H=windowsgui -o jitllm-ui.exe .
           go run ./cmd/pack check jitllm-ui.exe
+      # The packaged GUI program started as a person starts it, in mock mode
+      # and on the real engine with no model; a crash report fails the step.
+      - name: jitllm-ui.exe smoke (windows)
+        if: runner.os == 'Windows'
+        working-directory: ui
+        run: ../.github/scripts/ui-smoke-windows.sh ./jitllm-ui.exe smoke
+      - uses: actions/upload-artifact@v7
+        if: runner.os == 'Windows' && always()
+        with:
+          name: jitllm-ui-windows-smoke
+          path: ui/smoke
+          if-no-files-found: ignore
+          retention-days: 7
       - name: package (macos)
         if: runner.os == 'macOS'
         working-directory: ui
