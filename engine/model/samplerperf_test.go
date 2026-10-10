@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // samplerPerfRatios drives the sampler A/B: the generated kernels against the

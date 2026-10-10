@@ -7,9 +7,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/samyfodil/jitllm/engine/grammar"
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/tok"
+	"github.com/jitllm/jitllm/engine/grammar"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/tok"
 )
 
 // Structured output: a generate constrained to a grammar (GBNF, or a JSON

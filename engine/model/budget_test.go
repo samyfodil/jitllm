@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // TestDeviceBudgetAccounting prints what a base-resident placement would cost,

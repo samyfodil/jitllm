@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/convert"
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // jlmOfPair converts a text model and its vision tower into one container

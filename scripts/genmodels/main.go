@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/samyfodil/jitllm/internal/modelsdoc"
+	"github.com/jitllm/jitllm/internal/modelsdoc"
 )
 
 func main() {

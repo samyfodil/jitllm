@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // roleOf is the source format's tensor-name vocabulary, and the only place it

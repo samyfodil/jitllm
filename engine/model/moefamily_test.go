@@ -5,8 +5,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // The mixture families (glm4moe, qwen2moe, hunyuan, ernie4_5) held to

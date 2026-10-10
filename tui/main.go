@@ -14,8 +14,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/muesli/termenv"
-	"github.com/samyfodil/jitllm/common/config"
-	"github.com/samyfodil/jitllm/common/engine"
+	"github.com/jitllm/jitllm/common/config"
+	"github.com/jitllm/jitllm/common/engine"
 )
 
 func main() {

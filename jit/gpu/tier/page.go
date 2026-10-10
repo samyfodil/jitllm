@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/engine/sched"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // Block paging: a device holds N block slots and swaps, instead of declining a

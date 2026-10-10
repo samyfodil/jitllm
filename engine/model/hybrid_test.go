@@ -2,16 +2,16 @@ package model
 
 import (
 	"encoding/binary"
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 	"math"
 	"math/rand"
 	"path/filepath"
 	"reflect"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // A hybrid, built out of ordinary Go values: qwen3next's geometry (16 key heads

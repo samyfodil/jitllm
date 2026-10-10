@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/tok/pretok"
+	"github.com/jitllm/jitllm/tok/pretok"
 )
 
 // falconPre is tiiuae/falcon-7b's pre_tokenizer, verbatim.

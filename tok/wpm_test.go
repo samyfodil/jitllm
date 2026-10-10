@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // wpmVocab is a hand-built WordPiece vocabulary in llama.cpp's spelling: a

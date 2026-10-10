@@ -3,7 +3,7 @@ package convert
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // GLM-4.xV's tower tensors (jlm.ProjGLM4V) as llama.cpp's converter writes

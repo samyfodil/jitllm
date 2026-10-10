@@ -3,7 +3,7 @@ package backend_test
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testlock"
 )
 
 // gpuLock serialises GPU tests across processes (internal/testlock):

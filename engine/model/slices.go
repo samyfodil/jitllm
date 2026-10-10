@@ -6,7 +6,7 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // A picture as a tower that reads any grid takes it: an overview and, when the

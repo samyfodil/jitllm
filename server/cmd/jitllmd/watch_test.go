@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/server"
+	"github.com/jitllm/jitllm/server"
 )
 
 // TestWatchStatsPrintsEachSnapshotAsItArrives is the second streaming gate.

@@ -5,7 +5,7 @@ package cpu_test
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // hostTable is the external package's view of the emitter table of the tier

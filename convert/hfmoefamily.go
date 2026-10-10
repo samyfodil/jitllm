@@ -6,7 +6,7 @@ import (
 	"math"
 	"strings"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // The mixture families from safetensors: GLM-4.5 (Glm4MoeForCausalLM),

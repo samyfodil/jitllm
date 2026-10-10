@@ -5,7 +5,7 @@ are not in it: they live in a volume mounted at `/models`.
 
 | | |
 |---|---|
-| image | `ghcr.io/samyfodil/jitllm:<version>` and `:latest`, linux/amd64 and linux/arm64 |
+| image | `ghcr.io/jitllm/jitllm:<version>` and `:latest`, linux/amd64 and linux/arm64 |
 | entrypoint | `jitllmd serve -addr :8080`; arguments to `docker run` are appended as more `serve` flags |
 | port | 8080: the OpenAI API (`/v1/chat/completions`, `/v1/completions`, `/v1/models`, `/v1/embeddings`), the Anthropic API (`/v1/messages`), the ConnectRPC control plane and `/healthz` |
 | volume | `/models`, scanned by the server and written by `jitllm convert` (`JITLLM_MODELS=/models`) |
@@ -42,7 +42,7 @@ from a GGUF already in the volume:
 
     docker volume create jitllm-models
     docker run --rm -v jitllm-models:/models --entrypoint jitllm \
-      ghcr.io/samyfodil/jitllm convert qwen3-30b-a3b
+      ghcr.io/jitllm/jitllm convert qwen3-30b-a3b
 
 A gated Hub repository needs a token: `-e HF_TOKEN=...`. `HF_ENDPOINT` points
 the download at a mirror.
@@ -60,7 +60,7 @@ a named volume is faster.
 ## Run on the CPU
 
     docker run -d --name jitllm -p 8080:8080 -v jitllm-models:/models \
-      ghcr.io/samyfodil/jitllm -load Qwen3-30B-A3B-Q4_K_M.jlm -id qwen3
+      ghcr.io/jitllm/jitllm -load Qwen3-30B-A3B-Q4_K_M.jlm -id qwen3
 
     curl localhost:8080/v1/models
     curl localhost:8080/v1/chat/completions -H 'Content-Type: application/json' \
@@ -86,11 +86,11 @@ The engine sizes itself from what the container is given:
 Change the published port with `-p 9000:8080` rather than `-addr`: the health
 check asks for port 8080.
 
-Every `serve` flag is available (`docker run --rm ghcr.io/samyfodil/jitllm -h`).
+Every `serve` flag is available (`docker run --rm ghcr.io/jitllm/jitllm -h`).
 The whole CLI is there too, for example a one-off decode:
 
     docker run --rm -v jitllm-models:/models --entrypoint jitllm \
-      ghcr.io/samyfodil/jitllm run -chat Qwen3-30B-A3B-Q4_K_M.jlm "What is the capital of France?"
+      ghcr.io/jitllm/jitllm run -chat Qwen3-30B-A3B-Q4_K_M.jlm "What is the capital of France?"
 
 ## Run on an NVIDIA GPU
 
@@ -101,9 +101,9 @@ registered with Docker (`sudo nvidia-ctk runtime configure --runtime=docker`,
 then restart Docker). Then add `--gpus all`:
 
     docker run -d --name jitllm --gpus all -p 8080:8080 -v jitllm-models:/models \
-      ghcr.io/samyfodil/jitllm -load Qwen3-30B-A3B-Q4_K_M.jlm -id qwen3 -devices cuda
+      ghcr.io/jitllm/jitllm -load Qwen3-30B-A3B-Q4_K_M.jlm -id qwen3 -devices cuda
 
-    docker run --rm --gpus all --entrypoint jitllm ghcr.io/samyfodil/jitllm hardware
+    docker run --rm --gpus all --entrypoint jitllm ghcr.io/jitllm/jitllm hardware
 
 `hardware` should list the card. What the toolkit mounts is chosen by
 `NVIDIA_DRIVER_CAPABILITIES`, which the image sets to
@@ -128,7 +128,7 @@ The image ships the Vulkan loader but no Mesa driver: NVIDIA's comes with the
 toolkit, and Mesa's would add its LLVM to every image. For an AMD or Intel GPU,
 extend the image with Mesa's drivers and pass the render node:
 
-    FROM ghcr.io/samyfodil/jitllm
+    FROM ghcr.io/jitllm/jitllm
     USER root
     RUN apt-get update \
      && apt-get install -y --no-install-recommends mesa-vulkan-drivers \
@@ -161,7 +161,7 @@ Every other `JITLLM_*` knob the CLI reads is passed the same way, with `-e`.
 
 `.goreleaser.yaml`'s `dockers_v2` builds the image from this Dockerfile with
 `BIN=dist`, copying the binaries the release archives carry instead of
-compiling again, and pushes `ghcr.io/samyfodil/jitllm:<version>` for both
+compiling again, and pushes `ghcr.io/jitllm/jitllm:<version>` for both
 platforms under one manifest. The release workflow moves `latest` to it only
 after the archives pass their smoke runs, and never to a prerelease. CI's
 `docker` job builds both platforms without pushing, then runs

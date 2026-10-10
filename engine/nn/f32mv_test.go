@@ -4,15 +4,15 @@ package nn_test
 
 import (
 	"encoding/binary"
-	"github.com/samyfodil/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/internal/oracle"
 	"math"
 	"math/rand"
 	"sort"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // topK is the MoE router's rule: the k largest, largest first, ties to the

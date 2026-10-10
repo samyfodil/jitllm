@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/samyfodil/jitllm/dev/httpbench/hb"
+	"github.com/jitllm/jitllm/dev/httpbench/hb"
 )
 
 type list []string

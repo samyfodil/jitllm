@@ -2,7 +2,7 @@
 
 package nn
 
-import "github.com/samyfodil/jitllm/engine/sched"
+import "github.com/jitllm/jitllm/engine/sched"
 
 // Option configures a JIT. The package reads no environment: cmd/jitllm reads
 // the JITLLM_* names and passes them here, so every knob is settable by an

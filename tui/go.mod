@@ -1,4 +1,4 @@
-module github.com/samyfodil/jitllm/tui
+module github.com/jitllm/jitllm/tui
 
 go 1.27.1
 
@@ -34,7 +34,7 @@ require (
 	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/samyfodil/jitllm/server v0.0.0 // indirect
+	github.com/jitllm/jitllm/server v0.0.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yuin/goldmark v1.7.13 // indirect
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
@@ -55,13 +55,13 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/muesli/termenv v0.16.0
 	github.com/sahilm/fuzzy v0.1.1
-	github.com/samyfodil/jitllm v0.0.0
-	github.com/samyfodil/jitllm/common v0.0.0
+	github.com/jitllm/jitllm v0.0.0
+	github.com/jitllm/jitllm/common v0.0.0
 )
 
 replace (
-	github.com/samyfodil/jitllm => ../
-	github.com/samyfodil/jitllm/common => ../common
+	github.com/jitllm/jitllm => ../
+	github.com/jitllm/jitllm/common => ../common
 )
 
-replace github.com/samyfodil/jitllm/server => ../server
+replace github.com/jitllm/jitllm/server => ../server

@@ -1,6 +1,6 @@
 package model
 
-import "github.com/samyfodil/jitllm/engine/nn"
+import "github.com/jitllm/jitllm/engine/nn"
 
 // MaxTopLogprobs is the most alternatives a Logprobs reports per token, the
 // OpenAI API's bound on top_logprobs.

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
 )
 
 // The CUDA backend opens a device by ordinal, and backend.Open still takes the

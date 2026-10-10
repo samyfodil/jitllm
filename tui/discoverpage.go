@@ -9,10 +9,10 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/samyfodil/jitllm/common/discover"
-	"github.com/samyfodil/jitllm/common/hardware"
-	"github.com/samyfodil/jitllm/common/session"
-	"github.com/samyfodil/jitllm/convert/library"
+	"github.com/jitllm/jitllm/common/discover"
+	"github.com/jitllm/jitllm/common/hardware"
+	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/convert/library"
 )
 
 type libItem struct {

@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"image/png"
 
-	"github.com/samyfodil/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/app"
 )
 
 // iconPNG is the app icon at size pixels square, PNG-encoded. Both formats

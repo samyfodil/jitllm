@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // scratchBytes is the host scratch a model's States hold -- pooled and in

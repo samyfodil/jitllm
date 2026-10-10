@@ -1,8 +1,8 @@
 package screen
 
 import (
-	"github.com/samyfodil/jitllm/common/convertjob"
-	"github.com/samyfodil/jitllm/ui/app"
+	"github.com/jitllm/jitllm/common/convertjob"
+	"github.com/jitllm/jitllm/ui/app"
 )
 
 // Conversion, the other half of this screen. The work is

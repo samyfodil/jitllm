@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/vulkan"
+	"github.com/jitllm/jitllm/jit/gpu/vulkan"
 )
 
 // TestMain fails the binary when any Vulkan enumeration in it shrank. A

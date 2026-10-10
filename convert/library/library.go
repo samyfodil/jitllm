@@ -15,7 +15,7 @@ package library
 import (
 	"strings"
 
-	"github.com/samyfodil/jitllm/convert/hf"
+	"github.com/jitllm/jitllm/convert/hf"
 )
 
 // Model is one fetchable model.

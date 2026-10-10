@@ -1,14 +1,14 @@
 package main
 
 import (
-	"github.com/samyfodil/jitllm/common/api"
+	"github.com/jitllm/jitllm/common/api"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/samyfodil/jitllm/common/config"
-	"github.com/samyfodil/jitllm/common/engine"
+	"github.com/jitllm/jitllm/common/config"
+	"github.com/jitllm/jitllm/common/engine"
 )
 
 // screen is which page fills the body.

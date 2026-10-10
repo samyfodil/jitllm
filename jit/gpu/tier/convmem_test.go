@@ -5,8 +5,8 @@ package tier
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // convBlocks is one convolutional block of each kind over an 8x8 grid of 32

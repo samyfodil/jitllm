@@ -3,7 +3,7 @@ package model
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // hfDenseSelected is what each dense llama-family safetensors fixture's

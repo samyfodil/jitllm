@@ -4,8 +4,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
-	"github.com/samyfodil/jitllm/jit/gpu/spirv"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/spirv"
 )
 
 // shuffleModule is the smallest kernel that needs a 32-lane subgroup: one

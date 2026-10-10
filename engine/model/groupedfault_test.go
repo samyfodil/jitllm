@@ -6,7 +6,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestBatchedMixtureFloatBanksDiscriminate runs the float-bank gate

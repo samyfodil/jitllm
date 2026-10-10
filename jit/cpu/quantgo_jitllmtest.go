@@ -2,7 +2,7 @@
 
 package cpu
 
-import "github.com/samyfodil/jitllm/internal/oracle"
+import "github.com/jitllm/jitllm/internal/oracle"
 
 // quantGoLoop is the Go arithmetic the generated quantizers replaced, kept
 // under the test tag as the other arm of the measurement that justifies them:

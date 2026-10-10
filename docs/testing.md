@@ -11,7 +11,7 @@ commit, all but one: `internal/testmodels/fetch.sh` downloads the rest (see
 | `JITLLM_MODEL_FREE` | `1`: a missing model skips instead of failing (CI only, see "What CI runs") | a missing model fails |
 
 The fallback is located by walking up from the test's working directory to the
-`go.mod` that declares `github.com/samyfodil/jitllm` -- so it is the same
+`go.mod` that declares `github.com/jitllm/jitllm` -- so it is the same
 directory from every package, including the nested `ui/` and `server/` modules.
 `models/` may be a symlink to a model disk; otherwise point the variable at
 the models instead of faking the link:

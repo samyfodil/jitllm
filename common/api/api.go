@@ -14,7 +14,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/samyfodil/jitllm/server"
+	"github.com/jitllm/jitllm/server"
 )
 
 // DefaultAddr is loopback only: turning the API on must not open it to the

@@ -3,7 +3,7 @@ package model
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // The modern text group's engine-side facts (format/jlm/archmoe2.go).

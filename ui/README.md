@@ -7,9 +7,9 @@ screen, and it turns structured counters back into text to scrape.
 
 ## Why this is its own module
 
-`github.com/samyfodil/jitllm` stays lean: its `go.mod` has one dependency and
+`github.com/jitllm/jitllm` stays lean: its `go.mod` has one dependency and
 this GUI must not be the reason that changes. The UI lives in
-`github.com/samyfodil/jitllm/ui`, which requires the engine through a
+`github.com/jitllm/jitllm/ui`, which requires the engine through a
 `replace` directive pointing at `../`.
 
 ## Build and run

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // A linear block's recurrent state is a session's, like an attention history,

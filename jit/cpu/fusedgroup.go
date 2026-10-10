@@ -1,8 +1,8 @@
 package cpu
 
 import (
-	"github.com/samyfodil/jitllm/format/quant"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // PackedFusedGroup is how many rows one iteration of the fused kernel covers,

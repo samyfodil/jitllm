@@ -1,6 +1,6 @@
 package kernels
 
-import "github.com/samyfodil/jitllm/jit/gpu/ir"
+import "github.com/jitllm/jitllm/jit/gpu/ir"
 
 // expertWeightsSparseMixer is Phi-3.5-MoE's router weights, the device twin of
 // jit/cpu's sparsemixer kernel (sparsemixer_const.go has the arithmetic).

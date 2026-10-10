@@ -4,8 +4,8 @@ import (
 	"sync"
 
 	"github.com/gogpu/ui/state"
-	"github.com/samyfodil/jitllm/common/catalog"
-	"github.com/samyfodil/jitllm/common/session"
+	"github.com/jitllm/jitllm/common/catalog"
+	"github.com/jitllm/jitllm/common/session"
 )
 
 // Store is every piece of state the screens share.

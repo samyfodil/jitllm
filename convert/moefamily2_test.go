@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/convert/meta"
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // TestPhimoeRefusesAHeadWidthTheFileDoesNotState is Phi-tiny-MoE's GGUF:

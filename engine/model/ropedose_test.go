@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // TestRopeTableDose prices the generated rotary table against the float64 Go

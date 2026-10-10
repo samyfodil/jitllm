@@ -3,8 +3,8 @@ package cpu
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // TestActWindowFollowsTheBlock: a model holding any 32-wide single-scale format

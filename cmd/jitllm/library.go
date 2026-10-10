@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/samyfodil/jitllm/convert/library"
+	"github.com/jitllm/jitllm/convert/library"
 )
 
 // libraryArgs lets convert take a library name: `jitllm convert qwen3-8b`

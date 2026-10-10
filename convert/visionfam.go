@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // The converter's half of the vision families whose codes sit at the top of

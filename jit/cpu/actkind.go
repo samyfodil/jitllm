@@ -1,6 +1,6 @@
 package cpu
 
-import "github.com/samyfodil/jitllm/jit/gpu/kernels"
+import "github.com/jitllm/jitllm/jit/gpu/kernels"
 
 // ActKind is the activation a kernel bakes in. It is the kernels package's
 // type, so the host emitters and the device kernels name the same set with the

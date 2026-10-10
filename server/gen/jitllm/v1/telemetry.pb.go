@@ -1104,8 +1104,8 @@ const file_jitllm_v1_telemetry_proto_rawDesc = "" +
 	"\bGetStats\x12\x1a.jitllm.v1.GetStatsRequest\x1a\x1b.jitllm.v1.GetStatsResponse\"\x00\x12K\n" +
 	"\n" +
 	"WatchStats\x12\x1c.jitllm.v1.WatchStatsRequest\x1a\x1b.jitllm.v1.GetStatsResponse\"\x000\x01\x12T\n" +
-	"\rGetServerInfo\x12\x1f.jitllm.v1.GetServerInfoRequest\x1a .jitllm.v1.GetServerInfoResponse\"\x00B\x9f\x01\n" +
-	"\rcom.jitllm.v1B\x0eTelemetryProtoP\x01Z9github.com/samyfodil/jitllm/server/gen/jitllm/v1;jitllmv1\xa2\x02\x03JXX\xaa\x02\tJitllm.V1\xca\x02\tJitllm\\V1\xe2\x02\x15Jitllm\\V1\\GPBMetadata\xea\x02\n" +
+	"\rGetServerInfo\x12\x1f.jitllm.v1.GetServerInfoRequest\x1a .jitllm.v1.GetServerInfoResponse\"\x00B\x9c\x01\n" +
+	"\rcom.jitllm.v1B\x0eTelemetryProtoP\x01Z6github.com/jitllm/jitllm/server/gen/jitllm/v1;jitllmv1\xa2\x02\x03JXX\xaa\x02\tJitllm.V1\xca\x02\tJitllm\\V1\xe2\x02\x15Jitllm\\V1\\GPBMetadata\xea\x02\n" +
 	"Jitllm::V1b\x06proto3"
 
 var (

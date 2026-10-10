@@ -15,7 +15,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ffi"
+	"github.com/jitllm/jitllm/jit/gpu/ffi"
 )
 
 // The Objective-C runtime, hand-bound: goffi has no objc package, and each

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestNoProductionCodeImportsTestModels walks every non-test Go file under the
@@ -18,7 +18,7 @@ import (
 // helper would be reading JITLLM_MODELS for a reason nobody documented.
 func TestNoProductionCodeImportsTestModels(t *testing.T) {
 	testmodels.SourceTree(t)
-	const me = "github.com/samyfodil/jitllm/internal/testmodels"
+	const me = "github.com/jitllm/jitllm/internal/testmodels"
 	root := filepath.Join("..", "..")
 	fset := token.NewFileSet()
 	checked := 0

@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestHotnessIsAProbability holds the measured profile to the shape tier.Place

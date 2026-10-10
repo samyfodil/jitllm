@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // quantTag is a publisher's quantization label in a file name: Q4_K_M, Q8_0,

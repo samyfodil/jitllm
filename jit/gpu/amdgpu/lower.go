@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // Lower translates a kernel into LLVM IR text for a target.

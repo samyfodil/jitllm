@@ -3,7 +3,7 @@ package tier
 import (
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // A lone matvec's weight is uploaded once and keyed on its address (resKey.p),

@@ -24,7 +24,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ffi"
+	"github.com/jitllm/jitllm/jit/gpu/ffi"
 )
 
 // Config is where ROCm is looked for. The zero value searches the default

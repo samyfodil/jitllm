@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/samyfodil/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/model"
 )
 
 // specFlags are -spec and its knobs, shared by run and speed.

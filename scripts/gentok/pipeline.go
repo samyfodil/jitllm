@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/samyfodil/jitllm/tok/pretok"
+	"github.com/jitllm/jitllm/tok/pretok"
 )
 
 // fetchPipeline reads a model's pre_tokenizer and returns its ordered ops, the

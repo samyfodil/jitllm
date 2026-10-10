@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // TestBatchMatchesForward holds ForwardBatch to the decode path it batches.

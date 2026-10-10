@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/common/catalog"
+	"github.com/jitllm/jitllm/common/catalog"
 )
 
 // A scan publishes once per probed container, and a file found on the way

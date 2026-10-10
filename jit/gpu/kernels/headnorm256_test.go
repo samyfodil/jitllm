@@ -1,11 +1,11 @@
 package kernels_test
 
 import (
-	"github.com/samyfodil/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/internal/oracle"
 	"math"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // TestHeadNormAtEveryRealHeadDim runs the per-head QK norm against nn.RMSNorm32

@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // TestDeviceCopyMovesExactlyTheRange: Device.Copy is how a recurrent pool's

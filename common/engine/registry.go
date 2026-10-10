@@ -3,9 +3,9 @@ package engine
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/common/session"
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/server"
+	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/server"
 )
 
 // entry is one model the app loaded into the engine. Its tier, opened with

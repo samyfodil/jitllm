@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/tok/pretok"
+	"github.com/jitllm/jitllm/tok/pretok"
 )
 
 // TestHunyuanSplitsAsItsTokenizerDoes runs the hunyuan-dense pre-tokenizer

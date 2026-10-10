@@ -5,9 +5,9 @@ package nn
 import (
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // MatMulPacked is MatVecPacked for many activation rows at once: out is
