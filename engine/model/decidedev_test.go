@@ -218,18 +218,42 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 						if worst > tol {
 							t.Errorf("the answers moved %.5f from the host's, past %.3f", worst, tol)
 						}
+						if !m.IsEncoder() {
+							// The labels' logits were picked on the device, and
+							// are the row's: the same placement reading the whole
+							// row back answers bit for bit. Picked one past each
+							// label, the answers move (the pick is what they read).
+							if picked == 0 {
+								t.Fatalf("no prompt's labels were picked on %s: the head's whole row came home", spec)
+							}
+							row, _, _, rowPicked := decideOn(t, m, g, -1, all, "no-pick")
+							if rowPicked != 0 {
+								t.Fatalf("the no-pick arm picked %d prompts", rowPicked)
+							}
+							if w := decisionDiff(t, got, row); w != 0 {
+								t.Errorf("the picked labels answer %.6f from the row's on the same device", w)
+							}
+							off, _, _, _ := decideOn(t, m, g, -1, all, "pick-off-by-one")
+							seen := decisionDiff(t, got, off)
+							t.Logf("%d prompts picked on %s; picked one past each label, the answers move %.5f", picked, spec, seen)
+							if seen <= tol {
+								t.Errorf("a pick one past each label moved the answers %.5f: the gate does not see the pick", seen)
+							}
+						}
 						v, ok := decisionDevViolations[c.name]
 						if !ok {
 							t.Fatalf("%s has no device violation", c.name)
 						}
-						// A fresh device: the clean arm's blocks stay resident on g
-						// for whoever attaches next (a decoder State's Close
-						// leaves them), and would be shared rather than offered.
+						// A fresh device, with g's room given back first: the
+						// clean arm's blocks stay resident on g for whoever
+						// attaches next (a decoder State's Close leaves them),
+						// and would be shared rather than offered.
+						g.Close()
 						gv := open()
+						defer gv.Close()
 						undo := v.cut(m)
 						bad, n, _, _ := decideOn(t, m, gv, -1, all)
 						undo()
-						gv.Close()
 						if bad == nil {
 							t.Fatalf("%s: the device held %d of %d blocks", v.name, n, nb)
 						}
@@ -237,29 +261,6 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 						t.Logf("%s on %d device blocks moves the answers %.5f", v.name, n, seen)
 						if seen <= tol {
 							t.Errorf("%s moved the answers %.5f on %d blocks: the gate does not see it", v.name, seen, n)
-						}
-						if m.IsEncoder() {
-							return
-						}
-						// The labels' logits were picked on the device, and are
-						// the row's: the same placement reading the whole row
-						// back answers bit for bit. Picked one past each label,
-						// the answers move (the pick is what they read).
-						if picked == 0 {
-							t.Fatalf("no prompt's labels were picked on %s: the head's whole row came home", spec)
-						}
-						row, _, _, rowPicked := decideOn(t, m, g, -1, all, "no-pick")
-						if rowPicked != 0 {
-							t.Fatalf("the no-pick arm picked %d prompts", rowPicked)
-						}
-						if w := decisionDiff(t, got, row); w != 0 {
-							t.Errorf("the picked labels answer %.6f from the row's on the same device", w)
-						}
-						off, _, _, _ := decideOn(t, m, g, -1, all, "pick-off-by-one")
-						seen = decisionDiff(t, got, off)
-						t.Logf("%d prompts picked on %s; picked one past each label, the answers move %.5f", picked, spec, seen)
-						if seen <= tol {
-							t.Errorf("a pick one past each label moved the answers %.5f: the gate does not see the pick", seen)
 						}
 					})
 				})

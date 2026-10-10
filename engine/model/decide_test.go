@@ -94,13 +94,13 @@ var decisionRequests = []string{"support", "ambiguous"}
 const decisionSeen = 0.03
 
 // openDecision opens a case's model, or skips it as missing.
-func openDecision(t *testing.T, gguf string, kind jlm.DecisionKind) *Model {
+func openDecision(t *testing.T, gguf string, kind jlm.DecisionKind, opts ...Option) *Model {
 	t.Helper()
 	src := testmodels.Path(gguf)
 	if _, err := os.Stat(src); err != nil {
 		testmodels.Missing(t, "%s (scripts/decisiongold.sh names its source)", src)
 	}
-	m, err := Open(jlmOf(t, src))
+	m, err := Open(jlmOf(t, src), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}

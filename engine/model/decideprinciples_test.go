@@ -160,7 +160,7 @@ func TestDecisionRelocatesBetweenDevices(t *testing.T) {
 		kind       jlm.DecisionKind
 	}{{"laya-fixture", "laya/fixture/laya-fixture.gguf", jlm.DecisionLaya}}, decisionNames()...) {
 		t.Run(c.name, func(t *testing.T) {
-			m := openDecision(t, c.gguf, c.kind)
+			m := openDecision(t, c.gguf, c.kind, noTune)
 			defer m.Close()
 			if !m.IsEncoder() {
 				m.SetKVF16(false)
@@ -208,6 +208,8 @@ func TestDecisionRelocatesBetweenDevices(t *testing.T) {
 			if n := d.DeviceBlocks(); n != 0 {
 				t.Fatalf("%d blocks stayed on a device", n)
 			}
+			// Bit for bit: the host's kernels are untuned (noTune), so the
+			// arm64 host does not pick another reduction order on a re-run.
 			if w := decisionDiffRow(t, host, answer()); w != 0 {
 				t.Errorf("home again, the answers moved %.6f from the host's first", w)
 			}
