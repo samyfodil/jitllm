@@ -131,9 +131,18 @@ Every client command takes `-addr` (`host:port`, `:port` or a full URL; default 
 | `-gpu-layers N` | -1 | at most N blocks on a device; -1 is as many as fit |
 | `-sessions N` | 1 | concurrent sessions each linear device block reserves a recurrent state for; attention history is paged and reserves nothing |
 | `-max-seq N` | model's context | default KV capacity per session, in positions |
-| `-max-batch N` | 0 | requests of one device model that decode as rows of one step; 0 is the widest step the device runs, 1 turns batching off |
+| `-max-batch N` | 0 | requests of one model (on one device, or wholly on the CPU) that decode as rows of one step; 0 is the engine's bound, 1 turns batching off |
 | `-prompt-chunk N` | 0 | prompt tokens a joining request feeds into one shared step; 0 is one device prefill chunk |
+| `-step-prompt-tokens N` | 0 | prompt tokens one step carries beside decoding rows; 0 measures the tokens that cost one decode step's time |
+| `-step-cost X` | 0 | with `-step-prompt-tokens 0`, how many decode steps' time a step carrying prompt tokens may take |
 | `-joint-steps MODE` | `auto` | `auto` times a joint step against the rows one after another and runs the faster; `always` or `never` |
+| `-warm` | true | after every load, run a short prefill and a decode step so the first request does not pay for them |
+| `-no-mem-cache` | false | turn off each model's memory cache: every request prefills its whole prompt |
+| `-mem-cache-max SIZE` | an eighth of the model's host share | bound each model's memory cache |
+| `-host-mem SIZE` | eight tenths of what the host has | host memory the loaded models divide |
+| `-session-pool N` | 0 | reset sessions each model keeps for requests; 0 is `-sessions`, -1 none |
+| `-max-queue N` | 0 | requests one model holds, running or waiting, before it answers 429; 0 is 64, -1 unbounded |
+| `-retry-after D` | `1s` | the `Retry-After` a 429 for a full queue names |
 | `-kv-f16` | engine's own | the KV cache width of every load that names none: `-kv-f16` binary16, `-kv-f16=false` f32 |
 | `-kv-cache DIR` | | where sessions created with `prompt_cache` keep their prompt prefixes; without it such a session is refused |
 | `-kv-cache-max SIZE` | `8G` | what `-kv-cache` may occupy before its least recently used pages go; 0 is unbounded |

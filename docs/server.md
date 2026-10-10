@@ -19,8 +19,13 @@ Anthropic `tool_use` blocks. `ignore_eos` on the OpenAI endpoints and the
 Connect `GenerateRequest` (`jitllmd run -ignore-eos`) keeps generating past the
 stop tokens until `max_tokens` or the end of the session's context. A request
 with no `max_tokens` runs until the model ends its reply or fills the context;
-either way a reply that reaches the end of the context finishes as `length`. Generates of one model placed wholly on a device
-decode together as rows of one step (`-max-batch`).
+either way a reply that reaches the end of the context finishes as `length`. Generates of one model placed wholly on one device, or wholly on the host,
+decode together as rows of one step (`-max-batch`). A model's queue holds
+`-max-queue` requests (64 by default) before it answers 429 with a
+`Retry-After`. Under a model's KV budget (`Engine.SetKVBudget`, an embedding
+API with no flag yet) a generate parks idle sessions of the model, lowest
+priority then least recently stepped, into its memory cache, and a parked
+session resumes byte for byte at its next generate.
 
 `logprobs` is OpenAI's on both endpoints: on chat `logprobs: true` with
 `top_logprobs` 0..20 (`choices[].logprobs.content`), on `/v1/completions` an
@@ -85,7 +90,7 @@ prompt store a Speculator does not use).
 
 | `jitllmd` verb | What it does |
 |---|---|
-| `serve` | run the daemon (`-addr`, `-models`, `-load`, `-id`, `-devices`, `-maxmem`, `-max-batch`) |
+| `serve` | run the daemon (`-addr`, `-models`, `-load`, `-id`, `-devices`, `-maxmem`, `-max-batch`, `-max-queue`, `-kv-cache`; `jitllmd serve -h` lists every flag) |
 | `run` | stream a generation from a running daemon |
 | `models` | list, describe, load and unload models |
 | `devices` | the hardware and the memory that is actually spendable |

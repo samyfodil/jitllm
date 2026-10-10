@@ -55,8 +55,11 @@ func main() {
 | `Model.SetPageBudget` | host weight residency |
 | `State.SetGPULayers`, `State.SetDevice` | move execution between devices, with the history |
 | `State.SetKVStore`, `State.PrefillCached` | KV spill and prefix reuse |
+| `State.ShareKV`, `model.NewSharedStore` | one copy of a prompt prefix's pages across sessions |
+| `State.Park`, `State.Resume` | preemption: a session's history home and out to a store, then back |
+| `model.WithKVType` | the KV cache's format: f32, f16 or q8_0 |
 | `Model.NewEmbedder` | embeddings |
-| `model.Scheduler`, `model.Step` | several sequences in one batched step |
+| `model.Scheduler`, `model.Step`, `model.StepRuns` | several sequences or sessions in one batched step, on a device or the host |
 
 See the [model API](../engine/model/) and the [device tier](../jit/gpu/tier/).
 
