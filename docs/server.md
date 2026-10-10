@@ -81,6 +81,37 @@ prefills alone (not through the step loop or the session's prompt store), a
 `continue_session` generate decodes plainly, and a session whose speculative
 reply was cut by a stop string inside a round refuses `continue_session`.
 
+Pictures: on a model whose container carries a vision tower, a chat request
+may carry pictures -- OpenAI `image_url` content parts on
+`/v1/chat/completions`, Anthropic `image` blocks on `/v1/messages`. PNG, JPEG,
+WebP and GIF (its first frame) are decoded, inline as a `data:` URL
+(`data:image/png;base64,...`) or an Anthropic `base64` source whose
+`media_type` must match the bytes. The pictures keep the order the client sent
+them and go where the model's own chat template puts its image markers (a
+turn's pictures before its text); each is a span of the prompt, named by its
+`ImageKey`, so the prefix cache names the rows after it as it names text. A picture is preprocessed and encoded by the model's tower exactly
+as `jitllm run -image` does it.
+
+| Limit | Default | `jitllmd serve` flag |
+|---|---|---|
+| encoded bytes per picture | 20 MiB | `-image-max` |
+| pixels (width x height) per picture, read from the header before decoding | 4096 x 4096 | `-image-max-pixels` |
+| pictures per request | 8 | `-image-max-count` |
+| remote `http(s)` URLs | not fetched | `-image-fetch` (with `-image-fetch-timeout`, 10 s) |
+
+Remote fetching is off by default, because a server that fetches what a
+request names is a proxy into its own network. With `-image-fetch`
+(`Config.Images.FetchRemote`) an `http(s)` image URL or Anthropic `url` source
+is fetched with the byte limit and timeout above, at most three redirects, no
+proxy, and a connection to a loopback, private, link-local, shared (100.64/10),
+multicast or unspecified address refused as it is dialled. Every refusal is a
+400 naming the part (`messages[0].content[1].image_url ...`): a picture sent
+to a model with no tower ("model X does not accept images"), an unsupported
+or mismatched type, a picture over a limit, undecodable bytes, a remote URL
+with fetching off (the message says how to turn it on), and an audio or file
+part. A request with pictures prefills alone rather than as a row of the step
+loop, and refuses `n` above 1, `tools`, and `continue_session`.
+
 With each other: `logprobs` on a constrained reply are the raw distribution's,
 before the grammar's mask, as vLLM's default does; `n` with a grammar
 constrains every choice; speculation with `logprobs` or with `n` is refused
