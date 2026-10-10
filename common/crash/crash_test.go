@@ -1,0 +1,163 @@
+package crash
+
+import (
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime/debug"
+	"strings"
+	"testing"
+)
+
+// The child half of the fatal tests: it arms the directory and dies the way
+// the env var says, in a way recover cannot catch.
+func TestMain(m *testing.M) {
+	if d := os.Getenv("CRASH_CHILD_DIR"); d != "" {
+		if _, err := Arm(d, nil, os.Getenv("CRASH_CHILD_KIND") == "overflow"); err != nil {
+			panic(err)
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			panic(err)
+		}
+		switch os.Getenv("CRASH_CHILD_KIND") {
+		case "panic":
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				panic("boom in a worker reading " + filepath.Join(home, "models"))
+			}()
+			<-done
+		case "overflow":
+			debug.SetMaxStack(1 << 20)
+			var f func(int) int
+			f = func(n int) int { return f(n+1) + 1 }
+			f(0)
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+func runChild(t *testing.T, dir, kind string) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), "CRASH_CHILD_DIR="+dir, "CRASH_CHILD_KIND="+kind)
+	if err := cmd.Run(); err == nil {
+		t.Fatalf("the %s child exited cleanly; it was to crash", kind)
+	}
+}
+
+// A fatal error recover cannot catch reaches the next launch as a report with
+// the whole traceback, home shortened, shown once. The panic child has a
+// console (the crash output alone); the overflow child has none, so its
+// standard error is the file and the "fatal error" line, which the runtime
+// prints only there, is in the report.
+func TestFatalCrashIsReportedOnTheNextLaunch(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || len(home) < 2 {
+		t.Fatal("no home directory to scrub")
+	}
+	for _, c := range []struct{ kind, want string }{
+		{"panic", "panic: boom in a worker reading ~"},
+		{"overflow", "fatal error: stack overflow"},
+	} {
+		t.Run(c.kind, func(t *testing.T) {
+			dir := t.TempDir()
+			runChild(t, dir, c.kind)
+			SetInfo(Info{App: "jitllm-desktop", Version: "test"})
+			rep, err := Arm(dir, []string{"loaded " + filepath.Join(home, "m.jlm")}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rep == nil {
+				t.Fatal("no report from a run that crashed")
+			}
+			for _, w := range []string{c.want, "goroutine ", "crash_test.go", "os: ", "last log lines:", "loaded ~"} {
+				if !strings.Contains(rep.Text, w) {
+					t.Errorf("report lacks %q:\n%s", w, rep.Text)
+				}
+			}
+			if strings.Contains(strings.ToLower(rep.Text), strings.ToLower(home)) {
+				t.Errorf("report carries the home directory %q", home)
+			}
+			if !strings.HasPrefix(rep.Title, "jitllm-desktop crash: ") {
+				t.Errorf("title %q", rep.Title)
+			}
+			saved, err := os.ReadFile(filepath.Join(dir, reportFile))
+			if err != nil || string(saved) != rep.Text {
+				t.Errorf("saved report differs from the shown one (%v)", err)
+			}
+			again, err := Arm(dir, nil, false)
+			if err != nil || again != nil {
+				t.Errorf("the same crash reported twice (%v)", err)
+			}
+		})
+	}
+}
+
+// A recovered panic is handed to the handler with the panicking goroutine's
+// stack, and the goroutine ends rather than the process.
+func TestRecoverReportsAndKeepsTheProcess(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Arm(dir, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan Report, 1)
+	OnReport(func(r Report) { got <- r })
+	defer OnReport(nil)
+	go func() {
+		defer Recover("test worker")
+		var m map[string]int
+		m["x"] = 1
+	}()
+	r := <-got
+	for _, w := range []string{"assignment to entry in nil map", "recovered in test worker", "crash_test.go", "goroutine "} {
+		if !strings.Contains(r.Text, w) {
+			t.Errorf("report lacks %q:\n%s", w, r.Text)
+		}
+	}
+	if r.Path == "" {
+		t.Error("report not saved")
+	}
+}
+
+// The issue link opens the right page with a title, and stays under the bound
+// however long the report.
+func TestIssueURLIsWellFormedAndBounded(t *testing.T) {
+	for _, n := range []int{10, 100000} {
+		r := Report{Title: "jitllm-desktop crash: panic: x & y", Text: strings.Repeat("goroutine 1 [running]:\n", n/20+1)}
+		u := IssueURL(r)
+		if len(u) > MaxIssueURL {
+			t.Fatalf("link of %d bytes, bound %d", len(u), MaxIssueURL)
+		}
+		p, err := url.Parse(u)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Scheme+"://"+p.Host+p.Path != IssueBase {
+			t.Errorf("link goes to %s", u)
+		}
+		q := p.Query()
+		if q.Get("title") != r.Title || !strings.Contains(q.Get("body"), "goroutine 1") {
+			t.Errorf("title %q body %q", q.Get("title"), q.Get("body"))
+		}
+		long := len(r.Text) > MaxIssueURL
+		if long != strings.Contains(q.Get("body"), "paste it here") {
+			t.Errorf("a %d-byte report: summary note present = %v", len(r.Text), !long)
+		}
+	}
+}
+
+func TestScrubShortensHomeInBothSlashes(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || len(home) < 2 {
+		t.Fatal("no home directory")
+	}
+	in := home + "/a " + strings.ReplaceAll(home, "/", `\`) + `\b ` + strings.ToUpper(home)
+	out := Scrub(in)
+	if strings.Contains(strings.ToLower(out), strings.ToLower(filepath.Base(home))) {
+		t.Errorf("Scrub(%q) = %q", in, out)
+	}
+}

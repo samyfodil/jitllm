@@ -26,12 +26,14 @@ import (
 	"image"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
+	"github.com/jitllm/jitllm/common/crash"
 	"github.com/jitllm/jitllm/common/session"
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
@@ -116,8 +118,22 @@ func (e *Engine) Server() *server.Engine { return e.srv }
 func (e *Engine) run() {
 	defer close(e.done)
 	for fn := range e.cmds {
-		fn()
+		e.do(fn)
 	}
+}
+
+// do runs one command. A panic in it is reported (package crash) and ends the
+// command, not the worker: the window stays up to show the report, and a
+// later command -- Close above all -- still runs. A reply cut off by it is no
+// longer streaming.
+func (e *Engine) do(fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			crash.Handle("engine worker", r, debug.Stack())
+			e.st.Streaming.Set(false)
+		}
+	}()
+	fn()
 }
 
 // post queues work for the worker. It reports whether the queue took it: a
