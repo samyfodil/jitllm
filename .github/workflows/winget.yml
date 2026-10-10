@@ -72,6 +72,7 @@ jobs:
 
   check:
     needs: setups
+    timeout-minutes: 30
     if: ${{ !cancelled() && (inputs.release || needs.setups.result == 'success') }}
     strategy:
       fail-fast: false
@@ -98,7 +99,6 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-            Install-PackageProvider -Name NuGet -Force -Scope CurrentUser | Out-Null
             Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery -Scope CurrentUser
             Repair-WinGetPackageManager -AllUsers -Latest -Force
             $wa = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
@@ -132,7 +132,17 @@ jobs:
               try { Invoke-WebRequest -UseBasicParsing -Method Head http://127.0.0.1:8765/checksums.txt | Out-Null; break } catch { Start-Sleep 1 }
             }
             winget validate --manifest $env:MANIFEST
-            winget install --manifest $env:MANIFEST --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+            # Bounded: an installer that waits on something never ends the
+            # step, so after five minutes show what is still running and
+            # winget's own log, and fail.
+            $install = Start-Process -PassThru -NoNewWindow -FilePath winget -ArgumentList 'install', '--manifest', $env:MANIFEST, '--silent', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity', '--verbose-logs'
+            $null = $install.Handle # keeps the exit code readable after WaitForExit
+            if (-not $install.WaitForExit(300000)) {
+              Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, CommandLine | Format-Table -AutoSize -Wrap | Out-String -Width 400
+              Get-ChildItem "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir" -ErrorAction SilentlyContinue | Get-Content -Tail 60
+              throw "winget install did not finish in five minutes"
+            }
+            if ($install.ExitCode -ne 0) { throw "winget install exited $($install.ExitCode)" }
             # A new shell's PATH: the machine's and the user's from the
             # registry, not this process's inherited one.
             $path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
