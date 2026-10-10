@@ -23,8 +23,10 @@ import (
 
 // preemptStats counts what preemption did, for Stats and the gates.
 type preemptStats struct {
-	parks, resumes     atomic.Int64
-	pagesOut, pagesIn  atomic.Int64
+	parks, resumes    atomic.Int64
+	pagesOut, pagesIn atomic.Int64
+	// blocksHome is the blocks parking brought home from a device.
+	blocksHome         atomic.Int64
 	overBudgetAdmitted atomic.Int64
 }
 
@@ -59,20 +61,8 @@ func (e *Engine) PreemptCounts() (parks, resumes, pagesOut, pagesIn int64) {
 // is parked, then parks other sessions of its model until the model's
 // histories fit its KV budget with s's grown one. The caller holds s.mu.
 func (e *Engine) admitKV(s *Session, grow int) error {
-	if s.st.Parked() {
-		in, err := s.st.Resume()
-		if err != nil {
-			return fmt.Errorf("server: session %q could not resume: %w", s.id, err)
-		}
-		if s.parkView != nil {
-			// Every page is back in the session: the memory cache may evict
-			// them in their turn from here.
-			s.parkView.Release()
-			s.parkView = nil
-		}
-		s.parked.Store(false)
-		e.preempt.resumes.Add(1)
-		e.preempt.pagesIn.Add(int64(in))
+	if err := e.resumeLocked(s); err != nil {
+		return err
 	}
 	lm := s.lm
 	lm.mu.Lock()
@@ -135,9 +125,37 @@ func (e *Engine) park(v *Session) (bool, error) {
 		return false, nil
 	}
 	defer v.mu.Unlock()
+	return true, e.parkLocked(v)
+}
+
+// resumeLocked resumes s if it is parked. The caller holds s.mu, or is the
+// step loop that owns s's row.
+func (e *Engine) resumeLocked(s *Session) error {
+	if !s.st.Parked() {
+		return nil
+	}
+	in, err := s.st.Resume()
+	if err != nil {
+		return fmt.Errorf("server: session %q could not resume: %w", s.id, err)
+	}
+	if s.parkView != nil {
+		// Every page is back in the session: the memory cache may evict
+		// them in their turn from here.
+		s.parkView.Release()
+		s.parkView = nil
+	}
+	s.parked.Store(false)
+	e.preempt.resumes.Add(1)
+	e.preempt.pagesIn.Add(int64(in))
+	return nil
+}
+
+// parkLocked parks v. The caller holds v.mu, or is the step loop that owns
+// v's row (a time slice, batchfair.go).
+func (e *Engine) parkLocked(v *Session) error {
 	if v.closed.Load() || v.st.Parked() {
 		v.snapHist.Store(0)
-		return true, nil
+		return nil
 	}
 	var ps model.ParkStats
 	var err error
@@ -152,12 +170,13 @@ func (e *Engine) park(v *Session) (bool, error) {
 		ps, err = v.st.Park()
 	}
 	if err != nil {
-		return false, fmt.Errorf("server: parking session %q: %w", v.id, err)
+		return fmt.Errorf("server: parking session %q: %w", v.id, err)
 	}
 	v.parked.Store(true)
 	v.snapHist.Store(0)
 	e.preempt.parks.Add(1)
 	e.preempt.pagesOut.Add(int64(ps.PagesOut))
+	e.preempt.blocksHome.Add(int64(ps.Blocks))
 	v.refresh()
-	return true, nil
+	return nil
 }
