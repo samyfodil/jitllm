@@ -1150,6 +1150,9 @@ type Model struct {
 	// sampleChoices is the device sampler's measured verdicts, per key
 	// (devsample.go).
 	sampleChoices sampleChoices
+	// chatTemplates are the chat templates compiled, by source: a request
+	// renders its model's template, not compiles it (chat.go).
+	chatTemplates sync.Map
 	// preloadStop, preloadDone and preloadErr are WithPreload's background
 	// read: Close closes the first and waits on the second.
 	preloadStop, preloadDone chan struct{}

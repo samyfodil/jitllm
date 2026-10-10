@@ -1105,6 +1105,11 @@ type ChatInput struct {
 	// Tools is the tool list the template renders, a JSON array in the
 	// OpenAI shape ([{"type": "function", "function": {...}}]); nil for none.
 	Tools []byte
+	// ToolChoice is what the reply may do with Tools. One that forces a
+	// call (required, or a named tool) holds the reply to the model's own
+	// tool-call syntax around the tool's schema (tools.go); every choice is
+	// handed to a template that reads tool_choice.
+	ToolChoice model.ToolChoice
 }
 
 // Prompt is what a generate runs: the member Kind names is the one read.
@@ -1198,6 +1203,10 @@ type Started struct {
 	// store rather than being computed: all of them for every choice of an
 	// n > 1 request but the first.
 	Restored int
+	// Tools reads this choice's tool calls from its tokens, in the model's
+	// own syntax, when the request declared tools; nil otherwise. A shim
+	// feeds it every Token's ID (tools.go).
+	Tools *model.ToolStream
 }
 
 // Token is one step of the output. Every sampled token is sent, its Text
@@ -1415,7 +1424,16 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 			"from one verification and reads back no distribution for each", ErrInvalid)
 	}
 	var con *constraint
-	if o.Grammar != "" {
+	if tc, err := lm.toolConstraint(o, ids); err != nil {
+		return err
+	} else if tc != nil {
+		if o.IgnoreEOS {
+			return fmt.Errorf("%w: a forced tool call ends its reply with an end-of-generation token, "+
+				"and ignore_eos would run past it", ErrInvalid)
+		}
+		con = tc
+		speculate = false
+	} else if o.Grammar != "" {
 		if o.IgnoreEOS {
 			return fmt.Errorf("%w: a grammar ends its reply with an end-of-generation token, and ignore_eos "+
 				"would run past it", ErrInvalid)
@@ -1527,6 +1545,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		Prefill:      prefill,
 		Execution:    ExecutionParallel,
 		Restored:     restored,
+		Tools:        lm.toolStream(o),
 	}}); err != nil {
 		return err
 	}
@@ -1789,7 +1808,7 @@ func (e *Engine) encode(lm *LoadedModel, p Prompt) ([]int32, error) {
 			// template takes a message list, so it is prepended.
 			msgs = append([]model.ChatMessage{{Role: "system", Content: p.Chat.System}}, msgs...)
 		}
-		return lm.m.ChatIDsTools(msgs, p.Chat.Tools, p.Chat.AddGenerationPrompt)
+		return lm.m.ChatIDsToolChoice(msgs, p.Chat.Tools, p.Chat.ToolChoice, p.Chat.AddGenerationPrompt)
 	case PromptNone, PromptSpans:
 		return nil, nil
 	}
