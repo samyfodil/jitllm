@@ -81,6 +81,13 @@ jobs:
   # and the archive repacked. Its line in checksums.txt, the release's assets
   # and the dist artifact the smoke runs read are all replaced, so what is
   # tested is what is shipped.
+  #
+  # The bundle also carries the CLI and the server, from their own darwin
+  # archives, under Contents/Resources/bin (signed before the bundle that
+  # seals them): the app links them into PATH and the Homebrew cask links them
+  # from there. The signed bundle then goes into jitllm_<version>_darwin_<arch>.dmg
+  # (packaging/macos/dmg.sh), itself signed, notarized and stapled under the
+  # same conditions.
   macos-app:
     needs: goreleaser
     runs-on: macos-15
@@ -92,7 +99,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: .github/release
+          sparse-checkout: |
+            .github/release
+            packaging/macos
       - uses: actions/download-artifact@v8
         with:
           name: dist
@@ -112,6 +121,8 @@ jobs:
           security unlock-keychain -p "$kpw" "$kc"
           security import "$RUNNER_TEMP/sign.p12" -k "$kc" -P "$MACOS_SIGN_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k "$kpw" "$kc"
+          # The search list is one name per word: unquoted on purpose.
+          # shellcheck disable=SC2046
           security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
           rm "$RUNNER_TEMP/sign.p12"
           id=$(security find-identity -v -p codesigning "$kc" | awk -F'"' '/Developer ID Application/{print $2; exit}')
@@ -126,35 +137,64 @@ jobs:
         run: |
           set -euo pipefail
           ent="$PWD/.github/release/entitlements.plist"
+          dmgsh="$PWD/packaging/macos/dmg.sh"
           id="${SIGN_ID:--}"
           ts=""
           if [ "$id" != "-" ]; then ts=--timestamp; fi
+          notarize() { # file: submit to the notary service and wait
+            key="$RUNNER_TEMP/notary.p8"
+            printf '%s' "$MACOS_NOTARY_KEY" > "$key"
+            xcrun notarytool submit "$1" --key "$key" \
+              --key-id "$MACOS_NOTARY_KEY_ID" --issuer "$MACOS_NOTARY_ISSUER_ID" --wait
+            rm -f "$key"
+          }
+          resum() { # asset: replace its checksums.txt line and upload it
+            sum=$(shasum -a 256 "$1" | awk '{print $1}')
+            grep -v " $1\$" checksums.txt > checksums.new || true
+            echo "$sum  $1" >> checksums.new
+            mv checksums.new checksums.txt
+            gh release upload "$GITHUB_REF_NAME" "$1" --clobber --repo "$GITHUB_REPOSITORY"
+          }
           cd dist
           for archive in jitllm-desktop_*_darwin_*.tar.gz; do
+            # jitllm-desktop_<version>_darwin_<arch>.tar.gz
+            rest=${archive#jitllm-desktop_}
+            ver=${rest%%_darwin_*}
+            arch=${rest##*_darwin_}
+            arch=${arch%.tar.gz}
             work=$(mktemp -d)
             tar -xzf "$archive" -C "$work"
             app="$work/jitllm.app"
             test -d "$app"
+            mkdir -p "$app/Contents/Resources/bin"
+            for prog in jitllm jitllmd; do
+              tar -xzf "${prog}_${ver}_darwin_${arch}.tar.gz" -C "$app/Contents/Resources/bin" "$prog"
+            done
+            codesign --force --options runtime $ts --entitlements "$ent" -s "$id" "$app/Contents/Resources/bin/"*
             codesign --force --options runtime $ts --entitlements "$ent" -s "$id" "$app/Contents/MacOS/"*
             codesign --force --options runtime $ts --entitlements "$ent" -s "$id" "$app"
-            codesign --verify --strict --verbose=2 "$app"
+            codesign --verify --strict --deep --verbose=2 "$app"
+            "$app/Contents/Resources/bin/jitllm" version
             if [ "$id" != "-" ] && [ -n "$MACOS_NOTARY_KEY" ]; then
-              key="$RUNNER_TEMP/notary.p8"
-              printf '%s' "$MACOS_NOTARY_KEY" > "$key"
               ditto -c -k --keepParent "$app" "$work/app.zip"
-              xcrun notarytool submit "$work/app.zip" --key "$key" \
-                --key-id "$MACOS_NOTARY_KEY_ID" --issuer "$MACOS_NOTARY_ISSUER_ID" --wait
+              notarize "$work/app.zip"
               xcrun stapler staple "$app"
-              rm -f "$key" "$work/app.zip"
+              rm -f "$work/app.zip"
             fi
+            dmg="jitllm_${ver}_darwin_${arch}.dmg"
+            "$dmgsh" "$app" "$dmg"
+            if [ "$id" != "-" ]; then
+              codesign --force $ts -s "$id" "$dmg"
+              if [ -n "$MACOS_NOTARY_KEY" ]; then
+                notarize "$dmg"
+                xcrun stapler staple "$dmg"
+              fi
+            fi
+            resum "$dmg"
             # The archive's other entries (the bare binary, README, LICENSE)
             # go back as they were; only the bundle changed.
-            (cd "$work" && tar -czf "$OLDPWD/$archive" *)
-            sum=$(shasum -a 256 "$archive" | awk '{print $1}')
-            grep -v " $archive\$" checksums.txt > checksums.new
-            echo "$sum  $archive" >> checksums.new
-            mv checksums.new checksums.txt
-            gh release upload "$GITHUB_REF_NAME" "$archive" --clobber --repo "$GITHUB_REPOSITORY"
+            (cd "$work" && tar -czf "$OLDPWD/$archive" -- *)
+            resum "$archive"
             rm -rf "$work"
           done
           gh release upload "$GITHUB_REF_NAME" checksums.txt --clobber --repo "$GITHUB_REPOSITORY"
@@ -165,6 +205,66 @@ jobs:
           path: |
             dist/*.tar.gz
             dist/*.zip
+            dist/*.dmg
+            dist/checksums.txt
+          retention-days: 7
+
+  # The Windows setup, jitllm-setup_<version>_windows_<arch>.exe, one per
+  # architecture: a per-user NSIS installer of the CLI, the server and the
+  # desktop app from the release's own zips (packaging/windows). makensis runs
+  # here on Linux. With WINDOWS_SIGN_PFX (the certificate's .pfx, base64) and
+  # WINDOWS_SIGN_PASSWORD set, the three programs, the uninstaller and the
+  # setup are Authenticode-signed; without them the setup is unsigned and
+  # SmartScreen warns on first run. After macos-app, which rewrites the same
+  # checksums.txt.
+  windows-setup:
+    needs: macos-app
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # add the setups to the draft
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: ui/go.sum
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+      - name: tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nsis osslsigncode
+      - name: build and sign the setups
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PFX: ${{ secrets.WINDOWS_SIGN_PFX }}
+          WINDOWS_SIGN_PASSWORD: ${{ secrets.WINDOWS_SIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PFX" ]; then
+            printf '%s' "$PFX" | base64 --decode > "$RUNNER_TEMP/sign.pfx"
+            export WINDOWS_SIGN_PFX="$RUNNER_TEMP/sign.pfx"
+          fi
+          ver=${GITHUB_REF_NAME#v}
+          for arch in amd64 arm64; do
+            setup="jitllm-setup_${ver}_windows_${arch}.exe"
+            packaging/windows/build.sh "$ver" "$arch" dist "dist/$setup"
+            (cd dist && sum=$(sha256sum "$setup" | cut -d' ' -f1) &&
+              { grep -v " $setup\$" checksums.txt || true; echo "$sum  $setup"; } > checksums.new &&
+              mv checksums.new checksums.txt)
+            gh release upload "$GITHUB_REF_NAME" "dist/$setup" --clobber --repo "$GITHUB_REPOSITORY"
+          done
+          rm -f "$RUNNER_TEMP/sign.pfx"
+          gh release upload "$GITHUB_REF_NAME" dist/checksums.txt --clobber --repo "$GITHUB_REPOSITORY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          overwrite: true
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.dmg
+            dist/*.exe
             dist/checksums.txt
           retention-days: 7
 
@@ -174,7 +274,7 @@ jobs:
   # checks the answer, because a rate or an exit code is not evidence that the
   # engine computed the model.
   smoke:
-    needs: [goreleaser, macos-app]
+    needs: [goreleaser, macos-app, windows-setup]
     permissions:
       contents: read
     strategy:
@@ -213,7 +313,12 @@ jobs:
           mkdir ../bin
           ext=; [ "$RUNNER_OS" = Windows ] && ext=.exe
           for prog in jitllm jitllmd jitllm-desktop jitllm-tui; do
-            archive=$(ls ./"$prog"_*_"${{ matrix.target }}".* | grep -E '\.(tar\.gz|zip)$')
+            # The archive, not the dmg beside jitllm's own on macOS.
+            archive=
+            for f in ./"$prog"_*_"${{ matrix.target }}".tar.gz ./"$prog"_*_"${{ matrix.target }}".zip; do
+              [ -e "$f" ] && archive=$f
+            done
+            test -n "$archive"
             grep " ${archive#./}\$" checksums.txt > want.txt
             if command -v sha256sum >/dev/null; then sha256sum -c want.txt; else shasum -a 256 -c want.txt; fi
             case "$archive" in
@@ -250,6 +355,51 @@ jobs:
               print(prog, got)
               assert got == want, f'{prog}.exe subsystem {got}, want {want}'
           PY
+      # The dmg as a person opens it: its checksum, its signature, and the
+      # app's CLI run from inside the mounted image.
+      - name: dmg (macos)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          cd dist
+          dmg=$(ls jitllm_*_"${{ matrix.target }}".dmg)
+          grep " $dmg\$" checksums.txt | shasum -a 256 -c
+          hdiutil verify "$dmg"
+          mnt=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$dmg"
+          test -L "$mnt/Applications"
+          codesign --verify --strict --deep --verbose=2 "$mnt/jitllm.app"
+          "$mnt/jitllm.app/Contents/Resources/bin/jitllm" version
+          test -x "$mnt/jitllm.app/Contents/Resources/bin/jitllmd"
+          hdiutil detach "$mnt"
+      # The setup as winget runs it: silent, per user. Then what it left --
+      # the programs, the user PATH entry, the Add/Remove Programs entry --
+      # and the silent uninstall taking all of it away again.
+      - name: setup (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $arch = '${{ matrix.target }}'.Split('_')[1]
+          $setup = Get-ChildItem "dist/jitllm-setup_*_windows_$arch.exe" | Select-Object -First 1
+          $want = (Select-String -Path dist/checksums.txt -Pattern (" " + $setup.Name + "$")).Line.Split(' ')[0]
+          if ((Get-FileHash -Algorithm SHA256 $setup.FullName).Hash -ne $want.ToUpper()) { throw "$($setup.Name) does not match its checksum" }
+          Start-Process -Wait -FilePath $setup.FullName -ArgumentList '/S'
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\jitllm'
+          foreach ($p in 'jitllm.exe', 'jitllmd.exe', 'jitllm-desktop.exe', 'uninstall.exe') {
+            if (-not (Test-Path (Join-Path $dir $p))) { throw "$p was not installed" }
+          }
+          & (Join-Path $dir 'jitllm.exe') version
+          if (([Environment]::GetEnvironmentVariable('Path', 'User') -split ';') -notcontains $dir) { throw "$dir is not on the user PATH" }
+          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\jitllm'
+          Get-ItemProperty $key | Select-Object DisplayName, DisplayVersion, QuietUninstallString | Format-List
+          Start-Process -Wait -FilePath (Join-Path $dir 'uninstall.exe') -ArgumentList '/S'
+          # The uninstaller copies itself to a temporary file and returns
+          # before that copy has finished; give it a moment.
+          for ($i = 0; $i -lt 30 -and (Test-Path (Join-Path $dir 'jitllm.exe')); $i++) { Start-Sleep 1 }
+          if (Test-Path (Join-Path $dir 'jitllm.exe')) { throw "the uninstaller left jitllm.exe" }
+          if (Test-Path $key) { throw "the uninstaller left the Add/Remove Programs entry" }
+          if (([Environment]::GetEnvironmentVariable('Path', 'User') -split ';') -contains $dir) { throw "the uninstaller left $dir on the user PATH" }
       - name: hardware
         run: bin/jitllm hardware
       - uses: actions/cache@v6
@@ -295,3 +445,57 @@ jobs:
         run: |
           image=ghcr.io/samyfodil/jitllm
           docker buildx imagetools create -t "$image:latest" "$image:${GITHUB_REF_NAME#v}"
+
+  # The package-manager files for the published release, generated from its
+  # checksums.txt: the Homebrew cask and formula (packaging/homebrew) and the
+  # winget manifests (packaging/winget), kept as the `packaging` artifact.
+  # With HOMEBREW_TAP_TOKEN set (a token that can push to jitllm/homebrew-tap)
+  # the cask and formula are committed to the tap, which is what makes
+  # `brew install --cask jitllm/tap/jitllm` install this release; without it
+  # nothing leaves the run. The winget manifests are never submitted from
+  # here: a pull request to microsoft/winget-pkgs is a separate step
+  # (packaging/README.md).
+  packages:
+    needs: publish
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      HAS_TAP: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: packaging
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+      - name: generate
+        run: |
+          set -euo pipefail
+          packaging/homebrew/generate.sh "$GITHUB_REF_NAME" dist/checksums.txt out/homebrew-tap
+          packaging/winget/generate.sh "$GITHUB_REF_NAME" dist/checksums.txt out/winget
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packaging
+          path: out
+          retention-days: 30
+      - name: update the tap
+        if: env.HAS_TAP == 'true'
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO || 'jitllm/homebrew-tap' }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" tap
+          mkdir -p tap/Casks tap/Formula
+          cp out/homebrew-tap/Casks/jitllm.rb tap/Casks/
+          cp out/homebrew-tap/Formula/jitllm.rb tap/Formula/
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/jitllm.rb Formula/jitllm.rb
+          if git diff --cached --quiet; then echo "the tap already has $GITHUB_REF_NAME"; exit 0; fi
+          git commit -m "jitllm ${GITHUB_REF_NAME#v}"
+          git push origin HEAD
