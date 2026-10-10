@@ -5,14 +5,20 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
+
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// hostStepNMSE bounds a host step across sessions against each session
-// alone. The two arms run the same generated kernels at different widths (a
-// matmul over the step's rows against a matvec per token), the band
-// TestBatchMatchesForward holds the batch to; a row reading another
-// session's history, or its own at the wrong positions, is whole logits off.
+// hostStepNMSE is what a violation of the host step must read above: a row
+// reading another session's history, or its own at the wrong positions, is
+// whole logits off. The clean arm is held to equality, under GEMMExact: the
+// two arms run the same generated kernels at different widths (a matmul over
+// the step's rows against a matvec per token), and only that option makes
+// them sum a row in one order on every host -- the pre-VNNI x86 and arm64
+// GEMMs otherwise fold a k-quant's super-block in integers, which reads NMSE
+// 8.5e-3 on Llama-3.2-1B on the Xeon E5-2680 v4 (the server's host step runs
+// under it for that reason).
 const hostStepNMSE = 1e-3
 
 // TestStepRunsOnTheHostSharesOnePass is the gate on StepRuns' host arm
@@ -42,7 +48,7 @@ func TestStepRunsOnTheHostSharesOnePass(t *testing.T) {
 			if _, err := os.Stat(p); err != nil {
 				t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 			}
-			m, err := Open(jlmOf(t, p), noTune, WithKVF16(false))
+			m, err := Open(jlmOf(t, p), noTune, WithKVF16(false), WithJITOptions(nn.WithGEMMExact(true)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -65,7 +71,7 @@ func TestStepRunsOnTheHostSharesOnePass(t *testing.T) {
 			w, at := worstStep(got, want)
 			t.Logf("%d rows, %d logit rows compared: worst NMSE %.3e (row %d) against each session alone",
 				rows, len(want), w, at)
-			if !(w < hostStepNMSE) {
+			if w != 0 {
 				t.Fatalf("a host step across sessions disagrees with each session alone: NMSE %.3e at row %d", w, at)
 			}
 
