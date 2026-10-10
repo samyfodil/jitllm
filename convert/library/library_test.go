@@ -3,8 +3,8 @@ package library
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/convert"
-	"github.com/samyfodil/jitllm/convert/hf"
+	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/convert/hf"
 )
 
 // Every entry must be fetchable as written: a unique name, an architecture

@@ -7,7 +7,7 @@ import (
 	"github.com/gogpu/ui/theme/material3"
 	"github.com/gogpu/ui/widget"
 
-	"github.com/samyfodil/jitllm/ui/widgets"
+	"github.com/jitllm/jitllm/ui/widgets"
 )
 
 // The palettes are the website's (website/public/themes.css): Tokyo Night when

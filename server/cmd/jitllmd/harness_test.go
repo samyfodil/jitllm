@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/server"
-	"github.com/samyfodil/jitllm/server/gen/jitllm/v1/jitllmv1connect"
+	"github.com/jitllm/jitllm/server"
+	"github.com/jitllm/jitllm/server/gen/jitllm/v1/jitllmv1connect"
 )
 
 // The harness these gates share.

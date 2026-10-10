@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // The five principles on the decision models (AGENTS.md). JIT and no Go
@@ -305,4 +305,3 @@ func TestDecisionPagesWithTheSameAnswer(t *testing.T) {
 		})
 	}
 }
-

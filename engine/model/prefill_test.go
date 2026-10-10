@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // TestPrefillMatchesForward is the gate for the whole batched path.

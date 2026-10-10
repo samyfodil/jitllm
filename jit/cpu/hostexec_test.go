@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // requireRowMajorExec skips a gate that emits and then runs a row-major kernel

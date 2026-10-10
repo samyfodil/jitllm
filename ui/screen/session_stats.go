@@ -3,8 +3,8 @@ package screen
 import (
 	"github.com/gogpu/ui/state"
 
-	"github.com/samyfodil/jitllm/common/session"
-	"github.com/samyfodil/jitllm/ui/app"
+	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/ui/app"
 )
 
 // What the last generation cost, as one line under the composer, mirroring

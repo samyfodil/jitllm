@@ -4,8 +4,8 @@ import (
 	"math"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestRotaryTowerOnDeviceMatchesHost runs the Qwen-VL towers on each device

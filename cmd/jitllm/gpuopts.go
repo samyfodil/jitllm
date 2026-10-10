@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // gpuOptions turns the device tier's environment variables into tier.Options.
@@ -42,7 +42,7 @@ func gpuOptions() []tier.Option {
 	if set("JITLLM_GPU_VERBOSE") {
 		o = append(o, tier.WithVerbose(true))
 	}
-	if v := str("JITLLM_ROCM"); v != "" {
+	if v := rocmDir(); v != "" {
 		o = append(o, tier.WithROCm(v))
 	}
 	if v := str("JITLLM_VK_DEVICE"); v != "" {

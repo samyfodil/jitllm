@@ -3,8 +3,8 @@ package main
 import (
 	"sync"
 
-	"github.com/samyfodil/jitllm/common/engine"
-	"github.com/samyfodil/jitllm/common/session"
+	"github.com/jitllm/jitllm/common/engine"
+	"github.com/jitllm/jitllm/common/session"
 )
 
 // field names one engine value. An engineMsg carries the fields that changed

@@ -5,8 +5,8 @@ import (
 	"image"
 	"image/draw"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // The reference processors' resize, for the projectors whose processor is a

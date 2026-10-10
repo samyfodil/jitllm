@@ -3,9 +3,9 @@ package screen
 import (
 	"sync"
 
-	"github.com/samyfodil/jitllm/common/catalog"
-	"github.com/samyfodil/jitllm/common/hardware"
-	"github.com/samyfodil/jitllm/ui/app"
+	"github.com/jitllm/jitllm/common/catalog"
+	"github.com/jitllm/jitllm/common/hardware"
+	"github.com/jitllm/jitllm/ui/app"
 )
 
 // The screens reach everything outside the widget tree through these

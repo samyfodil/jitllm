@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // hostTable is the emitter table of the tier this host runs, the one nn emits

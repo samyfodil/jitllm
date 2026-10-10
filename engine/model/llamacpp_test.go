@@ -12,10 +12,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/convert/gguf"
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/convert/gguf"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // tieMargin is how close the top two logits must be for a disagreement with
@@ -72,7 +72,7 @@ func TestGreedyMatchesLlamaCpp(t *testing.T) {
 	if lcpp == "" {
 		t.Skip("set JITLLM_LCPP to a llama.cpp build directory holding llama-completion")
 	}
-	bin := filepath.Join(lcpp, "llama-completion")
+	bin := lcppBin(lcpp, "llama-completion")
 	if _, err := os.Stat(bin); err != nil {
 		t.Skipf("llama-completion is not in JITLLM_LCPP (%s)", lcpp)
 	}

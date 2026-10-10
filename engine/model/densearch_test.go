@@ -4,7 +4,7 @@ import (
 	"math"
 	"slices"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // The dense llama-family architectures (jlm.ArchSmolLM3 and its siblings) are

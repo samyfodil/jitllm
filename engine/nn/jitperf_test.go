@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/sched"
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // TestMatVecScaling isolates the JIT tier from the model, so a scaling number

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestStepAcrossSessionsHybridGateDiscriminates runs the hybrid step gate under

@@ -3,8 +3,8 @@ package model
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // A decoder embedding model -- qwen3-embedding, EmbeddingGemma -- is the

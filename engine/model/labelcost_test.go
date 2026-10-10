@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/sched"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestRegionLabelCost prices what a pprof region label costs a token, in

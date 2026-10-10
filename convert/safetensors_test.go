@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/convert/safetensors"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/convert/safetensors"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // A hand-built HuggingFace directory, so the refusals below are hermetic:

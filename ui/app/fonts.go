@@ -7,7 +7,7 @@ import (
 	"github.com/gogpu/gg/text"
 	"github.com/gogpu/ui/plugin"
 
-	"github.com/samyfodil/jitllm/ui/widgets"
+	"github.com/jitllm/jitllm/ui/widgets"
 )
 
 // UIFonts is the font chain, in preference order: the first family that has a

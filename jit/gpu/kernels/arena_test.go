@@ -5,12 +5,12 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/format/quant"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/internal/testmodels"
 
-	"github.com/samyfodil/jitllm/convert/gguf"
-	"github.com/samyfodil/jitllm/convert/meta"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/convert/gguf"
+	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // The packed arena: the host-resident home a page-in reads from.

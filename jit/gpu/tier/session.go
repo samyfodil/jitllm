@@ -3,8 +3,8 @@ package tier
 import (
 	"sync/atomic"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // A session is one sequence; a tier is one model. The per-sequence state (the

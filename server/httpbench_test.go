@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/dev/httpbench/hb"
+	"github.com/jitllm/jitllm/dev/httpbench/hb"
 )
 
 // TestHTTPBenchAgainstTheRealServer runs dev/httpbench's harness against a

@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/samyfodil/jitllm/server"
+	"github.com/jitllm/jitllm/server"
 )
 
 func TestStartServesAndCloses(t *testing.T) {

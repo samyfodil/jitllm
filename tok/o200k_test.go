@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/samyfodil/jitllm/tok/pretok"
+	"github.com/jitllm/jitllm/tok/pretok"
 )
 
 // TestO200KSplitsByCaseAndSuffixesContractions pins the three ways o200k's

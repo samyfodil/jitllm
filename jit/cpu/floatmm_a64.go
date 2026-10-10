@@ -5,7 +5,7 @@ package cpu
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // MaxFloatTokens is the widest token tile EmitFloatMatMul takes.

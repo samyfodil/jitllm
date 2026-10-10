@@ -32,10 +32,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/samyfodil/jitllm/common/session"
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
-	"github.com/samyfodil/jitllm/server"
+	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/server"
 )
 
 // Engine is the app's single owner of a loaded model.

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestHybridDecodeIsCaptured: a fully placed hybrid's decode must be recorded

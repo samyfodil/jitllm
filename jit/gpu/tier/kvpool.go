@@ -6,8 +6,8 @@ import (
 	"slices"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // ErrKVCapacity is a device that cannot give a sequence another page of
@@ -316,7 +316,15 @@ func (g *devTier) growKVLayer(kp *kvPool, l *kvLayerPool, want int) error {
 	g.quiesce()
 	pb := kp.pageBytes(l)
 	fits := func(n uint64) bool { return g.stateFits(n, l) }
-	for _, n := range []int{min(max(l.n*2, want, 2), limit), want} {
+	// A doubling stops at what a scheduler promised (PromiseKV): the pages in
+	// use and the promise's, with one spare. The budget past it is left to
+	// the batched scratches the admitted rows' steps run in, which a pool
+	// doubled into the whole card refused, padding every step to the widest.
+	grow := l.n * 2
+	if g.kvPromise > 0 {
+		grow = min(grow, l.n-len(l.free)+(g.kvPromise+kp.p-1)/kp.p+1)
+	}
+	for _, n := range []int{min(max(grow, want, 2), limit), want} {
 		if n < want {
 			continue
 		}

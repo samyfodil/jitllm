@@ -11,8 +11,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/samyfodil/jitllm/common/session"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // modelPath is a real container, because the one thing this gate exists to

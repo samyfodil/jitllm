@@ -1,6 +1,6 @@
 package jlm
 
-import "github.com/samyfodil/jitllm/format/quant"
+import "github.com/jitllm/jitllm/format/quant"
 
 // This file is the container's own vocabulary: the codes that appear in a .jlm
 // file and what they mean, which is the whole of what a .jlm parser has to

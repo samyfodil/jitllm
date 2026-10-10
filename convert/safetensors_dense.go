@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // The dense llama family from HuggingFace safetensors: the same containers

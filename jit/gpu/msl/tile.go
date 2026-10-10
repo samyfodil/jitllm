@@ -3,7 +3,7 @@ package msl
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // Metal's matrix unit (simdgroup_matrix). What it admits was measured by

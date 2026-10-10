@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/model"
 )
 
 // Embeddings: one vector per input from an embedding model's pooled readout.

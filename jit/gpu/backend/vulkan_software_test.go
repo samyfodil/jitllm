@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/vulkan"
+	"github.com/jitllm/jitllm/jit/gpu/vulkan"
 )
 
 // softwareChild marks the child process TestSoftwareVulkanIsDeclined runs its

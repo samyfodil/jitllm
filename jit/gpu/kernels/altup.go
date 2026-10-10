@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // Gemma 3n's AltUp and LAuReL on a device (engine/model/altup.go has the

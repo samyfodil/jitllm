@@ -3,7 +3,7 @@ package server
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/engine/sched"
 )
 
 // Whatever the policy, the shares must never exceed the machine's budget.

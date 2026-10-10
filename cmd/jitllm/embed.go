@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/model"
 )
 
 // embedCmd is `jitllm embed <model.jlm> <text...>`: the text's pooled,

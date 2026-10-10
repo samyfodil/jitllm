@@ -7,7 +7,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestForwardSampleMatchesSampleOverForward decodes the same prompt twice with

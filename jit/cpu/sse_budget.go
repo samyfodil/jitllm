@@ -1,6 +1,6 @@
 package cpu
 
-import "github.com/samyfodil/jitllm/format/quant"
+import "github.com/jitllm/jitllm/format/quant"
 
 // The SSE tier's share of invariant I3 (budget.go): no single entry into
 // generated code may run longer than maxCallNanos, because a goroutine inside

@@ -6,7 +6,7 @@ description: Use the engine as a Go library, with the same model format and plac
 The CLI, the server and the desktop app are all thin layers over the same packages. Embedding jitllm means importing them: the engine runs inside your process, and its only dependency is [`goffi`](https://github.com/go-webgpu/goffi).
 
 ```sh
-go get github.com/samyfodil/jitllm
+go get github.com/jitllm/jitllm
 ```
 
 ## Generate text
@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/samyfodil/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/model"
 )
 
 func main() {
@@ -80,7 +80,7 @@ A zero `Sampler` (or `model.Greedy`) is greedy. Call `Observe` for each prompt a
 Open the devices with the device tier and hand them to a state. The spec is the same [device grammar](/docs/guides/devices/#the-device-grammar) the CLI takes.
 
 ```go
-import "github.com/samyfodil/jitllm/jit/gpu/tier"
+import "github.com/jitllm/jitllm/jit/gpu/tier"
 
 g, err := tier.OpenWith(tier.WithDevices("auto"))
 if err != nil {
@@ -121,7 +121,7 @@ Every decision the engine takes on its own (budgets, placement, tuning, cores, K
 
 ## Several conversations at once
 
-- `model.Step(states, tokens)` advances several states by one token each and returns each one's logits. When they share a model and a device that holds every block and the head, it runs them as rows of one step, so each block's weights are read once for all of them. Otherwise (a state on the CPU, a hybrid model's linear blocks) it steps them one after another, with the same answer. On a V100, eight Llama-3.1-8B sessions decode 4.6× faster together than in turn. `jitllm speed -sessions N` measures it.
+- `model.Step(states, tokens)` advances several states by one token each and returns each one's logits. When they share a model and a device that holds every block and the head, it runs them as rows of one step, so each block's weights are read once for all of them; states of one model wholly on the CPU go as one host pass over the weights the same way. Otherwise (a state split between the CPU and a device, or one `State.HostRefusal` names) it steps them one after another, with the same answer. On a V100, eight Llama-3.1-8B sessions decode 4.6× faster together than in turn. `jitllm speed -sessions N` measures it.
 - `State.ForwardBatch` and `ForwardBatchGreedy` step many sequences of one state at once, which is what `jitllm batch` measures; `model.Scheduler` admits and retires sequences on batch rows.
 
 `model.StepRuns` is the general form, a token for some sessions and a prompt chunk for others in one step; it is what `jitllmd` batches requests with. See [Serve an API](/docs/guides/serve/#batching).
@@ -130,6 +130,9 @@ Every decision the engine takes on its own (budgets, placement, tuning, cores, K
 
 - `State.SetKVStore` and `SetCacheKey` give a state a backing store for its KV pages, and `State.PrefillCached` then skips whatever prefix of a prompt the store already holds. This is what `-kv-cache` uses.
 - `State.SetKVBudget(bytes)` caps the history held in memory. Older pages spill to the store and come back when attention reads them, so a context longer than memory still runs. It needs a store first; without one the cap would drop history instead of spilling it, so it is refused.
+- `State.ShareKV(store)` with a `model.NewSharedStore()` makes sessions that share a prompt prefix hold its pages once, copy-on-write. Batches, recurrent models, DeepSeek V4 and a session with blocks on a device refuse it by name.
+- `State.Park` brings a session's blocks, KV pages and recurrent state home and evicts its sealed pages to a store; `State.Resume` faults them back, byte for byte. `jitllmd`'s engine parks idle sessions this way under a model's KV budget (`server.Engine.SetKVBudget`).
+- `model.WithKVType(model.KVQ8_0)` (or `KVF16`, `KVF32`) forces the KV cache's format; q8_0 runs on every host tier and is carried to a device as float32. MLA, the lightning indexer, MSA and DeepSeek V4 refuse q8_0 by name. The `jitllm` command reads it from `JITLLM_KV_TYPE`.
 - `State.PrefillMixed` takes spans of tokens and image embeddings, for a vision model; `m.Tower()` encodes the image.
 
 ## Embeddings
@@ -145,4 +148,4 @@ vec, err := e.EmbedText("a sentence to embed") // pooled and L2-normalised
 
 ## Run a server in process
 
-The server package is a separate module, `github.com/samyfodil/jitllm/server`. `server.New` returns an engine, `LoadModel` loads into it, and `Handler()` is an `http.Handler` serving the OpenAI, Anthropic and Connect APIs, to mount on your own mux.
+The server package is a separate module, `github.com/jitllm/jitllm/server`. `server.New` returns an engine, `LoadModel` loads into it, and `Handler()` is an `http.Handler` serving the OpenAI, Anthropic and Connect APIs, to mount on your own mux.

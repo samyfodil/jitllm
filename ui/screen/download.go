@@ -7,10 +7,10 @@ import (
 
 	"github.com/gogpu/ui/state"
 
-	"github.com/samyfodil/jitllm/common/discover"
-	"github.com/samyfodil/jitllm/convert/hf"
-	"github.com/samyfodil/jitllm/convert/library"
-	"github.com/samyfodil/jitllm/ui/app"
+	"github.com/jitllm/jitllm/common/discover"
+	"github.com/jitllm/jitllm/convert/hf"
+	"github.com/jitllm/jitllm/convert/library"
+	"github.com/jitllm/jitllm/ui/app"
 )
 
 // The Download screen: the models jitllm fetches by name, one press from the

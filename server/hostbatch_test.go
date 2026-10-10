@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // The step loop's gates on the host (batch.go, model.StepRuns' host arm):
@@ -218,37 +218,52 @@ func TestHostBatchConcurrentGeneratesEqualAlone(t *testing.T) {
 
 // TestHostBatchSampledRowsEqualAlone: seeded sampled generates on a host
 // model, admitted together, draw exactly the tokens each draws alone. The
-// host's step across sessions is the alone path's arithmetic, row for row
-// (model's TestStepRunsOnTheHostSharesOnePass reads NMSE 0), so a seeded
+// host's step across sessions is the alone path's arithmetic, row for row,
+// because a host model the loop runs sums every packed matmul in the
+// matvec's order (LoadModel's GEMMExact; model's
+// TestStepRunsOnTheHostSharesOnePass reads NMSE 0 under it), so a seeded
 // sampler fed the same logits draws the same tokens. Against rows sharing a
-// random stream, or fed each other's tokens, the draws part.
+// random stream, or fed each other's tokens, the draws part; against the
+// shipped prefill arithmetic on a host whose GEMM sums otherwise, they part
+// too (TestHostBatchSampledRowsEqualAlonePreVNNI).
 func TestHostBatchSampledRowsEqualAlone(t *testing.T) {
 	for _, name := range hostBatchModels() {
 		t.Run(name, func(t *testing.T) {
-			e, lm, c := hostBatchEngine(t, name, Config{JointSteps: JointAlways})
-			temp, topP := float32(0.9), float32(0.95)
-			reqOf := func(i int) *v1.GenerateRequest {
-				seed := uint64(7 + i)
-				return &v1.GenerateRequest{ModelId: "dev", Prompt: text(hostPrompts[i]), MaxTokens: 16,
-					Sampling: &v1.SamplingParams{Temperature: &temp, TopP: &topP, Seed: &seed}}
-			}
-			const n = 4
-			alone := make([]completion, n)
-			reqs := make([]*v1.GenerateRequest, n)
-			for i := range n {
-				reqs[i] = reqOf(i)
-				if alone[i] = complete(c, reqs[i]); alone[i].err != nil {
-					t.Fatal(alone[i].err)
-				}
-			}
-			got := concurrently(t, e, lm, c, reqs)
-			for i := range n {
-				if !slices.Equal(got[i].ids, alone[i].ids) {
-					t.Fatalf("sampled row %d differs from its run alone\nbatched %v\nalone   %v", i, got[i].ids, alone[i].ids)
-				}
+			if i, got, want := sampledBatchParts(t, name); i >= 0 {
+				t.Fatalf("sampled row %d differs from its run alone\nbatched %v\nalone   %v", i, got, want)
 			}
 		})
 	}
+}
+
+// sampledBatchParts runs four seeded sampled generates on name alone and then
+// admitted together, and returns the first row whose draws differ with both
+// sequences, or -1 when every row drew the same tokens.
+func sampledBatchParts(t *testing.T, name string) (int, []int32, []int32) {
+	t.Helper()
+	e, lm, c := hostBatchEngine(t, name, Config{JointSteps: JointAlways})
+	temp, topP := float32(0.9), float32(0.95)
+	reqOf := func(i int) *v1.GenerateRequest {
+		seed := uint64(7 + i)
+		return &v1.GenerateRequest{ModelId: "dev", Prompt: text(hostPrompts[i]), MaxTokens: 16,
+			Sampling: &v1.SamplingParams{Temperature: &temp, TopP: &topP, Seed: &seed}}
+	}
+	const n = 4
+	alone := make([]completion, n)
+	reqs := make([]*v1.GenerateRequest, n)
+	for i := range n {
+		reqs[i] = reqOf(i)
+		if alone[i] = complete(c, reqs[i]); alone[i].err != nil {
+			t.Fatal(alone[i].err)
+		}
+	}
+	got := concurrently(t, e, lm, c, reqs)
+	for i := range n {
+		if !slices.Equal(got[i].ids, alone[i].ids) {
+			return i, got[i].ids, alone[i].ids
+		}
+	}
+	return -1, nil, nil
 }
 
 // TestHostBatchLongPromptTakesItsPipelinedChunk: a long prompt admitted while

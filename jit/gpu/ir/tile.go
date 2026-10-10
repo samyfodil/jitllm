@@ -342,6 +342,14 @@ func (k *Kernel) validateTiles() error {
 	return nil
 }
 
+// LaneDependent reports whether v can differ between the lanes of a subgroup.
+// False is a proof, by construction from the ops, that every lane holds the
+// same v; true may be conservative.
+func (k *Kernel) LaneDependent(v Value) bool {
+	d, _ := k.laneDependent(v, map[Value]bool{})
+	return d
+}
+
 // laneDependent reports whether v is derived from anything that differs between
 // lanes, and names the first such thing. seen guards the back edge of a phi.
 func (k *Kernel) laneDependent(v Value, seen map[Value]bool) (bool, string) {

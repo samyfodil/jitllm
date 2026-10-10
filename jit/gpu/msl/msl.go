@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // preamble is prepended to every kernel.

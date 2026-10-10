@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/samyfodil/jitllm/convert/meta"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // A decision model's GGUF states its readout as llama.cpp's converter writes

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ffi"
+	"github.com/jitllm/jitllm/jit/gpu/ffi"
 )
 
 // comgr's handles are structs of one uint64; on the C ABIs jitllm builds for
@@ -27,21 +27,40 @@ const (
 	cgDataRelocable  = 0x7
 	cgDataExecutable = 0x8
 
-	cgLangLLVMIR = 0x4
-
-	cgActCompileSourceToBC   = 0x2
-	cgActCodegenBCToReloc    = 0x4
-	cgActCodegenBCToAsm      = 0x5
-	cgActLinkRelocToExec     = 0x7
-	cgActAssembleSourceToRel = 0x8
-
 	cgMetaString = 0x1
 	cgMetaMap    = 0x2
 	cgMetaList   = 0x3
 )
 
+// The action kinds this package names. They are not the library's numbers,
+// which moved between API versions: see comgrCodes.
+const (
+	cgActCompileSourceToBC = iota
+	cgActCodegenBCToReloc
+	cgActCodegenBCToAsm
+	cgActLinkRelocToExec
+	cgActAssembleSourceToRel
+)
+
+// comgrCodes is one API version's numbering of the actions and of
+// AMD_COMGR_LANGUAGE_LLVM_IR, read off each version's amd_comgr.h. Comgr 3
+// (ROCm 6.4 and later) removed ADD_DEVICE_LIBRARIES and OPTIMIZE_BC_TO_BC and
+// renumbered everything after them, and dropped a language; comgr 2 is what
+// ROCm 6.0 to 6.3 ship on Linux and what AMD's Windows driver ships
+// (amd_comgr_2.dll). The data and metadata kinds are the same in both.
+type comgrCodes struct {
+	act    [5]int32 // indexed by the cgAct* kinds
+	llvmIR int32
+}
+
+var (
+	comgrV2 = comgrCodes{act: [5]int32{0x2, 0x6, 0x7, 0x9, 0xA}, llvmIR: 0x5}
+	comgrV3 = comgrCodes{act: [5]int32{0x2, 0x4, 0x5, 0x7, 0x8}, llvmIR: 0x4}
+)
+
 type comgrAPI struct {
 	major, minor int
+	codes        comgrCodes
 
 	statusString  func(cgStatus, *unsafe.Pointer) cgStatus
 	createData    func(int32, *cgData) cgStatus
@@ -114,8 +133,17 @@ func bindComgr(names []string) (*comgrAPI, error) {
 	if err != nil {
 		return nil, err
 	}
-	if a.major < 2 {
+	switch {
+	case a.major < 2:
 		return nil, fmt.Errorf("hip: libamd_comgr %d.%d is older than the 2.x API this binding uses", a.major, a.minor)
+	case a.major == 2:
+		a.codes = comgrV2
+	case a.major == 3:
+		a.codes = comgrV3
+	default:
+		// A later API may renumber again, as 3 did: refused rather than
+		// driven with numbers that may now mean other actions.
+		return nil, fmt.Errorf("hip: libamd_comgr %d.%d is newer than the 2.x and 3.x APIs this binding knows", a.major, a.minor)
 	}
 	return a, nil
 }
@@ -313,7 +341,7 @@ func (c *Comgr) action(kind int32, isa string, opts []string, inKind int32, inNa
 		return nil, err
 	}
 	if kind == cgActCompileSourceToBC {
-		if err := a.err(a.setLanguage(info, cgLangLLVMIR), "set_language"); err != nil {
+		if err := a.err(a.setLanguage(info, a.codes.llvmIR), "set_language"); err != nil {
 			return nil, err
 		}
 	}
@@ -334,7 +362,7 @@ func (c *Comgr) action(kind int32, isa string, opts []string, inKind int32, inNa
 	if err := a.err(a.setLogging(info, 1), "set_logging"); err != nil {
 		return nil, err
 	}
-	st := a.doAction(kind, info, inSet, outSet)
+	st := a.doAction(a.codes.act[kind], info, inSet, outSet)
 	log := c.log(outSet)
 	if st != 0 {
 		return nil, fmt.Errorf("%w\n%s", a.err(st, actionName(kind)+" for "+isa), log)

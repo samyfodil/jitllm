@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // The two transforms a vision tower needs before it can be written. The

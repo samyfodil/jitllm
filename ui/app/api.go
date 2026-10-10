@@ -1,8 +1,8 @@
 package app
 
 import (
-	"github.com/samyfodil/jitllm/common/api"
-	"github.com/samyfodil/jitllm/server"
+	"github.com/jitllm/jitllm/common/api"
+	"github.com/jitllm/jitllm/server"
 )
 
 // ServeAPI serves e, the window's own engine, as jitllm's API while the API

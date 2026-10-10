@@ -3,8 +3,8 @@ package convert
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/convert/meta"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // The modern text families added as one group (jlm.ArchBailingMoE2 and its

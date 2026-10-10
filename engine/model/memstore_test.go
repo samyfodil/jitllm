@@ -6,7 +6,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestBoundedMemStoreEvictsTheOldestTailFirst holds a MemStore to its limit:

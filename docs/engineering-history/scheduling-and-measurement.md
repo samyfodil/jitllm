@@ -1469,6 +1469,28 @@ killed the desktop three times here.
    started before a context compaction keeps running afterwards and neither end
    knows.
 
+## The cap is the developer machine's, not a measurement's
+
+RULE 3 used to say "no exceptions", and `scripts/vs-llamacpp.sh` took it
+literally: to hold the measurement lock for a whole comparison it re-exec'd
+itself under `scripts/cap` (8G by default) on every host, so the Xeon rows and
+the rented-runner rows ran both engines inside a memory cgroup. That cgroup
+charges llama.cpp's mmap'd model to the cgroup as page cache and throttles it
+at MemoryHigh; jitllm reads with O_DIRECT into anonymous frames, which the
+cgroup charges differently. A large model's row could then measure the cap as
+well as the engines. The user's decision: the cap protects the developer's own
+machine from OOM, and a benchmark host runs bare with only the lock. The script
+now takes the lock file itself, and on the laptop reuses the descriptor the
+outer `scripts/cap` already locked (a second open would be a second lock,
+waiting on its own parent). `vs-llamacpp-paged.sh` capped each sample
+separately and was changed the same way.
+
+The container fallback went with it: with no systemd and no writable cgroup,
+`scripts/cap` used `ulimit -v`, which limits address space rather than memory.
+The CUDA runtime reserves address space in proportion to the card, so
+llama-bench aborted at a 12 GiB limit and ran at 256 GiB. A container is not the
+developer's machine either; it now runs uncapped and prints that it did.
+
 ## RULE 11b's cases: a red golden, and tests that worked by accident
 
 **It cost a red gate that nobody looked at.**

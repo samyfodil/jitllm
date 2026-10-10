@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/model"
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	"github.com/jitllm/jitllm/engine/model"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // contextFullSeq is the session the context-full gates generate in: short,

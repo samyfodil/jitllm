@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/ui/app"
-	"github.com/samyfodil/jitllm/ui/screen"
+	"github.com/jitllm/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/screen"
 )
 
 // TestEveryTabHasAScreen relates the two lists nothing else relates: the tab

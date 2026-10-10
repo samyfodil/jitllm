@@ -3,7 +3,7 @@ package cpu
 import (
 	"math"
 
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 const (

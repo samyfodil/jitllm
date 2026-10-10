@@ -1,6 +1,6 @@
 package engine
 
-import "github.com/samyfodil/jitllm/common/session"
+import "github.com/jitllm/jitllm/common/session"
 
 // Front is the front end the engine reports to. Every method is safe from any
 // goroutine; Post is the way onto the front end's own goroutine, and the

@@ -11,7 +11,7 @@
 # RULE 1: quote the backend with the number. RULE 2: A/B interleaved, median of
 # per-round ratios, IQR gate, PSI gate, clamped samples discarded.
 set -u
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 MODEL=${1:?usage: vs-llamacpp-paged.sh <model.gguf> [vram] [n] [rounds]}
 VRAM=${2:-2G}
 N=${3:-24}
@@ -26,7 +26,20 @@ mhz() { awk '/cpu MHz/{if($4>m)m=$4} END{printf "%.0f", m}' /proc/cpuinfo; }
 
 say() { printf '%s\n' "$*"; }
 
-[ -f "$CONV" ] || { say ">> converting $MODEL"; ./scripts/cap 24G -- ./jitllm convert "$MODEL" "$CONV" || exit 1; }
+# ★ THE MEASUREMENT LOCK, AND NO MEMORY CGROUP. Every sample used to run under
+# its own capped cgroup, which let a build take the lock between two samples
+# of one round and put llama.cpp's mmap page cache inside a cgroup that jitllm's
+# O_DIRECT reads are not charged to. The lock is taken once, as in
+# vs-llamacpp.sh, on the outer scripts/cap's descriptor when there is one.
+if [ "${JITLLM_NO_LOCK:-0}" != "1" ] && command -v flock >/dev/null 2>&1; then
+  vsLock="${TMPDIR:-/tmp}/jitllm-cap.lock"
+  if [ "$(readlink -f /proc/$$/fd/9 2>/dev/null)" != "$(readlink -f "$vsLock" 2>/dev/null)" ]; then
+    exec 9>>"$vsLock"
+  fi
+  flock -w "${JITLLM_LOCK_WAIT:-1800}" -x 9 || { say ">> REFUSING: the box stayed busy"; exit 75; }
+fi
+
+[ -f "$CONV" ] || { say ">> converting $MODEL"; ./jitllm convert "$MODEL" "$CONV" || exit 1; }
 
 # ★ llama.cpp's -ngl HAS TO BE FOUND BY HAND, which is why this searches rather
 # than assuming: it refuses to load above what fits, so the honest arm is the
@@ -34,17 +47,17 @@ say() { printf '%s\n' "$*"; }
 # reason.
 NGL=0
 for n in 99 64 48 32 24 16 12 10 8 6 4 2; do
-  if LD_LIBRARY_PATH=$JL ./scripts/cap 26G -- taskset -c $CORES \
+  if LD_LIBRARY_PATH=$JL taskset -c $CORES \
        "$JL/llama-bench" -m "$MODEL" -ngl $n -p 0 -n 2 -r 1 >/dev/null 2>&1; then
     NGL=$n; break
   fi
 done
 say ">> llama.cpp loads at -ngl $NGL"
 
-jit() { ./scripts/cap 26G -- taskset -c $CORES \
+jit() { taskset -c $CORES \
         ./jitllm run -devices "cuda:0=$VRAM" -placement '*=cuda:0~' -n "$N" -temp 0 "$CONV" "$PROMPT" 2>&1 \
         | sed -n 's|.*decode [0-9]* tok in [^(]*(\([0-9.]*\) tok/s).*|\1|p'; }
-lcpp() { LD_LIBRARY_PATH=$JL ./scripts/cap 26G -- taskset -c $CORES \
+lcpp() { LD_LIBRARY_PATH=$JL taskset -c $CORES \
          "$JL/llama-bench" -m "$MODEL" -ngl "$NGL" -p 0 -n "$N" -r 1 2>/dev/null \
          | awk -F'|' '/tg/{gsub(/ /,"",$(NF-1)); split($(NF-1),a,"±"); print a[1]}'; }
 

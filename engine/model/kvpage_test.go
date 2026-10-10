@@ -3,8 +3,8 @@ package model
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestKVSpansCoverTheWindowExactly: the page walk must visit every position of

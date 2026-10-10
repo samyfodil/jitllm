@@ -3,7 +3,7 @@ package tier
 import (
 	"reflect"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // A device serves several sessions over one scratch: their histories are

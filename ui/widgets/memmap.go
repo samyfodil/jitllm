@@ -1,7 +1,7 @@
 package widgets
 
 import (
-	"github.com/samyfodil/jitllm/common/session"
+	"github.com/jitllm/jitllm/common/session"
 
 	"fmt"
 

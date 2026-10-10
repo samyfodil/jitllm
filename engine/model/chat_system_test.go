@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
-	"github.com/samyfodil/jitllm/tok/jinja"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/tok/jinja"
 )
 
 // mistralV1 is the template Mistral-7B-Instruct-v0.3's GGUF carries: no system

@@ -7,9 +7,9 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/samyfodil/jitllm/engine/grammar"
+	"github.com/jitllm/jitllm/engine/grammar"
 
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // InferenceService implements jitllm.v1.InferenceService. It holds a Backend

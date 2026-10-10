@@ -182,7 +182,7 @@ dockers_v2:
   - id: jitllm
     ids: [jitllm, jitllmd]
     dockerfile: Dockerfile
-    images: ["ghcr.io/samyfodil/jitllm"]
+    images: ["ghcr.io/jitllm/jitllm"]
     tags: ["{{ .Version }}"]
     platforms: [linux/amd64, linux/arm64]
     build_args:
@@ -190,7 +190,7 @@ dockers_v2:
     labels:
       org.opencontainers.image.title: jitllm
       org.opencontainers.image.description: "jitllmd, the jitllm inference daemon, with the jitllm CLI"
-      org.opencontainers.image.source: https://github.com/samyfodil/jitllm
+      org.opencontainers.image.source: https://github.com/jitllm/jitllm
       org.opencontainers.image.version: "{{ .Version }}"
       org.opencontainers.image.revision: "{{ .FullCommit }}"
       org.opencontainers.image.created: "{{ .CommitDate }}"
@@ -215,9 +215,12 @@ snapshot:
 # With a Developer ID certificate and an App Store Connect API key in the
 # secrets, the binaries are signed with the hardened runtime and the JIT
 # entitlements, then notarized. This runs on Linux (goreleaser uses quill).
+# quill signs only with an Apple-issued chain, so a self-signed certificate
+# (no notary key beside it) leaves the bare binaries ad-hoc signed; the
+# desktop app is still signed with it on the Mac.
 notarize:
   macos:
-    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+    - enabled: '{{ and (isEnvSet "MACOS_SIGN_P12") (isEnvSet "MACOS_NOTARY_KEY") }}'
       ids: [jitllm, jitllmd, jitllm-desktop-darwin, jitllm-tui]
       sign:
         certificate: "{{ .Env.MACOS_SIGN_P12 }}"
@@ -245,7 +248,7 @@ changelog:
 
 release:
   github:
-    owner: samyfodil
+    owner: jitllm
     name: jitllm
   # The workflow publishes the draft only after the shipped CLI archives have
   # run on Linux amd64, Linux arm64 and macOS arm64, and every archive of those

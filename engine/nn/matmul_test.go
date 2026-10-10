@@ -3,12 +3,12 @@
 package nn
 
 import (
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit/cpu"
 	"math"
 	"math/rand"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // TestMatMulMatchesMatVec holds the batched prefill path to the decode path it

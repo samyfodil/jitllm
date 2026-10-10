@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 var sink byte

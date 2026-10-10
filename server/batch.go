@@ -2,13 +2,14 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/model"
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	"github.com/jitllm/jitllm/engine/model"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // stepLoop is continuous batching for one loaded model, on its devices or on
@@ -93,6 +94,9 @@ type stepLoop struct {
 	units, joint []unit
 	solo         []unit
 	runs         []model.Run
+	// The prompting rows promptUnits walks, and their allotments.
+	prompts []*row
+	alloc   []int
 
 	// chunkOf is how many prompt tokens a row's State takes in one prefill:
 	// its pipelined chunk when the State pipelines (State.PromptChunk). A
@@ -101,8 +105,21 @@ type stepLoop struct {
 
 	// A gate's violations, false but in a test: feedNext feeds each decoding
 	// row the token sampled for the row after it; dropMaxTokens never
-	// retires a row for reaching its max_tokens.
-	feedNext, dropMaxTokens bool
+	// retires a row for reaching its max_tokens; admitAll admits every
+	// waiting request whatever the card has room for.
+	feedNext, dropMaxTokens, admitAll bool
+	// parkDropsLogits zeroes the logits a parked row holds, a violation of
+	// the time slice's answer; onStarted, when set, sees each row as its
+	// prompt is in.
+	parkDropsLogits bool
+	onStarted       func(*row)
+
+	// fair is the fairness level, 0 to 100 (batchfair.go); rr turns the
+	// even split of the prompt budget so its remainder rotates.
+	fair, rr int
+	// The moving averages of a park's, a resume's and a step's time, in
+	// nanoseconds, that bound the quantum from below (stepLoop.quantum).
+	parkNs, resumeNs, stepNs float64
 
 	stats batchCounters
 }
@@ -114,9 +131,24 @@ type batchCounters struct {
 	promptChunks, promptSteps                           atomic.Int64
 	admissions, admitWait                               atomic.Int64
 	refusals, separateSteps                             atomic.Int64
+	// kvWaits counts admissions put off because the card's room for history
+	// was promised to the rows already admitted (stepLoop.kvRoom).
+	kvWaits atomic.Int64
 	// pipelinedChunks is prompt chunks that ran as a pipelined prefill
 	// beside the step rather than as rows of it.
 	pipelinedChunks atomic.Int64
+	// parks and resumes count time slices: rows parked for a waiting
+	// request, and parked rows brought back.
+	parks, resumes atomic.Int64
+	// parkFreed is the card's room for history, in positions, that parking
+	// gave back.
+	parkFreed atomic.Int64
+	// shortResumes counts resumes the card took back only in part, parked
+	// again to wait.
+	shortResumes atomic.Int64
+	// promptRowsFed counts, per step, the prompting rows it fed: a gate reads
+	// it against the prompting rows the step had.
+	promptRowsFed, promptRowsHad atomic.Int64
 	// postedTokens is tokens whose text and event the helper produced while
 	// their step ran.
 	postedTokens atomic.Int64
@@ -130,6 +162,12 @@ type batchCounters struct {
 }
 
 // errUnloaded ends a request still waiting for a row when its model goes.
+// errPromptCancelled ends a row whose request left before its prompt was in
+// and whose sequence started with it: no GenerateStarted is sent, the State
+// is reset, and the request returns its context's error, as a prefill
+// interrupted alone does (Generate).
+var errPromptCancelled = errors.New("server: the request left during its prompt")
+
 var errUnloaded = fmt.Errorf("%w: the model was unloaded before this request got a row", ErrNotFound)
 
 // batchWidth is the most requests the loop holds rows for: the configured
@@ -155,6 +193,7 @@ func newStepLoop(e *Engine, lm *LoadedModel) *stepLoop {
 		promptChunk: e.cfg.PromptChunk,
 		choice:      newJointChoice(e.cfg.JointSteps),
 		budget:      newStepBudget(e.cfg.StepPromptTokens, e.cfg.PromptChunk, e.cfg.StepCost),
+		fair:        fairLevel(e.cfg.Fairness),
 		ctx:         ctx,
 		quit:        quit,
 		done:        make(chan struct{}),
@@ -173,6 +212,8 @@ type row struct {
 	reset     bool
 	echo      bool
 	ephemeral bool
+	// tools reads the row's tool calls (Started.Tools).
+	tools     *model.ToolStream
 	sampler   model.Sampler
 	logprobs  *model.Logprobs // nil unless the request asked for logprobs
 	maxTokens int
@@ -188,6 +229,13 @@ type row struct {
 	// has the row's prompt offered to the store once it has run.
 	restored int
 	seal     bool
+	// fresh says the row's sequence starts with its prompt (no
+	// continue_session), so a prompt cut short is reset rather than kept.
+	fresh bool
+	// prio is the request's priority (1 for jitllm_priority "high"); since
+	// is when it began waiting: its arrival, or when it was last parked.
+	prio  int
+	since time.Time
 
 	// admitted closes when the loop takes the row; done when it lets go of
 	// the row for good, after its last event is in the outbox.
@@ -208,6 +256,14 @@ type row struct {
 	prefill     time.Duration
 	decodeStart time.Time
 	result      rowResult
+	// A time slice's state (batchfair.go): the tokens since the row was
+	// admitted or resumed, r.n at its last resume, whether it is parked, and
+	// the logits it holds while parked.
+	slice, resumedAt int
+	parked           bool
+	held             []float32
+	// startStep is the loop's step count when the row's prompt was in.
+	startStep int64
 
 	omu    sync.Mutex
 	events []Event
@@ -386,25 +442,144 @@ func (lp *stepLoop) serve() {
 	}
 }
 
-// admit moves waiting requests into rows while there is room.
+// admit moves waiting requests into rows while there is room: a free row,
+// and on a device room on the card for the row's history (kvRoom).
 func (lp *stepLoop) admit() {
 	lp.mu.Lock()
 	defer lp.mu.Unlock()
-	if len(lp.waiting) == 0 || len(lp.rows) >= lp.width {
-		return
+	lp.dropParked()
+	lp.order()
+	room, page, promised := lp.kvRoom()
+	blocked := func(need int) bool {
+		return len(lp.rows) >= lp.width || page > 0 && len(lp.rows) > 0 && need > room && !lp.admitAll
 	}
-	for len(lp.waiting) > 0 && len(lp.rows) < lp.width {
-		r := lp.waiting[0]
-		lp.waiting = lp.waiting[1:]
-		r.waited = time.Since(r.enqueued)
-		r.s.queuePos.Store(0)
-		lp.rows = append(lp.rows, r)
-		lp.shape++
-		lp.stats.admissions.Add(1)
-		lp.stats.admitWait.Add(int64(r.waited))
-		close(r.admitted)
+	if len(lp.waiting) > 0 {
+		for len(lp.waiting) > 0 {
+			r := lp.waiting[0]
+			need := rowPages(r, 0, page) * page
+			if blocked(need) {
+				// A time slice: rows past their quantum make way (batchfair.go).
+				vs := lp.victims(r, need, room, page)
+				for _, v := range vs {
+					if err := lp.parkRow(v); err != nil {
+						lp.mu.Unlock()
+						lp.finish(v, FinishError, "", err)
+						lp.mu.Lock()
+					}
+				}
+				if len(vs) > 0 {
+					room, page, promised = lp.kvRoom()
+					need = rowPages(r, 0, page) * page
+				}
+			}
+			if len(lp.rows) >= lp.width {
+				break
+			}
+			if blocked(need) {
+				lp.stats.kvWaits.Add(1)
+				break
+			}
+			lp.waiting = lp.waiting[1:]
+			r.s.queuePos.Store(0)
+			if r.parked {
+				if err := lp.resumeRow(r); err != nil {
+					lp.mu.Unlock()
+					lp.finish(r, FinishError, "", err)
+					lp.mu.Lock()
+					continue
+				}
+				if !stepsJointly(r.s.st) && len(lp.rows) > 0 {
+					// The card took back fewer of its blocks than it had: a
+					// split row steps alone and re-streams its history every
+					// token, and holds none of the card's room, so more would
+					// be admitted behind it. It parks again and waits for
+					// rows to retire; alone on the card it runs split.
+					if err := lp.e.parkLocked(r.s); err != nil {
+						lp.mu.Unlock()
+						lp.finish(r, FinishError, "", err)
+						lp.mu.Lock()
+						continue
+					}
+					r.parked = true
+					lp.stats.shortResumes.Add(1)
+					lp.waiting = append([]*row{r}, lp.waiting...)
+					break
+				}
+			} else {
+				r.waited = time.Since(r.enqueued)
+				lp.stats.admissions.Add(1)
+				lp.stats.admitWait.Add(int64(r.waited))
+				close(r.admitted)
+			}
+			room -= need
+			promised += need
+			r.slice = 0
+			lp.rows = append(lp.rows, r)
+			lp.shape++
+		}
+		lp.renumber()
 	}
-	lp.renumber()
+	if page > 0 {
+		lp.lm.gpu.PromiseKV(promised)
+	}
+}
+
+// admitLookahead is the most generated positions admission promises a row
+// beyond its prompt. A row's max_tokens is a bound, not a forecast (an
+// unbounded chat request's is the context), so promising all of it would
+// admit one row at a time; past the lookahead a row grows into whatever room
+// is left, and on a full card its oldest pages go home and stream back
+// (kvevict.go), as before there was admission. Parking the newest rows whole
+// when the card fills is the upgrade; a time slice (batchfair.go) parks rows
+// only for a request waiting to be admitted.
+const admitLookahead = 512
+
+// rowPages is the pages of history row r takes once its prompt and its
+// promised generation are in, less those of its first pos positions, which
+// it already holds. A page of 0 prices nothing.
+func rowPages(r *row, pos, page int) int {
+	if page <= 0 {
+		return 0
+	}
+	end := len(r.ids) + min(max(r.maxTokens, 0), r.resumedAt+admitLookahead)
+	if m := r.s.st.MaxSeq(); m > 0 {
+		end = min(end, m)
+	}
+	return max((end+page-1)/page-(pos+page-1)/page, 0)
+}
+
+// kvRoom is admission's budget, in positions: the card's room for history
+// (tier.GPU.KVRoom) less promised, what the admitted rows are still promised,
+// and the page both are counted in. A page of 0 is no bound: a model on the
+// host, or no history on the card to price.
+//
+// Admission keeps the rows' histories on the card. A row admitted past the
+// room would send the oldest pages of others home, and a step with two
+// sequences' pages at home is refused as one step: every row then runs alone
+// and re-streams its evicted prefix each token -- 172 of 256 requests failed
+// at 64 concurrent on a V100 that way. A row that does not fit waits for the
+// rows ahead of it to retire, or above fairness level 0 for rows past their
+// time slice to be parked (batchfair.go); the first row is
+// always admitted, so nothing waits on a card that holds none. The promise
+// goes to the tier too (tier.GPU.PromiseKV), so a batched scratch built
+// after admission does not take the pages it was made on.
+func (lp *stepLoop) kvRoom() (room, page, promised int) {
+	g := lp.lm.gpu
+	if g == nil {
+		return 0, 0, 0
+	}
+	room, page = g.KVRoom()
+	if page == 0 {
+		return 0, 0, 0
+	}
+	for _, r := range lp.rows {
+		pos := r.s.st.Pos()
+		if r.reset && !r.begun {
+			pos = 0 // its State's old history goes at its first chunk
+		}
+		promised += rowPages(r, pos, page) * page
+	}
+	return room - promised, page, promised
 }
 
 // started queues a row's GenerateStarted (and its echo) once its prompt is in.
@@ -425,6 +600,7 @@ func (r *row) started() {
 		Prefill:      r.prefill,
 		Execution:    ExecutionParallel,
 		Batched:      true,
+		Tools:        r.tools,
 	}})
 	if r.echo {
 		r.push(Event{Kind: EventToken, Token: &Token{ID: -1, Text: lm.m.Vocab.Decode(r.ids), Index: -1}})
@@ -490,7 +666,11 @@ func (lp *stepLoop) iterate() {
 	lp.post.start()
 	t0 := time.Now()
 	lp.step(units)
-	lp.budget.observe(decoding, prompt, time.Since(t0))
+	d := time.Since(t0)
+	lp.budget.observe(decoding, prompt, d)
+	if decoding > 0 {
+		lp.stepNs = ewma(lp.stepNs, float64(d))
+	}
 	lp.post.wait()
 }
 
@@ -547,8 +727,10 @@ func (lp *stepLoop) decodeUnits() []unit {
 	return units
 }
 
-// promptUnits is admission: the admitted prompts' next chunks, oldest first,
-// at most budget tokens in all. They ride in the step the decoding rows take
+// promptUnits is admission: the admitted prompts' next chunks, the fairness
+// level's share of the budget split evenly across a window of them (allot) and the rest oldest first,
+// at most budget tokens in all, or a token a prompt of the window when there
+// are more prompts than that. They ride in the step the decoding rows take
 // (model.StepRuns), each chunk as rows of its own session at its next
 // positions, so a new prompt never holds the decoding rows up by more than the
 // rows it adds to one step. A chunk that ends its prompt wants its logits --
@@ -567,8 +749,19 @@ func (lp *stepLoop) promptUnits(units []unit, budget int) []unit {
 		if !r.prompting() {
 			continue
 		}
-		// A request that left mid-prompt is not fed the rest: it ends here,
-		// its history holding what was fed, as a cancel mid-decode leaves it.
+		// A request that left mid-prompt is not fed the rest. One whose
+		// sequence starts here sends no GenerateStarted and gives its State
+		// back reset, as a prefill interrupted alone does; one that continues
+		// a sequence, or never began its prompt, keeps its history as it is.
+		if r.cancelled.Load() && (r.fresh || !r.begun) {
+			if r.fresh {
+				r.s.st.Reset()
+			}
+			lp.finish(r, FinishCancelled, "", errPromptCancelled)
+			continue
+		}
+		// A continuing request that left mid-prompt ends here, its history
+		// holding what was fed, as a cancel mid-decode leaves it.
 		if r.cancelled.Load() {
 			if r.begun {
 				r.prefill = time.Since(r.promptStart)
@@ -578,8 +771,21 @@ func (lp *stepLoop) promptUnits(units []unit, budget int) []unit {
 			continue
 		}
 		pipe := lp.chunkOf(r)
-		pipelined := !piped && pipe > model.MaxStepRows && len(r.ids)-r.fed > lp.promptChunk
-		if budget <= 0 && !pipelined {
+		k := 0
+		if !piped && pipe > model.MaxStepRows && len(r.ids)-r.fed > lp.promptChunk {
+			piped = true
+			k = -min(pipe, len(r.ids)-r.fed) // a pipelined chunk, marked negative
+		}
+		lp.prompts = append(lp.prompts, r)
+		lp.alloc = append(lp.alloc, k)
+	}
+	lp.allot(budget)
+	for i, r := range lp.prompts {
+		k, pipelined := lp.alloc[i], lp.alloc[i] < 0
+		if pipelined {
+			k = -k
+		}
+		if k == 0 {
 			continue
 		}
 		if !r.begun {
@@ -588,18 +794,74 @@ func (lp *stepLoop) promptUnits(units []unit, budget int) []unit {
 			}
 			r.begun, r.promptStart = true, time.Now()
 		}
-		var k int
-		if pipelined {
-			piped = true
-			k = min(pipe, len(r.ids)-r.fed)
-		} else {
-			k = min(budget, len(r.ids)-r.fed)
-			budget -= k
-		}
 		units = append(units, unit{r: r, tokens: r.ids[r.fed : r.fed+k], logits: r.fed+k == len(r.ids),
 			prompt: true, alone: pipelined})
 	}
+	if n := len(lp.prompts); n > 0 {
+		fed := 0
+		for _, k := range lp.alloc {
+			if k != 0 {
+				fed++
+			}
+		}
+		lp.stats.promptRowsHad.Add(int64(n))
+		lp.stats.promptRowsFed.Add(int64(fed))
+	}
+	clear(lp.prompts)
+	lp.prompts, lp.alloc = lp.prompts[:0], lp.alloc[:0]
 	return units
+}
+
+// allot shares budget prompt tokens across lp.prompts into lp.alloc (a
+// pipelined chunk, already negative, takes none).
+// The fairness level's share (fairShare) goes evenly to the prompts admitted
+// after the oldest, as many as its window (fairWindow), at least a token
+// each, its remainder turning round from step to step; the rest goes oldest
+// first, as at level 0, so a prompt whose rest fits its turn ends at its last
+// row. Prompts past the window wait their turn as at level 0.
+func (lp *stepLoop) allot(budget int) {
+	var plain int
+	for _, k := range lp.alloc {
+		if k == 0 {
+			plain++
+		}
+	}
+	if win := min(plain-1, fairWindow(lp.fair)); win > 0 {
+		share := min(max(fairShare(lp.fair, budget), win), max(budget, win))
+		budget = max(budget, win)
+		per, rem := share/win, share%win
+		j := -1 // the oldest plain prompt is not in the window
+		for i, r := range lp.prompts {
+			if lp.alloc[i] != 0 {
+				continue
+			}
+			if j++; j == 0 {
+				continue
+			}
+			if j > win {
+				break
+			}
+			k := per
+			if (j-1+win-lp.rr%win)%win < rem {
+				k++
+			}
+			k = min(k, len(r.ids)-r.fed, budget)
+			lp.alloc[i] = k
+			budget -= k
+		}
+		lp.rr++
+	}
+	for i, r := range lp.prompts {
+		if budget <= 0 {
+			break
+		}
+		if lp.alloc[i] < 0 {
+			continue
+		}
+		k := min(budget, len(r.ids)-r.fed-lp.alloc[i])
+		lp.alloc[i] += k
+		budget -= k
+	}
 }
 
 // step runs the units: those of sessions wholly on the device as one
@@ -758,6 +1020,7 @@ func (lp *stepLoop) ran(u unit, logits []float32) {
 	if !u.prompt {
 		r.logits = logits
 		r.n++
+		r.slice++
 		return
 	}
 	r.fed += len(u.tokens)
@@ -780,6 +1043,10 @@ func (lp *stepLoop) ran(u unit, logits []float32) {
 	lp.lm.ttft.restored.Add(int64(r.restored))
 	lp.lm.ttft.computed.Add(int64(len(r.ids) - r.restored))
 	r.started()
+	r.startStep = lp.stats.steps.Load()
+	if lp.onStarted != nil {
+		lp.onStarted(r)
+	}
 }
 
 // finish retires r: its held-back text is flushed as the one-at-a-time path
@@ -836,13 +1103,16 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 		}
 		restored = n
 	}
+	now := time.Now()
 	r := &row{
+		tools:     lm.toolStream(o),
 		s:         s,
 		ids:       ids,
 		restored:  restored,
 		fed:       restored,
 		seal:      store,
 		reset:     !o.Continue && restored == 0,
+		fresh:     !o.Continue,
 		echo:      o.Echo,
 		ephemeral: ephemeral,
 		sampler:   sampler,
@@ -851,7 +1121,9 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 		ignoreEOS: o.IgnoreEOS,
 		stops:     hasStop(o.Stop),
 		stream:    newStreamText(lm.m.Vocab.NewChatStream().Next, o.Stop),
-		enqueued:  time.Now(),
+		enqueued:  now,
+		since:     now,
+		prio:      rowPriority(o.Priority),
 		admitted:  make(chan struct{}),
 		done:      make(chan struct{}),
 		notify:    make(chan struct{}, 1),
@@ -923,6 +1195,9 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 	e.applyPageBudget(s.lm, nil)
 	if emitErr != nil {
 		return emitErr
+	}
+	if errors.Is(res.err, errPromptCancelled) {
+		return context.Cause(ctx)
 	}
 	if res.err != nil {
 		return res.err

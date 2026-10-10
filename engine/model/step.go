@@ -6,7 +6,7 @@ import (
 	"slices"
 	"sync/atomic"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // Step decodes one token for each State at once, tokens[i] for states[i], and

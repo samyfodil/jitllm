@@ -9,7 +9,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/internal/oracle"
 )
 
 // TestEmitGatedSSDSSEMatchesOracle is TestEmitGatedSSDMatchesOracle for the

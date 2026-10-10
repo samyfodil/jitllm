@@ -3,9 +3,9 @@ package tier
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // The device's own buffers -- the block scratches, the batched prompt's and
@@ -321,12 +321,35 @@ func freeRagOut(bs *blockScratch) {
 }
 
 // batchFor is the batched scratch a chunk or step of width w runs in: its own
-// width's when it is built or fits the budget (prepBatch refuses one that does
-// not), else the reserved prompt or step scratch when that is wider, which
-// pads. It returns the width to use, 0 for none. Callers hold g.mu.
+// width's when it is built; else the power of two at or above it, built when
+// it fits the budget (prepBatch refuses one that does not); else the narrowest
+// built scratch wider than w, which pads. It returns the width to use, 0 for
+// none. Callers hold g.mu.
+//
+// Widths go in powers of two so a step loop whose row count moves every step
+// builds a handful of scratches, not one per multiple of eight: on a V100 the
+// widths of 64 rows' steps grew the scratch by 2.6 GiB and then, with the KV
+// pool grown into the rest, every width after was refused and a 64-row decode
+// step ran padded to the 512-row scratch, eight times its rows.
 func (g *devTier) batchFor(w int) int {
-	if g.prepBatch(w) {
+	if g.bbs[w] != nil && g.prepBatch(w) {
 		return w
+	}
+	b := w
+	for b&(b-1) != 0 {
+		b += b & -b
+	}
+	if b <= batchWidth && g.prepBatch(b) {
+		return b
+	}
+	best := 0
+	for bw := range g.bbs {
+		if bw > w && (best == 0 || bw < best) {
+			best = bw
+		}
+	}
+	if best > 0 && g.prepBatch(best) {
+		return best
 	}
 	for _, r := range []int{g.promptW, g.stepW} {
 		if r > w && g.prepBatch(r) {

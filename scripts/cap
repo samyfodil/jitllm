@@ -8,6 +8,12 @@
 #
 # MEM defaults to $JITLLM_CAP_MEM or 8G.  See AGENTS.md RULE 3.
 #
+# It protects the DEVELOPER'S OWN MACHINE from OOM. It is not a measurement
+# tool: a benchmark host runs both engines bare and takes only the measurement
+# lock below (scripts/vs-llamacpp.sh does), because a memory cgroup charges
+# llama.cpp's mmap page cache and throttles it at MemoryHigh while jitllm's
+# O_DIRECT reads are not charged that way.
+#
 # ★★★ TWO CONTROLS, AND THE SECOND ONE IS WHY THE DESKTOP KEPT DYING.
 #
 # MemoryMax is the HARD ceiling: cross it and the kernel kills inside this cgroup. It works — every
@@ -98,7 +104,7 @@ capIsMeasurement() {
       # EXCLUSIVE for it would park every build and test behind a download.
       case "${2:-}" in convert|info|tokenize|hardware|library|asm) return 1 ;; esac
       return 0 ;;
-    llama-bench|llama-cli|*bench|*.test|vs-llamacpp.sh) return 0 ;;
+    llama-bench|llama-cli|*bench|*.test|vs-llamacpp.sh|vs-llamacpp-paged.sh) return 0 ;;
     go)
       case " $* " in *" -bench"*) return 0 ;; esac
       return 1 ;;
@@ -126,6 +132,7 @@ if [ "${1:-}" = "--selftest" ]; then
   t 1 taskset -c 0,2,4,6,8,10 go test ./... -count=1
   t 1 gcc -O2 -o probe probe.c
   t 0 ./scripts/vs-llamacpp.sh cpu m.gguf
+  t 0 ./scripts/vs-llamacpp-paged.sh m.gguf 2G
   t 1 make -j4
   ( export JITLLM_MEASURE=1; t 0 ./scratchpad/my-ab.sh )
   [ "$fail" = 0 ] && echo "cap --selftest: ok"
@@ -156,8 +163,35 @@ if [ "$(uname -s)" = Darwin ]; then
   exec "$@"
 fi
 
+# ★ A CONTAINER WITH NO SYSTEMD AT ALL (a CI image, a rented runner) is the one
+# place the cap is applied another way, and it is decided by a PLATFORM fact, as
+# Darwin's is: /run/systemd/system exists exactly when systemd is PID 1. On a
+# host that boots systemd -- the laptop -- a missing user manager is still the
+# refusal below, never this. The container's own cgroup takes the limit when
+# it is writable (a child cgroup with memory.max, memory.high and
+# memory.swap.max). Failing that, a container whose own cgroup states a
+# memory.max is already capped by it, read-only, and the job runs under that
+# wall rather than its own. With neither, the job runs UNCAPPED and says so: a
+# container is not the developer's machine, there is no desktop for oomd to
+# kill, and the only other wall, ulimit -v, limits ADDRESS SPACE rather than
+# memory -- the CUDA runtime reserves address space in proportion to the card,
+# so llama-bench aborted at 12 GiB and ran at 256 GiB, and an 80 GB card failed
+# every cuMemAlloc at 16 GiB. The mode is printed, so a log says what capped it.
+capmode=systemd
 runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-if ! command -v systemd-run >/dev/null 2>&1 || [ ! -S "$runtime/systemd/private" ]; then
+if [ "$(uname -s)" = Linux ] && [ ! -d /run/systemd/system ] \
+  && { ! command -v systemd-run >/dev/null 2>&1 || [ ! -S "$runtime/systemd/private" ]; }; then
+  capmode=container
+fi
+capBytes() {
+  case "$1" in
+    *G) echo $(( ${1%G} * 1024 * 1024 * 1024 )) ;;
+    *M) echo $(( ${1%M} * 1024 * 1024 )) ;;
+    *K) echo $(( ${1%K} * 1024 )) ;;
+    *) echo "$1" ;;
+  esac
+}
+if [ "$capmode" = systemd ] && { ! command -v systemd-run >/dev/null 2>&1 || [ ! -S "$runtime/systemd/private" ]; }; then
   echo "scripts/cap: REFUSING to run uncapped — systemd-run --user is unavailable." >&2
   echo "  RULE 3c: systemd-oomd has killed the desktop three times on this box, twice from an" >&2
   echo "  uncapped 'go test'. There is NO bypass here on purpose -- a flag that makes a" >&2
@@ -213,6 +247,38 @@ if [ "${JITLLM_NO_LOCK:-0}" != "1" ]; then
       echo "scripts/cap: acquired after $((SECONDS-t0))s" >&2
     fi
   fi
+fi
+
+if [ "$capmode" = container ]; then
+  maxb="$(capBytes "$mem")"
+  highb="$(( maxb / 1000 * 900 ))"
+  cg=""
+  rel="$(sed -n 's/^0:://p' /proc/self/cgroup 2>/dev/null | head -1)"
+  if [ -n "$rel" ] && [ -f "/sys/fs/cgroup${rel%/}/cgroup.controllers" ]; then
+    parent="/sys/fs/cgroup${rel%/}"
+    # The memory controller must be delegated to the children; a write the
+    # container forbids fails and leaves the ulimit mode.
+    grep -qw memory "$parent/cgroup.subtree_control" 2>/dev/null \
+      || echo +memory 2>/dev/null >"$parent/cgroup.subtree_control"
+    child="$parent/jitllm-cap-$$"
+    if grep -qw memory "$parent/cgroup.subtree_control" 2>/dev/null && mkdir "$child" 2>/dev/null; then
+      if echo "$maxb" 2>/dev/null >"$child/memory.max" && echo "$highb" 2>/dev/null >"$child/memory.high" \
+        && { echo 0 2>/dev/null >"$child/memory.swap.max" || [ ! -e "$child/memory.swap.max" ]; } \
+        && echo $$ 2>/dev/null >"$child/cgroup.procs"; then
+        cg="$child"
+      else
+        rmdir "$child" 2>/dev/null
+      fi
+    fi
+  fi
+  if [ -n "$cg" ]; then
+    echo "scripts/cap: container mode, cgroup $cg memory.max=$mem memory.high=$highb" >&2
+  elif encl="$(cat "/sys/fs/cgroup${rel%/}/memory.max" 2>/dev/null)" && [ -n "$encl" ] && [ "$encl" != max ]; then
+    echo "scripts/cap: container mode, the container's own cgroup memory.max=$encl (read-only; $mem not applied)" >&2
+  else
+    echo "scripts/cap: container mode, no writable cgroup and no stated memory.max; running UNCAPPED ($mem not applied)" >&2
+  fi
+  exec "$@"
 fi
 
 exec systemd-run --user --scope -q --collect \

@@ -668,8 +668,8 @@ const file_jitllm_v1_device_proto_rawDesc = "" +
 	"\rDeviceService\x12N\n" +
 	"\vListDevices\x12\x1d.jitllm.v1.ListDevicesRequest\x1a\x1e.jitllm.v1.ListDevicesResponse\"\x00\x12H\n" +
 	"\tGetDevice\x12\x1b.jitllm.v1.GetDeviceRequest\x1a\x1c.jitllm.v1.GetDeviceResponse\"\x00\x12`\n" +
-	"\x11GetMemoryTopology\x12#.jitllm.v1.GetMemoryTopologyRequest\x1a$.jitllm.v1.GetMemoryTopologyResponse\"\x00B\x9c\x01\n" +
-	"\rcom.jitllm.v1B\vDeviceProtoP\x01Z9github.com/samyfodil/jitllm/server/gen/jitllm/v1;jitllmv1\xa2\x02\x03JXX\xaa\x02\tJitllm.V1\xca\x02\tJitllm\\V1\xe2\x02\x15Jitllm\\V1\\GPBMetadata\xea\x02\n" +
+	"\x11GetMemoryTopology\x12#.jitllm.v1.GetMemoryTopologyRequest\x1a$.jitllm.v1.GetMemoryTopologyResponse\"\x00B\x99\x01\n" +
+	"\rcom.jitllm.v1B\vDeviceProtoP\x01Z6github.com/jitllm/jitllm/server/gen/jitllm/v1;jitllmv1\xa2\x02\x03JXX\xaa\x02\tJitllm.V1\xca\x02\tJitllm\\V1\xe2\x02\x15Jitllm\\V1\\GPBMetadata\xea\x02\n" +
 	"Jitllm::V1b\x06proto3"
 
 var (

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // hybMapRunnable is mustMap (hostexec_test.go) for the external test

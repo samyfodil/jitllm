@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/samyfodil/jitllm/engine/sched"
-	"github.com/samyfodil/jitllm/jit/cpu"
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
-	"github.com/samyfodil/jitllm/jit/gpu/vulkan"
+	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/vulkan"
 )
 
 // hardware reports what compute this machine offers jitllm.
@@ -169,7 +169,7 @@ func reportGPU() {
 	backend.SetVerbose(os.Getenv("JITLLM_GPU_VERBOSE") != "")
 	// The same call tier.Open makes. Opening and closing every backend is
 	// covered by backend.TestCloseThenSpawnThreads.
-	hipCfg := backend.HIPConfig{Path: os.Getenv("JITLLM_ROCM")}
+	hipCfg := backend.HIPConfig{Path: rocmDir()}
 	devs := backend.OpenWith(backend.Opts{HIP: hipCfg})
 	defer func() {
 		for _, d := range devs {

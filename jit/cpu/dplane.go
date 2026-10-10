@@ -1,8 +1,8 @@
 package cpu
 
 import (
-	"github.com/samyfodil/jitllm/format/quant"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // The d plane's geometry. It is not the payload's, and on a narrow format not

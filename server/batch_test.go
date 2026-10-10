@@ -15,9 +15,9 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // The step loop's gates (batch.go): concurrent generates on one device model

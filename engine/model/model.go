@@ -15,13 +15,13 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/engine/sched"
-	"github.com/samyfodil/jitllm/format/quant"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/tok"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/tok"
 )
 
 // Config is the hyperparameter set, after per-architecture defaults are applied.
@@ -1150,6 +1150,9 @@ type Model struct {
 	// sampleChoices is the device sampler's measured verdicts, per key
 	// (devsample.go).
 	sampleChoices sampleChoices
+	// chatTemplates are the chat templates compiled, by source: a request
+	// renders its model's template, not compiles it (chat.go).
+	chatTemplates sync.Map
 	// preloadStop, preloadDone and preloadErr are WithPreload's background
 	// read: Close closes the first and waits on the second.
 	preloadStop, preloadDone chan struct{}

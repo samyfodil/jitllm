@@ -1043,8 +1043,8 @@ const file_jitllm_v1_session_proto_rawDesc = "" +
 	"\fListSessions\x12\x1e.jitllm.v1.ListSessionsRequest\x1a\x1f.jitllm.v1.ListSessionsResponse\"\x00\x12Q\n" +
 	"\fCloseSession\x12\x1e.jitllm.v1.CloseSessionRequest\x1a\x1f.jitllm.v1.CloseSessionResponse\"\x00\x12Q\n" +
 	"\fResetSession\x12\x1e.jitllm.v1.ResetSessionRequest\x1a\x1f.jitllm.v1.ResetSessionResponse\"\x00\x12W\n" +
-	"\x0eGetDeviceQueue\x12 .jitllm.v1.GetDeviceQueueRequest\x1a!.jitllm.v1.GetDeviceQueueResponse\"\x00B\x9d\x01\n" +
-	"\rcom.jitllm.v1B\fSessionProtoP\x01Z9github.com/samyfodil/jitllm/server/gen/jitllm/v1;jitllmv1\xa2\x02\x03JXX\xaa\x02\tJitllm.V1\xca\x02\tJitllm\\V1\xe2\x02\x15Jitllm\\V1\\GPBMetadata\xea\x02\n" +
+	"\x0eGetDeviceQueue\x12 .jitllm.v1.GetDeviceQueueRequest\x1a!.jitllm.v1.GetDeviceQueueResponse\"\x00B\x9a\x01\n" +
+	"\rcom.jitllm.v1B\fSessionProtoP\x01Z6github.com/jitllm/jitllm/server/gen/jitllm/v1;jitllmv1\xa2\x02\x03JXX\xaa\x02\tJitllm.V1\xca\x02\tJitllm\\V1\xe2\x02\x15Jitllm\\V1\\GPBMetadata\xea\x02\n" +
 	"Jitllm::V1b\x06proto3"
 
 var (

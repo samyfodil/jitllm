@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // isoTypes are the formats both probes below need.

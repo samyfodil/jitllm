@@ -6,9 +6,9 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/jit/gpu/amdgpu"
-	"github.com/samyfodil/jitllm/jit/gpu/hip"
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/amdgpu"
+	"github.com/jitllm/jitllm/jit/gpu/hip"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // hipDev is one AMD GPU through ROCm. Its kernels are jitllm's IR lowered to

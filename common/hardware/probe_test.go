@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/common/hardware"
+	"github.com/jitllm/jitllm/common/hardware"
 )
 
 // The spec picker is only worth having if it agrees with the engine, so the

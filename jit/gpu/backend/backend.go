@@ -15,9 +15,9 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
-	"github.com/samyfodil/jitllm/jit/gpu/metal"
-	"github.com/samyfodil/jitllm/jit/gpu/vulkan"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/metal"
+	"github.com/jitllm/jitllm/jit/gpu/vulkan"
 )
 
 // verbose traces every backend's open attempt, and the tier's device probe and

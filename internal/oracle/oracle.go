@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // MatVec computes out[r] = dot(row r of w, x), for r in [0, nrows).

@@ -21,6 +21,7 @@ A model is a stack of repeating blocks. jitllm places each block on a device or 
 | `cuda[:ORD]` | a CUDA device by driver ordinal |
 | `vulkan[:SEL]` | a Vulkan device by index or a substring of its name |
 | `metal` | the system's Metal device |
+| `hip[:ORD]` | an AMD GPU through the native backend, by ordinal; found when ROCm is installed and not yet tested on AMD hardware. An AMD GPU also runs through `vulkan` with only its driver. |
 
 Any device entry can carry `=BYTES` to budget it on its own: `3G`, `3GiB`, `512M` or `800000000`.
 

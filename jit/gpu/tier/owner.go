@@ -3,7 +3,7 @@ package tier
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // A tier is one model. Its blocks are keyed by index (GPU.own, devTier.layers)

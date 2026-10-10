@@ -4,8 +4,9 @@
 (`jit/gpu/hip`), the lowering (`jit/gpu/amdgpu`), the device (`backend.hipDev`)
 and the `hip:N` naming through the tier, the CLI and the server are in. Every
 kernel `lowertest` registers (125) compiles to a code object for gfx90a, gfx942,
-gfx1100 and gfx1201 through comgr with no GPU present. The device gates exist
-and skip by name ("NO AMD DEVICE") until `scripts/hip-gates.sh` runs on a rented
+gfx1030, gfx1100 and gfx1201 through comgr with no GPU present, under comgr 3
+(ROCm 6.4.1) and comgr 2 (ROCm 6.3.3) alike. The device gates exist
+and skip by name ("NO AMD DEVICE") until `scripts/hip-gates.sh` runs on a host with an AMD
 card.
 
 The requirement, stated by the user: a native AMD backend reached through goffi
@@ -232,9 +233,13 @@ the packages extract without root, see "Running the gates"):
 - `lowertest.TestAMDGPULowersForEveryTarget`: every kernel in
   `lowertest`'s inventory -- the model gates' shapes -- lowers, passes
   `ir.Validate`'s RULE 13 invariants, compiles to a code object for gfx90a,
-  gfx942, gfx1100 and gfx1201, and its metadata says no scratch and no spill,
-  the wave size the target runs, LDS equal to the shared arrays declared, and
-  the declared workgroup. SGPRs spilled to VGPR lanes (no scratch) are reported,
+  gfx942, gfx1030, gfx1100 and gfx1201, and its metadata says no scratch and
+  no spill, the wave size the target runs, LDS equal to the shared arrays
+  declared, the declared workgroup, and registers and LDS within the target's
+  limits; the count of code objects must be every kernel, so the gate cannot
+  pass empty. Flash attention on gfx1030 sits at 256 VGPRs (occupancy 4),
+  against 162 on gfx1100: no spill, and the first thing to look at on an RDNA2
+  card. SGPRs spilled to VGPR lanes (no scratch) are reported,
   not refused: flash attention spills 2-4 on gfx90a.
 - `lowertest.TestAMDGPURefusesWhatItCannotLower`: the fragment MMA kernels.
 - Lowering unit tests that read the text: shift semantics, saturating convert,
@@ -259,11 +264,11 @@ The offline gate needs only comgr. ROCm's packages extract without root:
     dpkg-deb -x comgr_*.deb rocm
     JITLLM_ROCM=$PWD/rocm/opt/rocm-6.4.1/lib ./scripts/cap 8G -- go test ./jit/gpu/lowertest -run AMDGPU
 
-## Running the gates on a rented card
+## Running the gates on a host with an AMD card
 
 Two cards: one CDNA (MI300X gfx942, or MI250X gfx90a) and one RDNA3/RDNA4
 (RX 7900 XTX gfx1100, or RX 9070 XT gfx1201), each with ROCm 6.4 or later
-installed (`/opt/rocm`). From the repo root on the rented box:
+installed (`/opt/rocm`). From the repo root on that host:
 
     JITLLM_MODELS=/path/to/models ./scripts/hip-gates.sh
 
@@ -273,3 +278,37 @@ gates with `-run` over every oracle comparison, and the model gates
 `TestBatchMatchesForward`, `TestDecodeDoesNotAllocate`, the relocation and paging
 gates) with the device pinned to `hip`, and fails if any HIP gate printed
 "NO AMD DEVICE".
+
+## comgr 2 and comgr 3
+
+Comgr 3 (ROCm 6.4 and later) removed two actions and a language and renumbered
+the rest; comgr 2 is what ROCm 6.0 to 6.3 ship and what AMD's Windows driver
+installs (`amd_comgr_2.dll`). `hip.comgrCodes` holds each version's numbers,
+read off its `amd_comgr.h`, and a major version past 3 is refused rather than
+driven with numbers that may mean other actions. The offline gate runs under
+either: `JITLLM_ROCM` naming comgr 2.8's directory runs the same 125 kernels per
+target.
+
+## Windows
+
+The same binding runs on Windows through AMD's HIP SDK, with the same `hip:N`
+names and the same rules (no ROCm: the card is a Vulkan device and `jitllm
+hardware` says where HIP was looked for; an explicit `hip:N` that cannot be
+honoured is an error). The libraries: `amdhip64_7.dll`, `amdhip64_6.dll` (the
+display driver puts it in System32, so the loader's own search finds it) and
+comgr, which the driver ships as `amd_comgr_2.dll` and the SDK under a
+versioned name (`amd_comgr0604.dll` and so on), found by pattern in each
+directory searched. The default directories are every
+`C:\Program Files\AMD\ROCm\X.Y\bin`, newest first; `cmd/jitllm` and `jitllmd`
+pass `HIP_PATH\bin` as `hip.Config.Path` when `JITLLM_ROCM` is unset, since the
+library reads no environment. Gate: `hip.TestWindowsSDKIsFoundNewestFirst`
+(a fake SDK layout).
+
+Every entry point the binding uses is exported by the Windows driver's
+`amdhip64_6.dll` (25 HIP calls, `hipGetDevicePropertiesR0600` among them) and
+`amd_comgr_2.dll` (28 calls), read off the export tables of the 25.Q3 driver
+package; none is missing. What only a card can show: that
+`hipDeviceProp_tR0600`'s `gcnArchName` sits at the same offset under the
+Windows ABI (`archFromProps` refuses a name that is not a gfx target, so a
+wrong offset is an error, not a misread), and that the driver's comgr 2
+generates the same code objects.

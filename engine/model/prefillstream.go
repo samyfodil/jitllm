@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // A prompt's host blocks, streamed through the device.

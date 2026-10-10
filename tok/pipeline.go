@@ -3,7 +3,7 @@ package tok
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/tok/pretok"
+	"github.com/jitllm/jitllm/tok/pretok"
 )
 
 // A pre-tokenizer is a pipeline of typed stages, composed at load time rather

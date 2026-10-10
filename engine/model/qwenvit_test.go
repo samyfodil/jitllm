@@ -5,7 +5,7 @@ import (
 	"image/color"
 	"math"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 	"testing"
 )
 

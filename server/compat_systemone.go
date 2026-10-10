@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/tok/jinja"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/tok/jinja"
 )
 
 // TypeSafe-compatible POST /v1/systemone: the System One request, as the

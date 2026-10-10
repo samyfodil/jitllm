@@ -11,7 +11,7 @@ commit, all but one: `internal/testmodels/fetch.sh` downloads the rest (see
 | `JITLLM_MODEL_FREE` | `1`: a missing model skips instead of failing (CI only, see "What CI runs") | a missing model fails |
 
 The fallback is located by walking up from the test's working directory to the
-`go.mod` that declares `github.com/samyfodil/jitllm` -- so it is the same
+`go.mod` that declares `github.com/jitllm/jitllm` -- so it is the same
 directory from every package, including the nested `ui/` and `server/` modules.
 `models/` may be a symlink to a model disk; otherwise point the variable at
 the models instead of faking the link:
@@ -173,6 +173,7 @@ sweep by name and are never resolved.
 | `JITLLM_TPL_MODEL` | `jinja.TestGGUFChatTemplatesRender` | substring | every GGUF |
 | `JITLLM_SERVER_MODEL` | `server.TestEndToEndAgainstARealContainer` | a `.jlm` container | test skips |
 | `JITLLM_SERVER_BATCH_MODELS` | `server.TestBatch*` | comma-separated `.jlm` names or paths, each run beside the default | `stories15M-q8_0.jlm` only |
+| `JITLLM_TOOL_MODELS` | `server.TestToolChoiceForcesACall` | comma-separated `.jlm` names, in place of the default | `Qwen3-0.6B-Q8_0.jlm` and `Llama-3.2-1B-Instruct-Q4_K_M.jlm`; also run with Qwen3.5-0.8B-f16, DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M and gpt-oss-20b-Q4_K_M |
 | `JITLLM_STEP_MIXTURE` | `model.TestStepAcrossSessionsMixture*` | comma-separated names or paths | Qwen3-MoE-4x0.6B and olmoe; a card that cannot place every block skips |
 | `JITLLM_ALLOC_MODELS` | `model.TestDecodeDoesNotAllocate` | comma-separated names or paths, each run beside the default | Llama-3.2-1B, olmoe and Qwen3.5-0.8B only |
 | `JITLLM_SLOW` | several `model` sweeps | `1` admits models over 2 GiB | small models only |

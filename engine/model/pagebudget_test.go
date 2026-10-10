@@ -3,8 +3,8 @@ package model
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestOpenHonoursAPageBudget asserts the budget reaches the reader before the
