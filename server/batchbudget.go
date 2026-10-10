@@ -95,9 +95,17 @@ func (b *stepBudget) observe(decoding, prompt int, d time.Duration) {
 		b.fitted = true
 	case b.fitted && y <= b.cost*b.icept:
 		// The widths settled on the budget and stopped spreading, and the
-		// step is within its cost: the last fit stands. Steps the budget
-		// does not limit spread them again.
-		return
+		// step is within its cost: the last fit stands -- unless the step
+		// spent under half of what its prompt may cost, when the fit is
+		// stale and the budget doubles, which spreads the widths again. A
+		// fit taken across an outlier (a step that compiled kernels or grew
+		// the KV pool) otherwise held the budget at its floor for good: on a
+		// V100 at 64 requests it read 60 ms a prompt token, fed every prompt
+		// 8 tokens a step, and the first token waited minutes.
+		if y-b.icept >= (b.cost-1)*b.icept/2 {
+			return
+		}
+		w = 2 * b.cur
 	case b.fitted:
 		// Settled, and over its cost: the prompt tokens cost more than
 		// the fit said. Against the last decode step's time, the tokens
