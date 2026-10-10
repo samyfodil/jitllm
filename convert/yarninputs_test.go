@@ -5,9 +5,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/samyfodil/jitllm/convert/safetensors"
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/convert/safetensors"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestYarnAgreesAcrossInputs holds YaRN's container fields -- the ramp, the

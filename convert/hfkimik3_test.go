@@ -12,10 +12,10 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/samyfodil/jitllm/convert/safetensors"
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/format/quant"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/convert/safetensors"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // k3Key is a container tensor's identity across two sources.

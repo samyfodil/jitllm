@@ -5,7 +5,7 @@ package cpu
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/internal/oracle"
 )
 
 // The MoE top-k on the forced SSE tier. TestMoETopKMatchesTheGoLoops already

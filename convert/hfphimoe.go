@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // phimoeHF is Phi-3.5-MoE, Phi-mini-MoE and Phi-tiny-MoE (PhiMoEForCausalLM,

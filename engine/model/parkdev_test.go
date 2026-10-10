@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestParkBringsTheDeviceHistoryHomeAndBack: a session with every block on

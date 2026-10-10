@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
-	"github.com/samyfodil/jitllm/tok"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/tok"
 )
 
 // heapNow is the live heap after a full collection.

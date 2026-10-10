@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/common/session"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // A probe, not a gate: it prints what a multi-turn conversation actually

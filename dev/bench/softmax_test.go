@@ -1,7 +1,7 @@
 package bench
 
 import (
-	"github.com/samyfodil/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/internal/oracle"
 	"math/rand"
 	"testing"
 )

@@ -10,8 +10,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // cmdModels is ModelService: what is on disk, what is loaded, and the two

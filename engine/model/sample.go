@@ -5,7 +5,7 @@ import (
 	"math/rand"
 	"slices"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // Sampler turns logits into a token. The zero value is greedy.

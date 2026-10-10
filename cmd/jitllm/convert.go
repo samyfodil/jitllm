@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/samyfodil/jitllm/convert"
-	"github.com/samyfodil/jitllm/convert/hf"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/convert/hf"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // convertCmd writes a GGUF (or a safetensors model) as a jlm container.

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // A file the engine cannot open must reach the session as a problem with its

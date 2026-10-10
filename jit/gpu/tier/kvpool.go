@@ -6,8 +6,8 @@ import (
 	"slices"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // ErrKVCapacity is a device that cannot give a sequence another page of

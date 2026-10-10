@@ -1,6 +1,6 @@
 package cpu
 
-import "github.com/samyfodil/jitllm/jit/gpu/kernels"
+import "github.com/jitllm/jitllm/jit/gpu/kernels"
 
 // The host readers of container v27's SC stream (kernels.ScStream: Q4_K and
 // Q5_K's sixteen 6-bit scale/min fields in three words a super-block). Every

@@ -9,9 +9,9 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/jit/gpu/cuda"
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
-	"github.com/samyfodil/jitllm/jit/gpu/ptx"
+	"github.com/jitllm/jitllm/jit/gpu/cuda"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/ptx"
 )
 
 // cudaDev owns the device from one goroutine and serialises every call onto it.

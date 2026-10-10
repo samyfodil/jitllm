@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestQuantActDose prices the generated activation quantizer against the Go

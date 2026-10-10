@@ -13,11 +13,11 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/format/quant"
-	"github.com/samyfodil/jitllm/internal/testmodels"
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
-	"github.com/samyfodil/jitllm/server/gen/jitllm/v1/jitllmv1connect"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
+	"github.com/jitllm/jitllm/server/gen/jitllm/v1/jitllmv1connect"
 )
 
 // These gates run the six Connect services against a REAL engine: a container

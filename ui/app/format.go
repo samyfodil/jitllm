@@ -3,7 +3,7 @@ package app
 import (
 	"time"
 
-	"github.com/samyfodil/jitllm/common/session"
+	"github.com/jitllm/jitllm/common/session"
 )
 
 // Formatting helpers shared by every screen, re-exported from

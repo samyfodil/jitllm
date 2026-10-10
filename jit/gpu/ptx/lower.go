@@ -3,7 +3,7 @@ package ptx
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // Lower translates a kernel into PTX text.

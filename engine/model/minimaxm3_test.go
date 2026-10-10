@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 const m3GoldScript = "scripts/minimaxm3gold.py"

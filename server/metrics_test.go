@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // sampleLine is one sample of the text exposition format: a name, optional

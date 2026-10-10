@@ -3,7 +3,7 @@ package jinja_test
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/tok/jinja"
+	"github.com/jitllm/jitllm/tok/jinja"
 )
 
 // benchTemplate renders a family's template with the data engine/model binds

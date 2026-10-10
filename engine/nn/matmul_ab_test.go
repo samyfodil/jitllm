@@ -6,9 +6,9 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/samyfodil/jitllm/dev/bench"
+	"github.com/jitllm/jitllm/dev/bench"
 )
 
 // TestABMatMulVsMatVec measures what batching prefill is worth: one pass over

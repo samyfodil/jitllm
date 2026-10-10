@@ -25,7 +25,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/samyfodil/jitllm/tok/pretok"
+	"github.com/jitllm/jitllm/tok/pretok"
 )
 
 func main() {

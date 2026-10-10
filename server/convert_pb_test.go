@@ -10,8 +10,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/samyfodil/jitllm/engine/model"
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	"github.com/jitllm/jitllm/engine/model"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // The Go <-> protobuf mappings and the error codes, gated table by table: a

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/tok"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/tok"
 )
 
 // streamText is where a streaming shim actually goes wrong, so it is gated on

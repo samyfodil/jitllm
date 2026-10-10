@@ -4,11 +4,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
-	"github.com/samyfodil/jitllm/jit/gpu/msl"
-	"github.com/samyfodil/jitllm/jit/gpu/ptx"
-	"github.com/samyfodil/jitllm/jit/gpu/spirv"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/msl"
+	"github.com/jitllm/jitllm/jit/gpu/ptx"
+	"github.com/jitllm/jitllm/jit/gpu/spirv"
 )
 
 // Which backends lower ir.OpMMA and the tile ops is a list in the repo, asserted

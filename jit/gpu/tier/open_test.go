@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
 )
 
 // The spec grammar, the budget defaults, the pool arithmetic and the rule that

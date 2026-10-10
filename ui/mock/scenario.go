@@ -5,8 +5,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/samyfodil/jitllm/ui/app"
-	"github.com/samyfodil/jitllm/ui/screen"
+	"github.com/jitllm/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/screen"
 )
 
 // Step is one thing a person or the engine does, and the frame after it is

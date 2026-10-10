@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/samyfodil/jitllm/jit/gpu/cuda"
+	"github.com/jitllm/jitllm/jit/gpu/cuda"
 )
 
 // Device identity: is this enumerated device the same piece of hardware as that

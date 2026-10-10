@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // TestAFailedWriteLeavesNoContainer is the gate on containers being atomic.

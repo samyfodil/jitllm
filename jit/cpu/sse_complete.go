@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/samyfodil/jitllm/format/quant"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // SSEPending lists the SSE-tier table's ops that have no kernel yet, by field

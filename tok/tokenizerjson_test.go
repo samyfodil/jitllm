@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
-	"github.com/samyfodil/jitllm/tok/pretok"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/tok/pretok"
 )
 
 // Gates for the runtime tokenizer.json parse and for WithTokenizer. Each was

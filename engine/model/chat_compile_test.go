@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/samyfodil/jitllm/tok/jinja"
+	"github.com/jitllm/jitllm/tok/jinja"
 )
 
 // TestChatTemplateCompilesOncePerModel: a request renders its model's chat

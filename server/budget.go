@@ -3,7 +3,7 @@ package server
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/engine/sched"
 )
 
 // backgroundShare is the fraction of the host budget that all backgrounded

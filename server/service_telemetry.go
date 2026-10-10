@@ -6,7 +6,7 @@ import (
 
 	"connectrpc.com/connect"
 
-	v1 "github.com/samyfodil/jitllm/server/gen/jitllm/v1"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // TelemetryService implements jitllm.v1.TelemetryService. Every number here

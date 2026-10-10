@@ -6,8 +6,8 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/server/gen/jitllm/v1/jitllmv1connect"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/server/gen/jitllm/v1/jitllmv1connect"
 )
 
 func chatMessage(role, content string) model.ChatMessage {

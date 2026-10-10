@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // The State half of speculative decoding (spec.go): one call that runs rows of

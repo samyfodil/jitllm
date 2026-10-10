@@ -3,7 +3,7 @@ package model
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // M-RoPE: a row's rotary position is a property of the ROW, with a coordinate

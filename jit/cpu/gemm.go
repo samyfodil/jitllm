@@ -5,7 +5,7 @@ package cpu
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // EmitGEMMWindow generates the prefill kernel: out[rows][8*nr] += W[rows][k] . A[8*nr][k],

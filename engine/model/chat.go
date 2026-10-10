@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/tok/jinja"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/tok/jinja"
 )
 
 // A ChatMessage is one turn. Role is the template's vocabulary, not this

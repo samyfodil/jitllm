@@ -6,8 +6,8 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/jit/gpu/hip"
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/hip"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // hipOrSkip opens HIP device 0, or skips by name: without an AMD card the

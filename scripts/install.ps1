@@ -21,7 +21,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$repo = 'samyfodil/jitllm'
+$repo = 'jitllm/jitllm'
 $base = if ($env:JITLLM_DOWNLOAD_URL) { $env:JITLLM_DOWNLOAD_URL } else { "https://github.com/$repo/releases/download" }
 
 if (-not $Programs -and $env:JITLLM_PROGRAMS) { $Programs = $env:JITLLM_PROGRAMS -split '[\s,]+' | Where-Object { $_ } }

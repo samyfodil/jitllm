@@ -6,8 +6,8 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/tok/pretok"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/tok/pretok"
 )
 
 // Byte-level BPE, which is what every model newer than llama2 carries

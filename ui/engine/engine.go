@@ -4,11 +4,11 @@
 package engine
 
 import (
-	core "github.com/samyfodil/jitllm/common/engine"
-	"github.com/samyfodil/jitllm/common/hardware"
-	"github.com/samyfodil/jitllm/common/session"
-	"github.com/samyfodil/jitllm/ui/app"
-	"github.com/samyfodil/jitllm/ui/screen"
+	core "github.com/jitllm/jitllm/common/engine"
+	"github.com/jitllm/jitllm/common/hardware"
+	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/screen"
 )
 
 // Engine is the shared engine, as the window holds it.

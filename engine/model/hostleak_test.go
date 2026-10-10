@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 func rssKB(t *testing.T) int {

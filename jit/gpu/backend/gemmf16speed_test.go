@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // TestGemmF16Speed times GemmVolta's m16n8 form against MatVecMMA on

@@ -15,10 +15,10 @@ import (
 	"github.com/gogpu/gogpu"
 	"github.com/gogpu/ui/desktop"
 
-	"github.com/samyfodil/jitllm/ui/app"
-	"github.com/samyfodil/jitllm/ui/engine"
-	"github.com/samyfodil/jitllm/ui/mock"
-	"github.com/samyfodil/jitllm/ui/screen"
+	"github.com/jitllm/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/engine"
+	"github.com/jitllm/jitllm/ui/mock"
+	"github.com/jitllm/jitllm/ui/screen"
 )
 
 // register installs every screen in tab order and attaches what the screens

@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/samyfodil/jitllm/convert/meta"
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/tok/jinja"
+	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/tok/jinja"
 )
 
 // WithChatTemplate stores the chat template(s) path carries in place of the

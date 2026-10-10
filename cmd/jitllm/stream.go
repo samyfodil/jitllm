@@ -8,9 +8,9 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/samyfodil/jitllm/convert"
-	"github.com/samyfodil/jitllm/convert/hf"
-	"github.com/samyfodil/jitllm/convert/safetensors"
+	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/convert/hf"
+	"github.com/jitllm/jitllm/convert/safetensors"
 )
 
 // streamed is a safetensors repository opened where it lives: its JSON and

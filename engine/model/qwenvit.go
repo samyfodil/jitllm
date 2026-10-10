@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // The Qwen-VL towers' geometry: a patch grid that follows the picture

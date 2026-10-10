@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // Magic is the container's first eight bytes.

@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
-	"github.com/samyfodil/jitllm/tok"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/tok"
 )
 
 // TestContainerFromNoGGUFAtAll builds a model out of ordinary Go values and

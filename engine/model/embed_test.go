@@ -9,8 +9,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // The embedding gates. Each model's golden (scripts/embedgold.py) carries two

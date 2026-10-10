@@ -1,6 +1,6 @@
 package app
 
-import "github.com/samyfodil/jitllm/common/session"
+import "github.com/jitllm/jitllm/common/session"
 
 // The chat list is [session.ChatList], which the terminal drives too; the
 // Store keeps the current chat's turns in its transcript, where every turn

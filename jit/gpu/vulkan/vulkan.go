@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ffi"
+	"github.com/jitllm/jitllm/jit/gpu/ffi"
 )
 
 type up = unsafe.Pointer

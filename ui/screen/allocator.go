@@ -9,8 +9,8 @@ import (
 	"github.com/gogpu/ui/primitives"
 	"github.com/gogpu/ui/widget"
 
-	"github.com/samyfodil/jitllm/common/session"
-	"github.com/samyfodil/jitllm/ui/app"
+	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/ui/app"
 )
 
 // HostLine is the host's share; see [session.HostLine].

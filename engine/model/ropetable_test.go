@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // TestRopeTableAgreesWithF64 prices the GENERATED rotary table against the

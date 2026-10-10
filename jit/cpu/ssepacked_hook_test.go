@@ -5,7 +5,7 @@ package cpu
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // TestSSEPackedSignedViolationIsCaught runs the SSE Q8_0 kernels against the

@@ -5,8 +5,8 @@ package tier
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // mlaPlan is a latent-attention block's geometry. The widths are all different

@@ -6,8 +6,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/samyfodil/jitllm/convert"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // planConvert is `jitllm convert -plan`: the whole conversion of a safetensors

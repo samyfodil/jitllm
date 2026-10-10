@@ -12,7 +12,7 @@ package hardware
 
 import (
 	"fmt"
-	"github.com/samyfodil/jitllm/dev/bench"
+	"github.com/jitllm/jitllm/dev/bench"
 	"os"
 	"os/exec"
 	"runtime"
@@ -20,13 +20,13 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/samyfodil/jitllm/engine/sched"
-	"github.com/samyfodil/jitllm/format/quant"
-	"github.com/samyfodil/jitllm/jit/cpu"
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 
-	"github.com/samyfodil/jitllm/common/session"
+	"github.com/jitllm/jitllm/common/session"
 )
 
 // Formats is the list of quantization types the emitter has kernels for.
