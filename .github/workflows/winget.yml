@@ -162,6 +162,14 @@ jobs:
           New-Item -Force $att | Out-Null
           Set-ItemProperty $att SaveZoneInformation 1 -Type DWord
           Set-ItemProperty $att ScanWithAntiVirus 1 -Type DWord
+          # Newer winget marks the download with the URL's zone itself, and
+          # 127.0.0.1 reads as the Internet: put the local server in the
+          # trusted zone, where an unsigned setup opens without the
+          # "Open File - Security Warning" dialog.
+          $range = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\ZoneMap\Ranges\jitllm-check'
+          New-Item -Force $range | Out-Null
+          Set-ItemProperty $range ':Range' '127.0.0.1'
+          Set-ItemProperty $range 'http' 2 -Type DWord
           # A SmartScreen already running keeps the settings it started with.
           Stop-Process -Name smartscreen -Force -ErrorAction SilentlyContinue
           try {
@@ -190,8 +198,12 @@ jobs:
             $out = cmd /c "set PATH=$path&& where jitllm && jitllm version"
             $out
             if (-not ($out -match 'Programs\\jitllm\\jitllm.exe')) { throw "jitllm is not on a new shell's PATH" }
-            winget list --id jitllm.jitllm --exact --accept-source-agreements --disable-interactivity
-            winget uninstall --id jitllm.jitllm --exact --silent --accept-source-agreements --disable-interactivity
+            # A manifest installed from disk is in no source, so the id
+            # jitllm.jitllm means nothing to winget until winget-pkgs carries
+            # it; the install is found by its Add/Remove Programs entry, the
+            # ProductCode the manifest names.
+            winget list --product-code jitllm --accept-source-agreements --disable-interactivity
+            winget uninstall --product-code jitllm --silent --accept-source-agreements --disable-interactivity
             $dir = Join-Path $env:LOCALAPPDATA 'Programs\jitllm'
             for ($i = 0; $i -lt 30 -and (Test-Path (Join-Path $dir 'jitllm.exe')); $i++) { Start-Sleep 1 }
             if (Test-Path (Join-Path $dir 'jitllm.exe')) { throw "winget uninstall left jitllm.exe" }
