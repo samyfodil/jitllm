@@ -108,8 +108,8 @@ func TestLinkRefusesAFileItDidNotMake(t *testing.T) {
 // TestAgentPlistIsWellFormed decodes the property list and reads back the
 // arguments, escaped paths included.
 func TestAgentPlistIsWellFormed(t *testing.T) {
-	a := Agent{Home: "/Users/a&b"}
-	p := a.PlistFor("/Applications/jitllm.app/Contents/Resources/bin/jitllmd", "/Users/a&b/<models>")
+	a := Agent{Home: "/srv/h&y"}
+	p := a.PlistFor("/Applications/jitllm.app/Contents/Resources/bin/jitllmd", "/srv/h&y/<models>")
 	d := xml.NewDecoder(strings.NewReader(p))
 	d.Strict = false
 	var strs []string
@@ -131,12 +131,12 @@ func TestAgentPlistIsWellFormed(t *testing.T) {
 		}
 	}
 	want := []string{AgentLabel,
-		"/Applications/jitllm.app/Contents/Resources/bin/jitllmd", "serve", "-addr", AgentAddr, "-models", "/Users/a&b/<models>",
+		"/Applications/jitllm.app/Contents/Resources/bin/jitllmd", "serve", "-addr", AgentAddr, "-models", "/srv/h&y/<models>",
 		"Background", a.Log(), a.Log()}
 	if strings.Join(strs, "|") != strings.Join(want, "|") {
 		t.Errorf("strings\n got %q\nwant %q", strs, want)
 	}
-	if !strings.HasPrefix(a.Plist(), "/Users/a&b/Library/LaunchAgents/") {
+	if !strings.HasPrefix(a.Plist(), "/srv/h&y/Library/LaunchAgents/") {
 		t.Errorf("plist at %s", a.Plist())
 	}
 }

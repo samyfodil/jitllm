@@ -4,7 +4,7 @@
 ; which runs on the Linux release runner. Defines it passes:
 ;
 ;   VERSION   the release version, 1.2.3 or 1.2.3-rc1
-;   VERSION4  the same as four numbers, 1.2.3.0, for the file's version resource
+;   VERSION4  the version as four numbers, a suffix dropped, for the file version resource
 ;   ARCH      amd64 or arm64; the binaries are that architecture's, the
 ;             installer itself is x86 code, which arm64 Windows runs
 ;   SRC       a directory holding jitllm.exe, jitllmd.exe, jitllm-desktop.exe,
