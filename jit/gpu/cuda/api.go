@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"runtime"
 	"unsafe"
 )
@@ -36,6 +37,11 @@ type Device struct {
 	// launch may carry along x (2^31-1 from compute capability 3.0), or 0 when
 	// the driver would not say. See MaxGrid.
 	maxGrid int
+	// mapHost is whether the device can address registered host memory
+	// (CU_DEVICE_ATTRIBUTE_CAN_MAP_HOST_MEMORY and HOST_REGISTER_SUPPORTED),
+	// and integrated whether its memory is the host's
+	// (CU_DEVICE_ATTRIBUTE_INTEGRATED: a Jetson, not a discrete card).
+	mapHost, integrated bool
 }
 
 // UUIDSize is the 16 bytes a CUuuid carries, the same 16 bytes
@@ -49,6 +55,10 @@ const (
 	attrSMCount = 16 // CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT
 	attrMaxTPM  = 39 // CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR
 	attrMaxGrid = 5  // CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X
+
+	attrIntegrated   = 18 // CU_DEVICE_ATTRIBUTE_INTEGRATED
+	attrCanMapHost   = 19 // CU_DEVICE_ATTRIBUTE_CAN_MAP_HOST_MEMORY
+	attrHostRegister = 99 // CU_DEVICE_ATTRIBUTE_HOST_REGISTER_SUPPORTED
 )
 
 // Count is how many CUDA devices this driver can see. It needs cuInit only,
@@ -146,6 +156,10 @@ func openDevice(ord int) (*Device, error) {
 		if cuDeviceGetAttribute(&grid, attrMaxGrid, d.dev) == 0 && grid > 0 {
 			d.maxGrid = int(grid)
 		}
+		var mapHost, reg, integ int32
+		d.mapHost = cuDeviceGetAttribute(&mapHost, attrCanMapHost, d.dev) == 0 && mapHost != 0 &&
+			cuDeviceGetAttribute(&reg, attrHostRegister, d.dev) == 0 && reg != 0
+		d.integrated = cuDeviceGetAttribute(&integ, attrIntegrated, d.dev) == 0 && integ != 0
 	}
 	return d, nil
 }
@@ -307,10 +321,50 @@ func (d *Device) Bind() error {
 	return call(cuCtxSetCurrent(d.ctx), "cuCtxSetCurrent")
 }
 
-// Buffer is device memory.
+// Buffer is device memory, or host memory the device addresses (Import).
 type Buffer struct {
 	p CUdevptr
 	n uint64
+	// host is the registered host address of an imported buffer, nil for
+	// one cuMemAlloc made. Free unregisters it and never frees the pages.
+	host unsafe.Pointer
+}
+
+// Integrated reports whether the device's memory is the host's.
+func (d *Device) Integrated() bool { return d.integrated }
+
+// ImportAlign is what Import needs of the address and the length: whole pages,
+// because registration page-locks whole pages and a partial one would pin
+// bytes the caller does not own. 0 when the device cannot map host memory.
+func (d *Device) ImportAlign() int {
+	if !d.mapHost || cuMemHostRegister == nil {
+		return 0
+	}
+	return os.Getpagesize()
+}
+
+// Import page-locks n bytes at p, maps them for every context
+// (CU_MEMHOSTREGISTER_PORTABLE|CU_MEMHOSTREGISTER_DEVICEMAP) and returns a
+// buffer at their device address. A kernel reading it reads the host's own
+// bytes: across the link on a discrete card, in place on an integrated one.
+// The caller owns the memory and must keep it alive past Free.
+func (d *Device) Import(p unsafe.Pointer, n int) (*Buffer, error) {
+	a := d.ImportAlign()
+	if a == 0 {
+		return nil, fmt.Errorf("cuda: device #%d cannot map host memory", d.ord)
+	}
+	if n <= 0 || uintptr(p)%uintptr(a) != 0 || n%a != 0 {
+		return nil, fmt.Errorf("cuda: importing %d bytes at %p: both must be %d-aligned", n, p, a)
+	}
+	if err := call(cuMemHostRegister(p, uint64(n), 1|2), "cuMemHostRegister"); err != nil {
+		return nil, err
+	}
+	b := &Buffer{n: uint64(n), host: p}
+	if err := call(cuMemHostGetDevicePointer(&b.p, p, 0), "cuMemHostGetDevicePointer"); err != nil {
+		cuMemHostUnregister(p)
+		return nil, err
+	}
+	return b, nil
 }
 
 func (d *Device) Alloc(n int) (*Buffer, error) {
@@ -321,7 +375,13 @@ func (d *Device) Alloc(n int) (*Buffer, error) {
 	return b, nil
 }
 
-func (b *Buffer) Free() { cuMemFree(b.p) }
+func (b *Buffer) Free() {
+	if b.host != nil {
+		cuMemHostUnregister(b.host)
+		return
+	}
+	cuMemFree(b.p)
+}
 
 // Arg is the address of the device pointer. cuLaunchKernel takes an array of
 // pointers to the arguments, so this is what goes in it for a buffer.

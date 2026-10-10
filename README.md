@@ -53,6 +53,12 @@ the Windows line. Each program is one self-contained binary and its own archive
 on the [Releases](https://github.com/samyfodil/jitllm/releases/latest) page, for Linux,
 macOS and Windows on x86-64 and arm64. GPUs need only their driver.
 
+> **AMD GPUs:** they run through Vulkan with only the driver. With ROCm
+> installed, jitllm also uses them through a native backend (`hip:0`, ...),
+> which **has not yet been tested on AMD hardware**
+> ([#34](https://github.com/samyfodil/jitllm/issues/34)). To stay on the
+> tested path, pick the Vulkan device explicitly (`-devices vulkan:0`).
+
 To build from source instead, with **Go 1.26 or newer** and no C toolchain:
 
 ```sh

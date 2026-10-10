@@ -1063,8 +1063,9 @@ func (s *State) growBatch(chunk int) {
 	if c.Parallel || c.SSDAttn() {
 		s.bhf = scratch(h.bhf, chunk*c.NEmbd, 0)
 	}
-	// One attention scores row per token, for the same kernels decode uses.
-	s.battf = scratch(h.battf, chunk*s.attStride, 0)
+	// One attention scores row per token, for the same kernels decode uses:
+	// sized where it is used, by the keys the chunk reaches (rowsStride).
+	s.battf = h.battf
 	if c.AttnOutGate {
 		s.qgate = scratch(h.qgate, chunk*2*qDim, 0)
 		s.ogate = scratch(h.ogate, chunk*qDim, 0)
@@ -1291,8 +1292,15 @@ attend:
 			// causal bound p0+i is what keeps this equal to the decode path.
 			ta := s.tick()
 			bq, bxb, bqf, bxbf := s.bq, s.bxb, s.bqf, s.bxbf
+			// A row reaches keys below p0+n, or to the end of the
+			// bidirectional run it is in.
+			reach := p0 + n
+			for i := 0; i < n; i++ {
+				reach = max(reach, s.bidirEnd(p0+i))
+			}
+			astride := s.rowsStride(reach)
+			s.battf = scratch(s.battf, n*astride, 0)
 			attf, fast := s.battf, s.attnAt(li)
-			astride := s.attStride
 			hd, gqa := c.HeadDimAt(li), c.GQAAt(li)
 			// MLA reads a wider query than it writes an output, and every
 			// head reads the same cached row: qw is the whole row, ow its
@@ -1314,7 +1322,8 @@ attend:
 				s.idxRows(kvli, n, func(int) int { return slot }, func(i int) int { return p0 + i + 1 }, masks)
 			}
 			if c.MSAAt(li) {
-				masks, mstride = s.msaMasks, astride
+				// The masks are laid out at the State's own stride (msa.go).
+				masks, mstride = s.msaMasks, s.attStride
 				s.msaRows(kvli, n, func(int) int { return slot }, func(i int) int { return p0 + i + 1 }, masks)
 			}
 			s.jit.Parallel(n, 1, func(lo, hi int) {

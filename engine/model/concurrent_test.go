@@ -1,10 +1,7 @@
-//go:build linux
-
 package model
 
 import (
 	"fmt"
-	"os"
 	"runtime"
 	"runtime/debug"
 	"sync"
@@ -12,17 +9,9 @@ import (
 	"time"
 
 	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/samyfodil/jitllm/jit/gpu/backend"
 	"github.com/samyfodil/jitllm/jit/gpu/tier"
 )
-
-func liveThreads(t *testing.T) int {
-	t.Helper()
-	e, err := os.ReadDir("/proc/self/task")
-	if err != nil {
-		t.Skipf("no /proc/self/task: %v", err)
-	}
-	return len(e)
-}
 
 // TestConcurrentMultiDeviceDoesNotLeak runs several States at once, with the
 // blocks spread over every device the host has, and requires the process to
@@ -31,8 +20,9 @@ func liveThreads(t *testing.T) int {
 // single-caller, which is safe only because each State builds its own JIT, and
 // a shared tier.GPU tests devTier's locking.
 //
-// It checks the live heap, the device byte ledger, file descriptors, OS threads
-// and goroutines, because they fail independently.
+// It checks the live heap, the device byte ledger, the driver objects the
+// engine owns, file descriptors, threads and goroutines, because they fail
+// independently.
 func TestConcurrentMultiDeviceDoesNotLeak(t *testing.T) {
 	if testing.Short() {
 		t.Skip("opens a real model on every device")
@@ -144,7 +134,8 @@ func TestConcurrentMultiDeviceDoesNotLeak(t *testing.T) {
 	runtime.GC()
 	debug.FreeOSMemory()
 	time.Sleep(700 * time.Millisecond)
-	rss0, fd0, th0, g0 := rssKB(t), openFDs(t), liveThreads(t), runtime.NumGoroutine()
+	p0, g0 := procNow(t), runtime.NumGoroutine()
+	own0 := backend.OwnedNow()
 	heap0 := liveHeap()
 
 	const rounds = 4
@@ -154,23 +145,47 @@ func TestConcurrentMultiDeviceDoesNotLeak(t *testing.T) {
 	runtime.GC()
 	debug.FreeOSMemory()
 	time.Sleep(1500 * time.Millisecond)
-	rss1, fd1, th1, g1 := rssKB(t), openFDs(t), liveThreads(t), runtime.NumGoroutine()
+	p1, g1 := procNow(t), runtime.NumGoroutine()
+	own1 := backend.OwnedNow()
 	heap1 := liveHeap()
 
 	t.Logf("%d cycles x %d concurrent States on every device: live heap %d -> %d KiB (%+d), "+
-		"RSS %d -> %d KiB (%+d), fds %d -> %d, OS threads %d -> %d, goroutines %d -> %d",
+		"goroutines %d -> %d, driver objects owned %+v -> %+v",
 		rounds, workers, heap0/1024, heap1/1024, (int64(heap1)-int64(heap0))/1024,
-		rss0, rss1, rss1-rss0, fd0, fd1, th0, th1, g0, g1)
-
-	if fd1 > fd0 {
-		t.Errorf("file descriptors %d -> %d: a container or a driver handle is not closed", fd0, fd1)
+		g0, g1, own0, own1)
+	if p0.ok {
+		t.Logf("RSS %d -> %d KiB (%+d), fds %d -> %d, Go Ms %d -> %d, driver threads %d -> %d",
+			p0.rss, p1.rss, p1.rss-p0.rss, p0.fds, p1.fds,
+			p0.th.goMs, p1.th.goMs, p0.th.foreign, p1.th.foreign)
 	}
-	if g1 > g0+2 {
+
+	if p0.ok && p1.fds > p0.fds {
+		t.Errorf("file descriptors %d -> %d: a container or a driver handle is not closed", p0.fds, p1.fds)
+	}
+	if g1 > g0 {
 		t.Errorf("goroutines %d -> %d: a device owner or a pool worker is not exiting", g0, g1)
 	}
-	if th1 > th0+4 {
-		t.Errorf("OS threads %d -> %d over %d cycles: that tracks the cycle count",
-			th0, th1, rounds)
+	if own1 != own0 {
+		t.Errorf("driver objects owned %+v -> %+v: a device or a session's queue is not closed",
+			own0, own1)
+	}
+	// Threads are judged by kind, not by count. A driver's threads belong to
+	// its contexts and queues, so more of them after Close is a context or a
+	// queue kept. The Go Ms are the runtime's pool: it makes one when every M
+	// is busy or blocked in a driver call and destroys one only under a
+	// goroutine that exits locked to it, so their count is the high-water of
+	// goroutines blocked in the drivers at once. Four States on every device
+	// push it up a step at a time over the first twenty-odd cycles (22 -> 27
+	// over 24 cycles on the laptop, the steps at no fixed cycle) and then hold
+	// it; that was the "OS threads 20 -> 25" this test used to fail on. A
+	// leaked M is never idle -- its goroutine is still live, which the
+	// goroutine count above catches -- and a goroutine that exits locked
+	// takes the process down in this cgo-free build before any count is read
+	// (see cuda.Device.Close). So the Go M count is logged and not gated: no
+	// bound on it within four cycles separates a leak from the pool.
+	if p0.ok && p1.th.foreign > p0.th.foreign {
+		t.Errorf("driver threads %d -> %d over %d cycles: a context or a queue is not torn down",
+			p0.th.foreign, p1.th.foreign, rounds)
 	}
 	// HeapAlloc right after runtime.GC() is what a leak is: bytes still
 	// reachable. The scavenger cannot move it and it needs no sleep to settle.

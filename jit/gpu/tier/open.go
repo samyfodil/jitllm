@@ -47,6 +47,7 @@ type openOpts struct {
 	kern       kernels.Center
 	cudaPosted bool
 	metal      metal.Opts
+	hip        backend.HIPConfig
 	cfg        []func(*Config)
 	verbose    bool
 	verboseSet bool
@@ -142,6 +143,9 @@ func OpenWith(options ...Option) (*GPU, error) {
 //	                     fastest first; one alone when the Vulkan config pins it
 //	vulkan:SEL[=BYTES]   one Vulkan device by enumeration index or name substring
 //	metal[=BYTES]        the system default Metal device
+//	hip[=BYTES]          every AMD device ROCm reports, fastest first
+//	hip:ORD[=BYTES]      one AMD device by HIP ordinal (also rocm, amdgcn); an
+//	                     ordinal ROCm does not have, or no ROCm, is an error
 //
 // A bare backend name is every device of that backend, and the router decides
 // how many of them a model's blocks use (multi.go offers each block fastest
@@ -188,6 +192,8 @@ func ParseDevices(spec string) ([]Entry, error) {
 			e.API = "spirv"
 		case "metal", "msl":
 			e.API = "msl"
+		case "hip", "rocm", "amdgcn":
+			e.API = "amdgcn"
 		default:
 			return nil, fmt.Errorf("tier: -devices %q: %q names no backend; want %s",
 				spec, body, grammar)
@@ -207,7 +213,7 @@ func ParseDevices(spec string) ([]Entry, error) {
 				return nil, fmt.Errorf("tier: -devices %q: metal opens the system default device "+
 					"and takes no selector, got %q; want %s", spec, e.Sel, grammar)
 			}
-		case "ptx", "gpu":
+		case "ptx", "gpu", "amdgcn":
 			// An ordinal, always: the CUDA driver enumerates by number and
 			// gpu:N indexes the list backend.Open reports.
 			if e.HasSel {
@@ -242,7 +248,7 @@ func ParseDevices(spec string) ([]Entry, error) {
 	return out, nil
 }
 
-const grammar = "auto | all | cpu | gpu[:N] | (cuda|vulkan|metal)[:DEVICE][=BYTES], comma-separated"
+const grammar = "auto | all | cpu | gpu[:N] | (cuda|hip|vulkan|metal)[:DEVICE][=BYTES], comma-separated"
 
 // Entry is one parsed device spec.
 type Entry struct {
@@ -280,6 +286,11 @@ func (e Entry) name(opened int) string {
 		return "vulkan:" + e.Sel
 	case "msl":
 		return "metal"
+	case "amdgcn":
+		if !e.HasSel {
+			return "hip:0"
+		}
+		return "hip:" + e.Sel
 	case "gpu":
 		if e.HasSel {
 			return "gpu:" + e.Sel
@@ -441,6 +452,21 @@ func openEntries(es []Entry, o openOpts) ([]backend.Device, []uint64, []string, 
 				return fail(fmt.Errorf("tier: -devices %q: %w", e.Text, err))
 			}
 			took(e, d)
+		case "amdgcn":
+			if !e.HasSel {
+				devs, err := everyHIP(do)
+				if err != nil {
+					return fail(fmt.Errorf("tier: -devices %q: %w", e.Text, err))
+				}
+				took(e, order(devs, o.kb.tune)...)
+				continue
+			}
+			ord, _ := strconv.Atoi(e.Sel)
+			d, err := openHIP(ord, do)
+			if err != nil {
+				return fail(fmt.Errorf("tier: -devices %q: %w", e.Text, err))
+			}
+			took(e, d)
 		case "msl":
 			d, err := openMetal(do)
 			if err != nil {
@@ -487,6 +513,8 @@ var (
 	vulkanDevices = backend.VulkanDevices
 	openVulkan    = backend.OpenVulkanWith
 	openMetal     = backend.OpenMetalWith
+	hipCount      = backend.HIPCount
+	openHIP       = backend.OpenHIPWith
 )
 
 // allDevices opens every distinct device on this host. It enumerates rather
@@ -496,7 +524,8 @@ var (
 // strictly worse than the CPU tier. Naming one explicitly still works
 // (`-devices vulkan:llvmpipe`).
 func allDevices(do backend.Opts) ([]backend.Device, error) {
-	out := append(cudaDevices(do), vulkanGPUs(do)...)
+	out := append(cudaDevices(do), hipDevices(do)...)
+	out = append(out, vulkanGPUs(do)...)
 	if d, err := openMetal(do); err == nil {
 		out = append(out, d)
 	}
@@ -518,6 +547,31 @@ func cudaDevices(do backend.Opts) []backend.Device {
 		}
 	}
 	return out
+}
+
+// hipDevices opens every HIP device that opens, by ordinal. No ROCm is none.
+func hipDevices(do backend.Opts) []backend.Device {
+	var out []backend.Device
+	for i := 0; i < hipCount(do.HIP); i++ {
+		if d, err := openHIP(i, do); err == nil {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// everyHIP is a bare `hip`: every HIP device. With none, the error is the one
+// ordinal 0 gives, which names why (no ROCm and where it was looked for, or no
+// device).
+func everyHIP(do backend.Opts) ([]backend.Device, error) {
+	if out := hipDevices(do); len(out) > 0 {
+		return out, nil
+	}
+	d, err := openHIP(0, do)
+	if err != nil {
+		return nil, err
+	}
+	return []backend.Device{d}, nil
 }
 
 // vulkanGPUs opens every Vulkan device that computes and is not a software

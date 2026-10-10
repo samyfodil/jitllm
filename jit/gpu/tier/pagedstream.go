@@ -104,7 +104,7 @@ func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow)
 		far = max(far, r.pos)
 		if kp.evicted[r.s] > 0 {
 			if over && r.s != s {
-				return fmt.Errorf("two sequences with pages at home in one call")
+				return fmt.Errorf("two sequences with pages at home in one call: %v and %v", s, r.s)
 			}
 			s, over = r.s, true
 		}
@@ -114,8 +114,14 @@ func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow)
 	}
 	e := kp.evicted[s]
 	w := e
-	if err := g.heldLayers(sid, func(_ int, l *kvLayerPool) error {
+	if err := g.heldLayers(sid, func(li int, l *kvLayerPool) error {
 		w = min(w, g.streamWidth(l, e))
+		// Every layer holding s holds the same prefix at home (kvevict.go);
+		// one that does not would have the passes read past its copies.
+		if len(l.owned[s]) > 0 && len(l.home[s]) != e {
+			return fmt.Errorf("block %d holds %d page(s) of sequence %v at home and the pool counts %d",
+				li, len(l.home[s]), s, e)
+		}
 		return nil
 	}); err != nil {
 		return err

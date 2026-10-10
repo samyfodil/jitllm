@@ -40,6 +40,7 @@ func reportCPU() {
 		fmt.Printf("   %d E-core(s) %s", len(e), list(e))
 	}
 	fmt.Println()
+	fmt.Printf("          source    %s\n", sched.CoreSource())
 	if t := len(smt) / max(1, len(p)); t > 1 {
 		fmt.Printf("          SMT       %d threads per P-core: %s\n", t, list(smt))
 	} else {
@@ -153,7 +154,7 @@ func isa() string {
 	case "arm64":
 		s := "NEON + FEAT_DotProd SDOT"
 		if !cpu.HasDotProd() {
-			s += " (probed: ABSENT -- every SDOT is widened to SMULL/SADDLP/ADDP: the same bits, slower)"
+			s += " (probed: ABSENT -- every SDOT is widened to SMULL/SMLAL/ADDP/SADALP: the same bits, slower)"
 		} else {
 			s += " (probed: present)"
 		}
@@ -168,14 +169,23 @@ func reportGPU() {
 	backend.SetVerbose(os.Getenv("JITLLM_GPU_VERBOSE") != "")
 	// The same call tier.Open makes. Opening and closing every backend is
 	// covered by backend.TestCloseThenSpawnThreads.
-	devs := backend.Open()
+	hipCfg := backend.HIPConfig{Path: os.Getenv("JITLLM_ROCM")}
+	devs := backend.OpenWith(backend.Opts{HIP: hipCfg})
 	defer func() {
 		for _, d := range devs {
 			d.Close()
 		}
 	}()
+	// No ROCm is not an error: an AMD card then runs through Vulkan. The line
+	// says where it was looked for, so a ROCm in an unusual place can be named
+	// with JITLLM_ROCM.
+	if m := backend.HIPMissing(hipCfg); m != "" {
+		fmt.Printf("hip       %s\n", m)
+	} else {
+		reportHIPList(hipCfg)
+	}
 	if len(devs) == 0 {
-		fmt.Printf("gpu       none available: no CUDA, Vulkan or Metal device opened here\n")
+		fmt.Printf("gpu       none available: no CUDA, HIP, Vulkan or Metal device opened here\n")
 		fmt.Printf("          (that is a CPU machine, not an error -- `jitllm run` defaults to it)\n")
 		return
 	}
@@ -221,6 +231,19 @@ func reportGPU() {
 	fmt.Printf("          the packed arena is not a second copy of the weights, it IS the device\n")
 	fmt.Printf("          buffer: the driver is handed its pointer, so a page-in moves nothing and\n")
 	fmt.Printf("          is charged nothing (the arena's own budget is what bounds it)\n")
+}
+
+// reportHIPList names every HIP device as hip:N, the selector -devices takes.
+func reportHIPList(c backend.HIPConfig) {
+	for i := 0; i < backend.HIPCount(c); i++ {
+		d, err := backend.OpenHIPWith(i, backend.Opts{HIP: c})
+		if err != nil {
+			fmt.Printf("hip:%-5d %v\n", i, err)
+			continue
+		}
+		fmt.Printf("hip:%-5d %-49s vram %s\n", i, d.Name(), vram(d))
+		d.Close()
+	}
 }
 
 // reportVulkanList names every Vulkan physical device with the index that

@@ -121,7 +121,9 @@ func (g *GPU) dev(i int) *devTier {
 }
 
 // RecSteps is how many linear blocks advanced across every device during the
-// last Layers or rows call. See devTier.recSteps.
+// last Layers or rows call made on the GPU itself (session 0). A State steps on
+// a session of its own and counts there: ask the State
+// (model.State.RecurrenceAdvanced), never this. See devTier.recSteps.
 func (g *GPU) RecSteps() int {
 	return g.recStepsOf(0)
 }

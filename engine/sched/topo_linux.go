@@ -5,6 +5,8 @@ package sched
 import (
 	"fmt"
 	"os"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -14,8 +16,16 @@ import (
 // allowed is the set of CPUs this process may actually run on, which is not the
 // same question as which CPUs the machine has. A pool sized from raw topology
 // would start six workers under `taskset -c 0,2`, oversubscribing two CPUs.
-// Empty means "could not ask", and every caller then falls back to topology.
-func allowed() map[int]bool {
+// Empty means "could not ask" (gVisor, for one), and every caller then falls
+// back: to the topology where /sys has one, to the online list where it does
+// not, and in both cases no wider than the cgroup's CPU quota.
+func allowed() map[int]bool { return affinity() }
+
+// affinity is the mask read; a test replaces it to stand in for a sandbox that
+// does not answer sched_getaffinity.
+var affinity = readAffinity
+
+func readAffinity() map[int]bool {
 	var mask [16]uint64 // 1024 CPUs, the same width pin() used
 	_, _, errno := syscall.RawSyscall(syscall.SYS_SCHED_GETAFFINITY,
 		0, uintptr(len(mask)*8), uintptr(unsafe.Pointer(&mask[0])))
@@ -115,10 +125,10 @@ func parseCPUList(s string) map[int]bool {
 // them; on one with no SMT at all every core is returned (see topo.efficiency).
 func PCores() []int {
 	t := readTopo()
-	if len(t.sibs) == 0 {
-		return nil // no topology exposed; caller falls back
-	}
 	ok := allowed()
+	if len(t.sibs) == 0 {
+		return untopological(ok)
+	}
 	var out []int
 	seen := map[string]bool{}
 	for cpu, sibs := range t.sibs {
@@ -137,7 +147,95 @@ func PCores() []int {
 		}
 		out = append(out, cpu)
 	}
+	if len(ok) == 0 {
+		out = underQuota(out)
+	}
 	return out
+}
+
+// untopological is the pool's CPUs on a machine whose /sys states no topology,
+// such as a gVisor sandbox: the affinity mask where it can be read, else the
+// kernel's online list, else runtime.NumCPU, each cut to the cgroup's quota
+// when there is no mask to say otherwise. Every CPU reads as a P-core, since
+// nothing can tell one from another; the cost is a hyperthread pair counted as
+// two cores, the same cost topo_other.go states.
+func untopological(ok map[int]bool) []int {
+	if len(ok) > 0 {
+		return sorted(ok)
+	}
+	if b, err := os.ReadFile(sysRoot + "/devices/system/cpu/online"); err == nil {
+		if on := parseCPUList(strings.TrimSpace(string(b))); len(on) > 0 {
+			return underQuota(sorted(on))
+		}
+	}
+	return underQuota(seq(runtime.NumCPU()))
+}
+
+func sorted(set map[int]bool) []int {
+	out := make([]int, 0, len(set))
+	for c := range set {
+		out = append(out, c)
+	}
+	sort.Ints(out)
+	return out
+}
+
+// underQuota keeps the first CPUs a cgroup v2 cpu.max allows: a quota of q
+// microseconds per period p runs ceil(q/p) CPUs at once, and a worker past that
+// is throttled behind every barrier. "max" or no file leaves the list whole.
+func underQuota(cpus []int) []int {
+	if n := quotaCPUs(); n > 0 && n < len(cpus) {
+		return cpus[:n]
+	}
+	return cpus
+}
+
+// quotaCPUs is ceil(quota/period) of the process's cgroup, 0 when unlimited or
+// unreadable. The cgroup's own directory is tried first, then the mount's root,
+// which is the process's cgroup inside a container's namespace.
+func quotaCPUs() int {
+	dirs := []string{sysRoot + "/fs/cgroup"}
+	if b, err := os.ReadFile("/proc/self/cgroup"); err == nil {
+		for _, ln := range strings.Split(string(b), "\n") {
+			if p, ok := strings.CutPrefix(ln, "0::"); ok && p != "/" && p != "" {
+				dirs = append([]string{sysRoot + "/fs/cgroup" + p}, dirs...)
+			}
+		}
+	}
+	for _, d := range dirs {
+		b, err := os.ReadFile(d + "/cpu.max")
+		if err != nil {
+			continue
+		}
+		f := strings.Fields(string(b))
+		if len(f) != 2 || f[0] == "max" {
+			return 0
+		}
+		q, err1 := strconv.Atoi(f[0])
+		per, err2 := strconv.Atoi(f[1])
+		if err1 != nil || err2 != nil || q <= 0 || per <= 0 {
+			return 0
+		}
+		return (q + per - 1) / per
+	}
+	return 0
+}
+
+// CoreSource says where the pool's CPUs came from, for a report: the topology
+// or not, and whether the affinity mask or a cgroup quota bounded them.
+func CoreSource() string {
+	src := "sysfs topology"
+	if len(readTopo().sibs) == 0 {
+		src = "no topology, every CPU a P-core"
+	}
+	if len(allowed()) > 0 {
+		return src + ", affinity mask"
+	}
+	src += ", no affinity mask"
+	if n := quotaCPUs(); n > 0 {
+		src += fmt.Sprintf(", cgroup quota %d CPU(s)", n)
+	}
+	return src
 }
 
 // ECores returns one logical CPU per efficiency core: single-threaded in the
@@ -163,6 +261,9 @@ func ECores() []int {
 func SMTSiblings() []int {
 	t := readTopo()
 	ok := allowed()
+	if len(t.sibs) == 0 {
+		return untopological(ok)
+	}
 	var out []int
 	seen := map[int]bool{}
 	for cpu, sibs := range t.sibs {
@@ -181,6 +282,9 @@ func SMTSiblings() []int {
 				}
 			}
 		}
+	}
+	if len(ok) == 0 {
+		out = underQuota(out)
 	}
 	return out
 }

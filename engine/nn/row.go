@@ -100,3 +100,49 @@ func Row32JIT(dst []float32, t quant.Type, w []byte, r, k int) {
 	}
 	c.Call(&cpu.Args{Out: &dst[0], W: &w[r*k*2], K: int64(k / cpu.ElemLanes), Rows: int64(k % cpu.ElemLanes)})
 }
+
+var (
+	narrowK    [cpu.NumTiers]*cpu.Code
+	narrowOnce tierOnce
+)
+
+// NarrowF16 rounds src to binary16 into dst, exactly as quant.EncodeHalf does
+// (cpu.Emitters.NarrowF16): the f16 KV cache's store, and a binary16 page's
+// on its way to a device. It allocates nothing once the kernel is mapped.
+func NarrowF16(dst []uint16, src []float32) {
+	n := len(src)
+	if n == 0 {
+		return
+	}
+	if len(dst) < n {
+		panic(fmt.Sprintf("nn: NarrowF16: %d halves for %d floats", len(dst), n))
+	}
+	tier := cpu.HostTier()
+	narrowOnce.do(tier, func() {
+		narrowK[tier] = mustEmit("narrow_f16")(cpu.EmittersFor(tier).NarrowF16())
+	})
+	narrowK[tier].Call(&cpu.Args{Out: (*float32)(unsafe.Pointer(&dst[0])),
+		W: (*byte)(unsafe.Pointer(&src[0])),
+		K: int64(n / cpu.ElemLanes), Rows: int64(n % cpu.ElemLanes)})
+}
+
+// WidenF16 widens binary16 src into dst through the embedding lookup's widen
+// (cpu.Emitters.Widen): exact, so it is quant.DecodeHalf on every half but a
+// signalling NaN, which comes back quiet.
+func WidenF16(dst []float32, src []uint16) {
+	n := len(src)
+	if n == 0 {
+		return
+	}
+	if len(dst) < n {
+		panic(fmt.Sprintf("nn: WidenF16: %d floats for %d halves", len(dst), n))
+	}
+	tier := cpu.HostTier()
+	widenOnce.do(tier, func() {
+		em := cpu.EmittersFor(tier)
+		widenK[tier][0] = mustEmit("widen_f16")(em.Widen(false))
+		widenK[tier][1] = mustEmit("widen_bf16")(em.Widen(true))
+	})
+	widenK[tier][0].Call(&cpu.Args{Out: &dst[0], W: (*byte)(unsafe.Pointer(&src[0])),
+		K: int64(n / cpu.ElemLanes), Rows: int64(n % cpu.ElemLanes)})
+}

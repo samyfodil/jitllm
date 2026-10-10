@@ -50,13 +50,40 @@ const (
 	jointReprobe = 2048
 )
 
-// jointChoice holds a choice per row count. Only the loop goroutine calls
-// pick and observe; telemetry reads under mu.
+// jointChoice holds a choice per row-count bucket (rowBucket). Only the loop
+// goroutine calls pick and observe; telemetry reads under mu.
+//
+// A choice per exact row count re-probed under churn: with requests arriving
+// and finishing, the row count moves every few steps, and each new count
+// started a 32-step probe of its own, half of it on the arm that loses. A
+// bucket shares one probe across the counts in it, and the arms are compared
+// by time per row, so the counts a probe saw in each arm do not decide it.
 type jointChoice struct {
 	mode JointSteps
+	// bucket maps a row count to its bucket; rowBucket but in a gate that
+	// measures the per-count choice it replaced.
+	bucket func(int) int
 
 	mu  sync.Mutex
 	per map[int]*jointArm
+	// last is the bucket the previous step ran in: a step coming from
+	// another bucket may record its launch sequence, so it is not timed.
+	last int
+	// probeSteps is the steps run while their bucket was unsettled.
+	probeSteps int
+}
+
+// rowBucket is the bucket of a step of n rows: 1 and 2 their own, then each
+// power of two holding the counts above the one before (3-4, 5-8, 9-16, ...).
+func rowBucket(n int) int {
+	if n <= 2 {
+		return n
+	}
+	b := 4
+	for b < n {
+		b *= 2
+	}
+	return b
 }
 
 // jointArm is one row count's probe, or its standing choice.
@@ -74,7 +101,7 @@ type jointArm struct {
 }
 
 func newJointChoice(mode JointSteps) *jointChoice {
-	return &jointChoice{mode: mode, per: map[int]*jointArm{}}
+	return &jointChoice{mode: mode, bucket: rowBucket, per: map[int]*jointArm{}}
 }
 
 // abba is the arm of each run in a quad: joint, separate, separate, joint.
@@ -90,14 +117,16 @@ func (c *jointChoice) pick(n int) bool {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	a := c.per[n]
+	b := c.bucket(n)
+	a := c.per[b]
 	if a == nil {
 		a = &jointArm{}
-		c.per[n] = a
+		c.per[b] = a
 	}
 	if a.settled {
 		return a.joint
 	}
+	c.probeSteps++
 	return abba[a.turn%len(abba)]
 }
 
@@ -109,7 +138,10 @@ func (c *jointChoice) observe(n int, joint bool, d time.Duration) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	a := c.per[n]
+	b := c.bucket(n)
+	fresh := c.last != b
+	c.last = b
+	a := c.per[b]
 	if a == nil {
 		return
 	}
@@ -119,7 +151,9 @@ func (c *jointChoice) observe(n int, joint bool, d time.Duration) {
 		}
 		return
 	}
-	if a.step > 0 {
+	if a.step > 0 && !fresh {
+		// Per row: the bucket's counts differ from step to step.
+		d /= time.Duration(n)
 		if joint {
 			a.j = append(a.j, d)
 		} else {
@@ -134,7 +168,9 @@ func (c *jointChoice) observe(n int, joint bool, d time.Duration) {
 		return
 	}
 	a.jMed, a.sMed = median(a.j), median(a.s)
-	a.joint = !(float64(a.sMed)*jointMargin < float64(a.jMed))
+	// An arm with no timed step (churn interrupted every run) keeps joint,
+	// the incumbent.
+	a.joint = len(a.j) == 0 || len(a.s) == 0 || !(float64(a.sMed)*jointMargin < float64(a.jMed))
 	a.settled, a.since, a.turn, a.j, a.s = true, 0, 0, nil, nil
 	a.probes++
 }
@@ -148,7 +184,15 @@ func median(v []time.Duration) time.Duration {
 	return v[len(v)/2]
 }
 
-// choiceStat is one row count's standing as telemetry reports it.
+// probed is the steps run so far while their bucket was probing.
+func (c *jointChoice) probed() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.probeSteps
+}
+
+// choiceStat is one bucket's standing as telemetry reports it: rows is the
+// widest row count in it, and the medians are per row.
 type choiceStat struct {
 	rows           int
 	settled        bool

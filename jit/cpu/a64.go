@@ -133,6 +133,11 @@ type A64 struct {
 	// SIGILL.
 	dotT   [2]VReg
 	dotEmu bool
+	// dotPend is the accumulator a DotChain is open on and dotLinks how many
+	// links it has taken; the chain's int16 sums live in dotT until its last
+	// link folds them into dotPend.
+	dotPend  VReg
+	dotLinks int
 }
 
 // a64fixup is a branch whose target was not yet bound. bits is the width of the

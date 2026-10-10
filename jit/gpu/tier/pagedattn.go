@@ -1,13 +1,12 @@
 package tier
 
 import (
-	"encoding/binary"
 	"fmt"
 	"math"
 	"slices"
+	"unsafe"
 
 	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/format/quant"
 	"github.com/samyfodil/jitllm/jit/gpu/backend"
 	"github.com/samyfodil/jitllm/jit/gpu/ir"
 	"github.com/samyfodil/jitllm/jit/gpu/kernels"
@@ -635,6 +634,13 @@ func (g *devTier) heldLayers(sid uint64, f func(li int, l *kvLayerPool) error) e
 // Callers hold g.mu.
 func (g *devTier) pagedAppend(sid uint64, seqs []seqEnd) error {
 	kp := g.kvPages()
+	for _, se := range seqs {
+		if se.start >= 0 {
+			if err := g.rewind(sid, kp, se.s, se.start); err != nil {
+				return err
+			}
+		}
+	}
 	err := g.heldLayers(sid, func(li int, l *kvLayerPool) error {
 		for _, se := range seqs {
 			need := (l.positions(se.end) + kp.p - 1) / kp.p
@@ -1073,6 +1079,15 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 	npages := (pos + P - 1) / P
 	// The sequence's oldest pages may be at home (kvevict.go): the same count
 	// in every layer, so a layer joining keeps them there too.
+	// Sent up, the host's position is the history: past it the device's
+	// record is a sequence that has since restarted lower. Read home, pos is
+	// only how much of the history is wanted (a prefix a store saves), and the
+	// device keeps the rest.
+	if toDevice {
+		if err := g.rewind(sid, kp, s, pos); err != nil {
+			return err
+		}
+	}
 	e := min(kp.evicted[s], npages)
 	if toDevice && e > 0 && len(pl.owned[s]) == 0 {
 		if err := g.ensureRange(kp, s, e); err != nil {
@@ -1306,20 +1321,21 @@ func (g *devTier) reserveKVSeqs(sid uint64, bases, ends []int) bool {
 	return true
 }
 
-// packF16 is f32 values as packed binary16, two to a word: the pool's f16 V.
+// packF16 is f32 values as packed binary16, two to a word: the pool's f16 V,
+// rounded by the host's generated narrowing (nn.NarrowF16).
 func packF16(v []float32) []byte {
 	b := make([]byte, 2*len(v))
-	for i, x := range v {
-		binary.LittleEndian.PutUint16(b[2*i:], quant.EncodeHalf(x))
+	if len(v) > 0 {
+		nn.NarrowF16(unsafe.Slice((*uint16)(unsafe.Pointer(&b[0])), len(v)), v)
 	}
 	return b
 }
 
-// unpackF16 widens packed binary16 words into dst.
+// unpackF16 widens packed binary16 words into dst through the host's
+// generated widening (nn.WidenF16).
 func unpackF16(dst, words []float32) {
-	b := f32b(words)
-	for i := range dst {
-		dst[i] = float32(quant.DecodeHalf(binary.LittleEndian.Uint16(b[2*i:])))
+	if len(dst) > 0 {
+		nn.WidenF16(dst, unsafe.Slice((*uint16)(unsafe.Pointer(&words[0])), len(dst)))
 	}
 }
 

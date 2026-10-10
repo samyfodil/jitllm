@@ -57,11 +57,19 @@ type cudaDev struct {
 	// running such a Session (nQueued of them), so a call made from inside
 	// one runs straight through as from inside an inline one; queues is every
 	// queue not yet closed, which Close destroys before the context.
-	life    sync.RWMutex
-	qmu     sync.Mutex
-	queued  map[int64]qRef
-	nQueued atomic.Int32
-	queues  map[*cudaQueue]bool
+	life sync.RWMutex
+	// capturing is read-held by a queue's Session from BeginRecord to
+	// EndRecord and write-held by syncAll. cuCtxSynchronize waits for every
+	// stream of the context, and waiting for a stream that is capturing is
+	// illegal in any capture mode (the CUDA programming guide, "Prohibited
+	// and Unhandled Operations"); racing an EndCapture on another thread it
+	// faulted inside the driver (TestConcurrentMultiDeviceDoesNotLeak, a
+	// lane's rope table written while a queue ended its capture).
+	capturing sync.RWMutex
+	qmu       sync.Mutex
+	queued    map[int64]qRef
+	nQueued   atomic.Int32
+	queues    map[*cudaQueue]bool
 	// posted routes every call through the owner goroutine instead of running
 	// it inline; Opts.CUDAPosted, fixed at open.
 	posted bool
@@ -113,6 +121,7 @@ func OpenCUDAWith(ord int, opts Opts) (Device, error) {
 	if o.err != nil {
 		return nil, o.err
 	}
+	ownedDevices.Add(1)
 	return &cudaDev{d: o.d, reqs: reqs, owner: o.tid, posted: opts.CUDAPosted}, nil
 }
 
@@ -188,6 +197,8 @@ type cudaSession struct {
 	// stream is where launches go: zero is the legacy stream, non-zero only
 	// while a capture is open.
 	stream cuda.CUstream
+	// qcap is set while this queued session holds c.capturing for a capture.
+	qcap bool
 	// marks collects a timed capture's per-launch events; nil otherwise.
 	// It points at recMarks, which holds them between BeginRecord and
 	// EndRecord.
@@ -329,7 +340,7 @@ func (s *cudaSession) Sync() error {
 	if s.q != nil {
 		return s.q.sync()
 	}
-	return cuda.Sync()
+	return s.c.syncAll()
 }
 
 // BeginRecord starts capturing this session's launches into a graph instead
@@ -343,9 +354,12 @@ func (s *cudaSession) BeginRecord() error {
 	if s.q != nil {
 		// A queue captures on its own stream: it is already not the legacy
 		// stream, and its copies are on it too.
+		s.c.capturing.RLock()
 		if err := s.q.st.BeginCapture(); err != nil {
+			s.c.capturing.RUnlock()
 			return err
 		}
+		s.qcap = true
 		s.stream = s.q.st.Handle()
 		return nil
 	}
@@ -385,6 +399,10 @@ func (s *cudaSession) EndRecord() (Recording, error) {
 	// EndCapture runs even when the launches failed: a stream left capturing
 	// refuses every later launch on it, and its error is the informative one.
 	g, err := capSt.EndCapture()
+	if s.qcap {
+		s.qcap = false
+		s.c.capturing.RUnlock()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -723,6 +741,7 @@ func (c *cudaDev) Close() {
 		close(done)
 	}
 	<-done
+	ownedDevices.Add(-1)
 	c.mu.Lock()
 	close(c.reqs)
 	c.reqs = nil
@@ -749,6 +768,30 @@ func (c *cudaDev) PinHost(n int) ([]byte, error) {
 	c.do(func() { b, err = cuda.HostAlloc(n) })
 	return b, err
 }
+
+// ImportAlign and Import are cuda.Device's host-pointer import
+// (backend.HostImport) on the owner goroutine. The buffer is not counted: the
+// card did not allocate it.
+func (c *cudaDev) ImportAlign() int { return c.d.ImportAlign() }
+
+func (c *cudaDev) Import(p unsafe.Pointer, n int) (Buf, error) {
+	var b *cuda.Buffer
+	err := errCUDAClosed
+	c.do(func() { b, err = c.d.Import(p, n) })
+	if err != nil {
+		return nil, err
+	}
+	return &cudaBuf{b: b, dev: c}, nil
+}
+
+// UnifiedMemory is CU_DEVICE_ATTRIBUTE_INTEGRATED: a Jetson's memory is the
+// host's, a discrete card's is not (backend.Unified).
+func (c *cudaDev) UnifiedMemory() bool { return c.d.Integrated() }
+
+var (
+	_ HostImport = (*cudaDev)(nil)
+	_ Unified    = (*cudaDev)(nil)
+)
 
 // UnpinHost gives PinHost's memory back.
 func (c *cudaDev) UnpinHost(b []byte) { c.do(func() { cuda.FreeHost(b) }) }
@@ -812,7 +855,7 @@ func (b *cudaBuf) WriteAt(off int, p []byte) error {
 		// must land after everything before it.
 		queues := b.dev.hasQueues()
 		if queues {
-			if err = cuda.Sync(); err != nil {
+			if err = b.dev.syncAll(); err != nil {
 				return
 			}
 		}
@@ -839,7 +882,7 @@ func (b *cudaBuf) Read(p []byte) error {
 	err := errCUDAClosed
 	b.dev.do(func() {
 		if b.dev.hasQueues() {
-			if err = cuda.Sync(); err != nil {
+			if err = b.dev.syncAll(); err != nil {
 				return
 			}
 		}
@@ -870,12 +913,12 @@ func (c *cudaDev) Copy(dst Buf, dstOff int, src Buf, srcOff, n int) error {
 		// The legacy stream does not wait for a queue's non-blocking stream,
 		// so with queues open the copy waits for the whole context first.
 		if c.hasQueues() {
-			if err = cuda.Sync(); err != nil {
+			if err = c.syncAll(); err != nil {
 				return
 			}
 		}
 		if err = cuda.CopyDtoD(db.b, dstOff, sb.b, srcOff, n); err == nil {
-			err = cuda.Sync()
+			err = c.syncAll()
 		}
 	})
 	return err
@@ -904,7 +947,7 @@ func (k *cudaKern) Launch(groups, width int, bufs ...Buf) error {
 	err := errCUDAClosed
 	k.dev.do(func() {
 		if err = k.m.Launch(groups, width, cb...); err == nil {
-			err = cuda.Sync()
+			err = k.dev.syncAll()
 		}
 	})
 	return err
@@ -916,6 +959,7 @@ func (k *cudaKern) Close() { k.dev.do(func() { k.m.Unload() }) }
 // launch from (cuda.Module's own is shared by every caller of the kernel)
 // and the session SessionOn hands out, reused so a call allocates nothing.
 type cudaQueue struct {
+	once
 	c    *cudaDev
 	st   *cuda.Stream
 	mu   sync.Mutex
@@ -1002,6 +1046,7 @@ func (c *cudaDev) NewQueue() (Queue, error) {
 		return nil, err
 	}
 	q := &cudaQueue{c: c, st: st}
+	ownedQueues.Add(1)
 	c.qmu.Lock()
 	if c.queues == nil {
 		c.queues = map[*cudaQueue]bool{}
@@ -1015,6 +1060,7 @@ func (c *cudaDev) NewQueue() (Queue, error) {
 func (q *cudaQueue) Close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.release(&ownedQueues)
 	c := q.c
 	c.qmu.Lock()
 	open := c.queues[q]
@@ -1107,6 +1153,17 @@ func (c *cudaDev) curQueue() *cudaQueue {
 		return nil
 	}
 	return c.queueOf(threadID())
+}
+
+// syncAll is cuCtxSynchronize, held off while any queue is capturing (see
+// capturing). A thread inside a queue's Session holds the read side already
+// and calls straight through: waiting for itself would never return.
+func (c *cudaDev) syncAll() error {
+	if c.nQueued.Load() == 0 || !c.inQueue(threadID()) {
+		c.capturing.Lock()
+		defer c.capturing.Unlock()
+	}
+	return cuda.Sync()
 }
 
 func (c *cudaDev) hasQueues() bool {

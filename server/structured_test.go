@@ -54,6 +54,12 @@ func genText(t *testing.T, e *Engine, o GenerateOptions) (string, []int32, Finis
 	var reason FinishReason
 	err := e.Generate(context.Background(), o, func(ev Event) error {
 		switch ev.Kind {
+		case EventStarted:
+			// A constrained generate runs alone, never as a row of its
+			// model's step loop: a row's token is not masked.
+			if o.Grammar != "" && ev.Started.Batched {
+				t.Fatalf("a generate under a grammar ran as a row of the step loop")
+			}
 		case EventToken:
 			b.WriteString(ev.Token.Text)
 			if ev.Token.ID >= 0 {
@@ -73,7 +79,12 @@ func genText(t *testing.T, e *Engine, o GenerateOptions) (string, []int32, Finis
 func TestStructuredOutputValidates(t *testing.T) {
 	for _, sm := range structuredModels {
 		t.Run(sm.id, func(t *testing.T) {
-			e, _, _ := loadedEngine(t, sm.file, sm.id, LoadOptions{})
+			e, lm, _ := loadedEngine(t, sm.file, sm.id, LoadOptions{})
+			// A host model has a step loop (batch.go), so this gate holds a
+			// grammar on a host-batched model.
+			if lm.loop == nil {
+				t.Fatal("a host model has no step loop: this gate would not cover a host-batched model")
+			}
 			for _, schemaText := range sm.schemas {
 				src, err := grammar.FromJSONSchema([]byte(schemaText))
 				if err != nil {

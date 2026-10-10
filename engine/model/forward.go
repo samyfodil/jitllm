@@ -459,6 +459,8 @@ type State struct {
 	// Attention scores per (sequence, head). atth/attf are the nseq==1 case;
 	// a batch parallelises over sequences and heads, so every pair needs a row.
 	bathf []float32
+	// scoreReach is the key reach bathf and battf are sized for (rowsStride).
+	scoreReach int
 
 	// Batched prefill scratch, allocated on first use and sized by
 	// PrefillChunk rather than by the sequence length.
@@ -469,7 +471,7 @@ type State struct {
 	// clampIn), grown on first use; nil on every other model.
 	bclamp    []float32
 	bqf, bxbf []float32
-	battf     []float32 // per-token score rows, at attStride
+	battf     []float32 // per-token score rows, at rowsStride
 
 	// jit is the generated-code tier.
 	jit *nn.JIT
@@ -496,6 +498,20 @@ type State struct {
 	stepTok    []int32
 	stepLogits []float32
 	stepRes    [][]float32
+	// A step across host sessions (stepHost) this State leads: each row's
+	// session, whether the row is its session's furthest (the one that
+	// faults its attention window in), and each row's slot, always 0.
+	rowOwn []*State
+	rowWin []bool
+	rowSeq []int
+	// stepb is the model's step scratch holder while this State leads a
+	// host step (borrowStep).
+	stepb *stepBuf
+	// ra and raRun are a ragged step's attention fan-out (rowsHost).
+	ra    rowsAttn
+	raRun func(lo, hi int)
+	// rowCausal is a ragged step's rows in position order (rowsHost).
+	rowCausal []int
 	// onDev[li] says block li runs on a device: the truth for execution, where
 	// gpuLayers is the truth for the seam. Placement is a set and migration a
 	// boundary: gpuLayers is the contiguous device prefix (what -gpu-layers
@@ -2529,6 +2545,31 @@ func (s *State) softmax(row []float32, n int) { nn.Softmax32JIT(row, n) }
 // the generated softmax writes stays inside the row it belongs to.
 func attStride(maxSeq int) int { return (maxSeq + 15) &^ 15 }
 
+// rowsStride is the stride of the many-row score buffers (battf for a prefill
+// chunk, bathf for a batch step) when their rows reach keys below reach.
+//
+// Those buffers hold a row per token or per (row, head), so sized at maxSeq
+// they were the largest thing a State allocated: a 170-token prompt on a
+// 131072-position context held 89 MB of scores for keys it could not reach,
+// and a server keeps a State per concurrent request. The reach they are sized
+// for grows by doubling, from scoreReachMin, up to maxSeq, so a sequence
+// re-sizes them a handful of times in its life and a warm step at a steady
+// reach allocates nothing.
+func (s *State) rowsStride(reach int) int {
+	if reach > s.scoreReach {
+		r := max(s.scoreReach, scoreReachMin)
+		for r < reach {
+			r *= 2
+		}
+		s.scoreReach = min(r, s.maxSeq)
+	}
+	return attStride(s.scoreReach + s.m.sinkSlot())
+}
+
+// scoreReachMin is the first reach rowsStride sizes for: a page's worth of
+// positions, past which a short exchange never re-sizes.
+const scoreReachMin = 256
+
 // sinkSlot is 1 when any layer carries attention sinks, and the score rows
 // need room for the one extra logit.
 func (m *Model) sinkSlot() int {
@@ -4030,6 +4071,14 @@ func (s *State) devWhy() string {
 // recurrent reports that this session carries a linear block's running state,
 // which is what makes re-running a block from the embeddings unsound.
 func (s *State) recurrent() bool { return s.rconv != nil || s.rstate != nil }
+
+// RecurrenceAdvanced reports whether the device call that just failed had
+// already advanced one of this State's linear blocks, so running its tokens
+// again would apply them twice. It asks the State's own device session, which
+// is where the count lives: the GPU's own count is session 0's, and a State
+// steps on a session of its own. A joint step counts on the State that led it,
+// so a caller asks every State in the step.
+func (s *State) RecurrenceAdvanced() bool { return s.recurrent() && s.recStepped() != 0 }
 
 // recStepped is how many placed linear blocks advanced during the submission
 // that just failed. Zero means nothing moved and the host restart is sound; it

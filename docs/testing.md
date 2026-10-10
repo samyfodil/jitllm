@@ -198,6 +198,7 @@ which reads no environment) maps these onto the `backend.Opts` `Open` uses:
 | variable | effect | unset |
 |---|---|---|
 | `JITLLM_VK_DEVICE` | the Vulkan device every `backend.Open` takes, by index or name substring (`1` is the Iris Xe beside the RTX here) | the default rule's pick |
+| `JITLLM_ROCM` | the ROCm library directory the HIP backend loads from (`backend`, `lowertest`, `hip` and `server` tests; `jitllm` and `jitllmd` too); with no AMD card, comgr alone runs the offline code object gate (docs/design/amd-hip.md) | the default search: the loader, `/opt/rocm/lib`, `/opt/rocm-*/lib` |
 | `JITLLM_FOUR_DEVICES` | the four devices `model.TestSchedulerOnSplitPlacements*`'s four-device arms split the model over, as specs (`cuda:0,cuda:1,vulkan:2,vulkan:3`) | every CUDA device, then each Vulkan GPU that is not one of them (by UUID); fewer than four skips naming them |
 | `JITLLM_PAGED_VK` | the Vulkan devices the paged-attention gates (`TestPaged*`) sweep, by index; `none` for no Vulkan | every Vulkan GPU, a software rasteriser (llvmpipe) left out |
 | `JITLLM_VK_MAXGROUPS` | workgroups per Vulkan dispatch, below the device's own `maxComputeWorkGroupCount`; `7` sends nearly every launch in the suite through a split dispatch | the device's own |

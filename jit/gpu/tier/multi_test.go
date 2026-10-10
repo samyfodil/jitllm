@@ -425,26 +425,27 @@ func TestPrewarmOverlapsLayers(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Real hardware.
 
-// TestRealDevicesBothTakeBlocks runs on real cards: two runtimes hold blocks of
+// TestRealDevicesBothTakeBlocks runs on real cards: two devices hold blocks of
 // one model at once, and the split run must agree with the one-device run. The
 // agreement is the point; a split that passed the wrong residual would still
 // fill every counter.
 //
-//	JITLLM_VK_DEVICE=<name substring> go test ./jit/gpu/tier -run RealDevices -v
-//
-// Without the variable backend.Open may return one card through two APIs,
-// which is still two devices, sharing one pool (planSlots).
+// The devices are allDevices' -- every CUDA ordinal and every Vulkan GPU, one
+// API per card -- not backend.Open's, which is one device per backend and saw
+// one of a 2xT4 box's two cards. The first two after ordering run the gate.
 func TestRealDevicesBothTakeBlocks(t *testing.T) {
-	devs := backend.Open()
+	devs, err := allDevices(backend.Opts{})
 	if len(devs) < 2 {
 		for _, d := range devs {
 			d.Close()
 		}
-		t.Skipf("this box opened %d GPU device(s); two are needed. "+
-			"On a machine with an integrated GPU beside a discrete one, "+
-			"JITLLM_VK_DEVICE=<name or index> picks the second", len(devs))
+		t.Skipf("this box enumerates %d distinct GPU device(s) across every backend; two are needed (%v)", len(devs), err)
 	}
 	devs = order(devs, TuneAuto)
+	for _, d := range devs[2:] {
+		d.Close()
+	}
+	devs = devs[:2]
 	for i, d := range devs {
 		t.Logf("device %d: %-40s [%s]", i, d.Name(), d.API())
 	}

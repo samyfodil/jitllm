@@ -1,6 +1,7 @@
 package server
 
 import (
+	"os"
 	"testing"
 )
 
@@ -141,7 +142,7 @@ func TestADeviceWithNoIdentityIsNotMerged(t *testing.T) {
 // only the real probe shows whether the backends agree on a UUID and whether
 // probeDevices fills PhysicalID at all.
 func TestTheRealProbeCountsEachCardOnce(t *testing.T) {
-	devs, err := probeDevices()
+	devs, err := probeDevices(os.Getenv("JITLLM_ROCM"))
 	if err != nil {
 		t.Fatalf("probeDevices: %v", err)
 	}

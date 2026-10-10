@@ -1167,6 +1167,8 @@ type Model struct {
 	// prompt (promptBuf).
 	spareMu sync.Mutex
 	spare   *promptBuf
+	// step is the host step scratch across sessions (stepBuf).
+	step *stepBuf
 	// kvPool is the host KV pages closed States gave back (kvPagePool).
 	kvPool kvPagePool
 
@@ -1197,6 +1199,9 @@ type Model struct {
 	expReads int64
 	expBytes int64
 	expCalls int64
+	// hostStepRows is the rows StepRuns has run as host steps across
+	// sessions (stepHost); HostStepRows reports it.
+	hostStepRows int64
 
 	embd tensor
 	// hardEmbd is Gemma 3n's hard vision tokens' rows (mobilenet.go), nil
