@@ -60,6 +60,11 @@ type Config struct {
 	API     bool   `json:"api"`
 	APIAddr string `json:"api_addr"`
 
+	// CLIOffered is set once the macOS app has offered to put its
+	// command-line programs on PATH, so the offer is made on the first
+	// launch only; the settings page keeps the choice reachable after.
+	CLIOffered bool `json:"cli_offered"`
+
 	path string
 }
 

@@ -64,6 +64,9 @@ func main() {
 		// container and device are released rather than leaked past the window.
 		sh.OnShutdown(eng.Close)
 		register(sh, screen.Deps{Engine: eng})
+		// The macOS app's first launch offers to put its jitllm and jitllmd
+		// on PATH; anywhere else it does nothing.
+		screen.OfferCLI(sh)
 	}
 
 	sh.UI.SetRoot(sh.Build())

@@ -27,15 +27,19 @@ func Settings(sh *app.Shell) widget.Widget {
 	sub := widgets.NewParagraph("Saved as you change them, in this computer's settings folder.").
 		FontSize(p.Type.BodyMedium.FontSize).Color(p.Muted()).Font(app.Prose)
 
-	body := primitives.VBox(
+	cards := []widget.Widget{
 		primitives.VBox(title, sub).Gap(p.Space.XS).CrossAlign(primitives.CrossAxisStretch),
 		card(sh, "Appearance", appearance(sh)),
 		card(sh, "Model folders", modelFolders(sh)),
 		card(sh, "Loading models", nextLoad(sh)),
 		card(sh, "Chat", chatSettings(sh)),
 		card(sh, "API", apiSettings(sh)),
-		card(sh, "Files", files(sh)),
-	).Gap(p.Space.M).CrossAlign(primitives.CrossAxisStretch).Padding(p.Space.L)
+	}
+	if cl := commandLine(sh); cl != nil {
+		cards = append(cards, card(sh, "Command line", cl))
+	}
+	cards = append(cards, card(sh, "Files", files(sh)))
+	body := primitives.VBox(cards...).Gap(p.Space.M).CrossAlign(primitives.CrossAxisStretch).Padding(p.Space.L)
 
 	return primitives.Box(primitives.VBox(
 		primitives.Expanded(scrollview.New(body, scrollview.PainterOpt(p.Scrollbar))),
