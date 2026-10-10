@@ -32,7 +32,7 @@ func logToFileWithoutAConsole(noConsole bool) {
 	if err != nil {
 		return
 	}
-	os.Stdout, os.Stderr = f, f
+	replaceStdio(f)
 	log.SetOutput(f)
 	slog.SetDefault(slog.New(slog.NewTextHandler(f, nil)))
 }
@@ -55,4 +55,17 @@ func stderrIsRead() bool {
 		return true
 	}
 	return !os.SameFile(fi, null)
+}
+
+// stdio holds the standard files os.Stdout and os.Stderr held before they were
+// replaced. An *os.File closes its descriptor when collected, and descriptor
+// 2 is where the runtime writes a fatal error: dropped, the collector closes
+// it, the next file opened takes its number, and a crash's traceback is
+// written into that file -- or nowhere.
+var stdio []*os.File
+
+// replaceStdio points os.Stdout and os.Stderr at f, keeping the old ones.
+func replaceStdio(f *os.File) {
+	stdio = append(stdio, os.Stdout, os.Stderr)
+	os.Stdout, os.Stderr = f, f
 }
