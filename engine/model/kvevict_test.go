@@ -252,3 +252,64 @@ func TestKVEvictionStreamsWithoutAllocating(t *testing.T) {
 	}
 	allocVerdict(t, fmt.Sprintf("%d streamed pass(es)", passes), w, n, eg.m.container.Reads()-r0, 0)
 }
+
+// TestKVEvictionRewindsIntoAnEvictedPage: a history whose oldest pages went
+// home is taken back to a position inside one of them -- a speculative
+// rollback, a pooled State's next prompt -- and decoded forward through
+// another text. The page the position lies inside comes back to the card with
+// its home copy, whose rows below the position are still the history, and the
+// pages past it are released for the new rows; every step is held to a host
+// State that took the same ids. Before the tier learned of rewinds, the new
+// rows landed on the dummy page under an evicted page's id and the stream
+// uploaded the old copy over them (NMSE 0.92 at the seventh step), and with a
+// layer joining later streamDecode indexed past its home copies: the jitllmd
+// crash at 64 concurrent requests. A rewind that does not bring the page's
+// home copy back reads 0.20.
+func TestKVEvictionRewindsIntoAnEvictedPage(t *testing.T) {
+	eg := newEvictGate(t)
+	g, st, _ := eg.open(t, true)
+	for _, id := range eg.ids {
+		if _, err := st.Forward(id); err != nil {
+			t.Fatalf("%v (%s)", err, g.Err())
+		}
+	}
+	ev := g.Stats().KVEvictions
+	if ev < 2 {
+		t.Fatalf("%d page(s) sent home: the rewind below would not land in an evicted page", ev)
+	}
+	// Inside page 1 of 64 positions: at home in every layer. The rows after
+	// it are another text, so a page read from its old copy reads wrong.
+	const p = 64 + 17
+	next := append(append([]int32(nil), eg.turn...), eg.turn...)
+	host := eg.m.NewState(eg.seq())
+	defer host.Close()
+	if _, err := host.Prefill(eg.prompt); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range eg.ids[:p-len(eg.prompt)] {
+		if _, err := host.Forward(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st.rewind(p)
+	worst, at := 0.0, 0
+	for i, id := range next {
+		want, err := host.Forward(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lg, err := st.Forward(id)
+		if err != nil {
+			t.Fatalf("step %d after the rewind: %v (%s)", i, err, g.Err())
+		}
+		if e := logitNMSE(lg, want); !(e <= worst) {
+			worst, at = e, i
+		}
+	}
+	t.Logf("rewound to %d past %d page(s) at home, %d more sent home after it; worst logit NMSE %.3e against "+
+		"the host (step %d)", p, ev, g.Stats().KVEvictions-ev, worst, at)
+	if !(worst < evictNMSE) {
+		t.Fatalf("worst logit NMSE %.3e against the host at step %d: the rows after the rewind were lost or "+
+			"read stale", worst, at)
+	}
+}
