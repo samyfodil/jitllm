@@ -22,10 +22,17 @@ for mode in mock engine; do
   home=$(mktemp -d)
   appdata=$(cygpath -w "$home/appdata" 2>/dev/null || echo "$home/appdata")
   mkdir -p "$home/appdata" "$home/models"
-  args=()
-  [ "$mode" = mock ] && args=(-mock)
-  APPDATA=$appdata LOCALAPPDATA=$appdata JITLLM_MODELS=$home/models \
-    "$bin" "${args[@]}" >"$out/$mode.log" 2>&1 &
+  # Mock mode writes to a pipe, as from a terminal; the engine run has its
+  # output on NUL, as from Explorer, so its log and standard error go to the
+  # settings folder (jitllm-ui.log, crash.log) the way a person's run does.
+  if [ "$mode" = mock ]; then
+    APPDATA=$appdata LOCALAPPDATA=$appdata JITLLM_MODELS=$home/models \
+      "$bin" -mock >"$out/$mode.log" 2>&1 &
+  else
+    APPDATA=$appdata LOCALAPPDATA=$appdata JITLLM_MODELS=$home/models \
+      "$bin" >/dev/null 2>&1 &
+    : >"$out/$mode.log"
+  fi
   pid=$!
   sleep "$secs"
   if ! kill -0 "$pid" 2>/dev/null; then
@@ -38,7 +45,9 @@ for mode in mock engine; do
   fi
   dir=$home/appdata/jitllm
   for f in crash.log crash-report.txt; do
-    if [ -s "$dir/$f" ]; then
+    # crash.log also collects what drivers print to standard error; only a Go
+    # traceback in it is a crash.
+    if [ -s "$dir/$f" ] && grep -qE '^goroutine |fatal error:|panic:|^Exception ' "$dir/$f"; then
       echo "::error::jitllm-ui ($mode) left $f"
       cat "$dir/$f"
       cp "$dir/$f" "$out/$mode-$f"

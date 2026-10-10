@@ -40,6 +40,18 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// crashDir is a directory for Arm. The cleanup lets go of the crash output
+// before the directory is removed: Windows will not delete an open file.
+func crashDir(t *testing.T) string {
+	d := t.TempDir()
+	t.Cleanup(func() {
+		if err := debug.SetCrashOutput(nil, debug.CrashOptions{}); err != nil {
+			t.Error(err)
+		}
+	})
+	return d
+}
+
 func runChild(t *testing.T, dir, kind string) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
@@ -64,7 +76,7 @@ func TestFatalCrashIsReportedOnTheNextLaunch(t *testing.T) {
 		{"overflow", "fatal error: stack overflow"},
 	} {
 		t.Run(c.kind, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := crashDir(t)
 			runChild(t, dir, c.kind)
 			SetInfo(Info{App: "jitllm-desktop", Version: "test"})
 			rep, err := Arm(dir, []string{"loaded " + filepath.Join(home, "m.jlm")}, false)
@@ -101,7 +113,7 @@ func TestFatalCrashIsReportedOnTheNextLaunch(t *testing.T) {
 // crash: a launch after it shows nothing. Against the violation (any bytes
 // counting as a crash) a report comes back.
 func TestDriverNoiseIsNotACrash(t *testing.T) {
-	dir := t.TempDir()
+	dir := crashDir(t)
 	noise := "libEGL warning: DRI3 error: Could not get DRI3 device\nvulkan: No DRI3 support detected\n"
 	if err := os.WriteFile(filepath.Join(dir, fatalFile), []byte(noise), 0o644); err != nil {
 		t.Fatal(err)
@@ -118,7 +130,7 @@ func TestDriverNoiseIsNotACrash(t *testing.T) {
 // A recovered panic is handed to the handler with the panicking goroutine's
 // stack, and the goroutine ends rather than the process.
 func TestRecoverReportsAndKeepsTheProcess(t *testing.T) {
-	dir := t.TempDir()
+	dir := crashDir(t)
 	if _, err := Arm(dir, nil, false); err != nil {
 		t.Fatal(err)
 	}
