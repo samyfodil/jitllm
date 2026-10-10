@@ -117,6 +117,9 @@ type stepLoop struct {
 	// fair is the fairness level, 0 to 100 (batchfair.go); rr turns the
 	// even split of the prompt budget so its remainder rotates.
 	fair, rr int
+	// The moving averages of a park's, a resume's and a step's time, in
+	// nanoseconds, that bound the quantum from below (stepLoop.quantum).
+	parkNs, resumeNs, stepNs float64
 
 	stats batchCounters
 }
@@ -660,7 +663,11 @@ func (lp *stepLoop) iterate() {
 	lp.post.start()
 	t0 := time.Now()
 	lp.step(units)
-	lp.budget.observe(decoding, prompt, time.Since(t0))
+	d := time.Since(t0)
+	lp.budget.observe(decoding, prompt, d)
+	if decoding > 0 {
+		lp.stepNs = ewma(lp.stepNs, float64(d))
+	}
 	lp.post.wait()
 }
 

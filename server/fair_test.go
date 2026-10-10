@@ -366,3 +366,30 @@ func TestTimeSlicesBoundTheWait(t *testing.T) {
 		t.Fatalf("VIOLATION level 0: the last first token at step %d, within the bound %d", worst, bound)
 	}
 }
+
+// TestQuantumOutlastsItsSwap: a slice is never so short that the rows' swaps
+// take more than the level's share of a decode step -- all of it at 100, an
+// eighth at level 1 -- and with nothing measured it is the level's own.
+func TestQuantumOutlastsItsSwap(t *testing.T) {
+	lp := fairLoop(100, 4)
+	if q := lp.quantum(); q != fairQuantumMin {
+		t.Fatalf("unmeasured: quantum %d, want %d", q, fairQuantumMin)
+	}
+	lp.stepNs, lp.parkNs, lp.resumeNs = 10e6, 60e6, 40e6 // a swap is ten steps
+	if q := lp.quantum(); q != 10 {
+		t.Fatalf("level 100, a swap of ten steps: quantum %d, want 10", q)
+	}
+	lp.fair = 1
+	if q := lp.quantum(); q != fairQuantumMax {
+		t.Fatalf("level 1, a swap of ten steps: quantum %d, want the level's %d over eight swaps' 80", q, fairQuantumMax)
+	}
+	lp.parkNs = 600e6 // a swap is 64 steps: eight swaps is 512
+	if q := lp.quantum(); q != 512 {
+		t.Fatalf("level 1, a swap of 64 steps: quantum %d, want 512", q)
+	}
+	lp.fair, lp.parkNs = 100, 60e6
+	lp.rows = make([]*row, 4) // four rows swap a slice each: forty steps of swaps
+	if q := lp.quantum(); q != 40 {
+		t.Fatalf("level 100, four rows of ten-step swaps: quantum %d, want 40", q)
+	}
+}

@@ -52,6 +52,10 @@ const (
 	// falls linearly to fairBoostMin at 100.
 	fairBoostMax = 60 * time.Second
 	fairBoostMin = time.Second
+	// fairSwapMax is fairSwapRatio at level 1.
+	fairSwapMax = 8.0
+	// fairAlpha is how fast the swap and step averages forget.
+	fairAlpha = 0.1
 )
 
 // fairLevel clamps a configured level; nil is the default.
@@ -69,6 +73,40 @@ func fairQuantum(f int) int {
 	}
 	t := float64(f-1) / 99
 	return int(math.Round(fairQuantumMax * math.Pow(float64(fairQuantumMin)/fairQuantumMax, t)))
+}
+
+// fairSwapRatio is how many times the swaps' share of a step the decoding
+// must outweigh at level f (stepLoop.quantum): fairSwapMax at 1, falling
+// geometrically to 1 at 100.
+func fairSwapRatio(f int) float64 {
+	t := float64(max(f, 1)-1) / 99
+	return math.Pow(fairSwapMax, 1-t)
+}
+
+// quantum is the time slice the loop runs, in tokens: the level's, and no
+// shorter than keeps swapping within its share of the decoding. Each of the
+// rows is parked and resumed about once a quantum, so a step spends
+// rows*swap/quantum on swaps; the quantum keeps that at most the decode
+// step's time over fairSwapRatio -- an eighth of it at level 1, all of it at
+// 100. A slice that ignores its swap spends the card moving histories rather
+// than decoding them: on a V100 at 64 concurrent requests (Llama 3.1 8B) an
+// 8-token slice parked several rows a step, and admission took two thirds of
+// the loop's time at 2.6 s a step.
+func (lp *stepLoop) quantum() int {
+	q := fairQuantum(lp.fair)
+	if q == 0 || lp.stepNs <= 0 {
+		return q
+	}
+	swaps := float64(max(len(lp.rows), 1)) * (lp.parkNs + lp.resumeNs)
+	return max(q, int(math.Ceil(fairSwapRatio(lp.fair)*swaps/lp.stepNs)))
+}
+
+// ewma folds x into the moving average avg.
+func ewma(avg, x float64) float64 {
+	if avg == 0 {
+		return x
+	}
+	return avg + fairAlpha*(x-avg)
 }
 
 // fairBoost is the head start a priority level is worth at level f.
@@ -127,7 +165,7 @@ func (lp *stepLoop) order() {
 // free a row and room for need positions. It is nil when they cannot, so a
 // swap that would not admit r parks nobody. lp.mu held.
 func (lp *stepLoop) victims(r *row, need, room, page int) []*row {
-	q := fairQuantum(lp.fair)
+	q := lp.quantum()
 	if q == 0 {
 		return nil
 	}
@@ -164,10 +202,11 @@ func (lp *stepLoop) parkRow(r *row) error {
 	if lp.parkDropsLogits {
 		clear(r.held)
 	}
-	before := lp.room()
+	before, t0 := lp.room(), time.Now()
 	if err := lp.e.parkLocked(r.s); err != nil {
 		return err
 	}
+	lp.parkNs = ewma(lp.parkNs, float64(time.Since(t0)))
 	lp.stats.parkFreed.Add(int64(lp.room() - before))
 	for i, x := range lp.rows {
 		if x == r {
@@ -195,9 +234,11 @@ func (lp *stepLoop) room() int {
 
 // resumeRow brings a parked row back into the step. lp.mu held.
 func (lp *stepLoop) resumeRow(r *row) error {
+	t0 := time.Now()
 	if err := lp.e.resumeLocked(r.s); err != nil {
 		return fmt.Errorf("server: resuming a time-sliced row: %w", err)
 	}
+	lp.resumeNs = ewma(lp.resumeNs, float64(time.Since(t0)))
 	r.parked = false
 	r.resumedAt = r.n
 	lp.stats.resumes.Add(1)
