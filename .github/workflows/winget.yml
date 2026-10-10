@@ -1,0 +1,152 @@
+name: winget
+
+# The winget manifests packaging/winget/generate.sh writes, checked the way
+# winget-pkgs' own pipeline will check them: `winget validate`, then
+# `winget install --manifest` of the setup, the CLI run from the PATH a new
+# shell sees, and `winget uninstall` taking it away. winget needs a URL, so
+# the setups are served from a local HTTP server on the runner and the
+# manifests name it, with the setups' real SHA-256.
+#
+# On a push to `installers` the setups are built here from the branch (version
+# 0.0.0); the release calls it with `release: true` and checks the setups in
+# its own `dist` artifact instead.
+on:
+  push:
+    branches: [installers]
+  workflow_call:
+    inputs:
+      release:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.27.x"
+  CGO_ENABLED: "0"
+
+jobs:
+  setups:
+    if: ${{ !inputs.release }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            go.sum
+            server/go.sum
+            ui/go.sum
+      - name: tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nsis
+      # The three programs as .goreleaser.yaml builds them, in zips under its
+      # names, then the setups from them as release.yml's windows-setup does.
+      - name: build
+        run: |
+          set -euo pipefail
+          ver=0.0.0
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            b="$RUNNER_TEMP/$arch"
+            mkdir -p "$b"
+            GOOS=windows GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$ver" -o "$b/jitllm.exe" ./cmd/jitllm
+            (cd server && GOOS=windows GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$ver" -o "$b/jitllmd.exe" ./cmd/jitllmd)
+            (cd ui && go run ./cmd/pack syso -arch "$arch" -version "$ver" &&
+              GOOS=windows GOARCH=$arch go build -trimpath -ldflags "-s -w -H=windowsgui" -o "$b/jitllm-desktop.exe" . &&
+              rm -f ./*.syso)
+            for prog in jitllm jitllmd jitllm-desktop; do
+              (cd "$b" && zip -q "$GITHUB_WORKSPACE/dist/${prog}_${ver}_windows_${arch}.zip" "$prog.exe")
+            done
+            packaging/windows/build.sh "$ver" "$arch" dist "dist/jitllm-setup_${ver}_windows_${arch}.exe"
+          done
+          (cd dist && sha256sum ./*.exe | sed 's# \./# #' > checksums.txt && cat checksums.txt)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: winget-setups
+          path: |
+            dist/*.exe
+            dist/checksums.txt
+          retention-days: 3
+
+  check:
+    needs: setups
+    if: ${{ !cancelled() && (inputs.release || needs.setups.result == 'success') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            arch: amd64
+          - runner: windows-11-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: packaging
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.release && 'dist' || 'winget-setups' }}
+          path: dist
+      # The runner images do not all carry winget. Where it is missing it is
+      # installed as Microsoft documents for a machine without the Store: the
+      # Microsoft.WinGet.Client module's Repair-WinGetPackageManager.
+      - name: winget
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+            Install-PackageProvider -Name NuGet -Force -Scope CurrentUser | Out-Null
+            Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery -Scope CurrentUser
+            Repair-WinGetPackageManager -AllUsers -Latest -Force
+            $wa = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
+            $env:Path += ";$wa"
+            Add-Content $env:GITHUB_PATH $wa
+          }
+          winget --version
+          winget settings --enable LocalManifestFiles
+      - name: generate
+        shell: bash
+        env:
+          JITLLM_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          setup=$(cd dist && ls jitllm-setup_*_windows_amd64.exe)
+          ver=${setup#jitllm-setup_}
+          ver=${ver%_windows_amd64.exe}
+          JITLLM_INSTALLER_BASE=http://127.0.0.1:8765 \
+            packaging/winget/generate.sh "v$ver" dist/checksums.txt out > manifest-dir.txt
+          dir=$(cat manifest-dir.txt)
+          echo "MANIFEST=$dir" >> "$GITHUB_ENV"
+          head -n 100 "$dir"/*.yaml
+      - name: validate, install, run, uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $server = Start-Process -PassThru -WindowStyle Hidden -FilePath python -ArgumentList '-m', 'http.server', '8765', '--bind', '127.0.0.1', '--directory', (Resolve-Path dist)
+          try {
+            for ($i = 0; $i -lt 30; $i++) {
+              try { Invoke-WebRequest -UseBasicParsing -Method Head http://127.0.0.1:8765/checksums.txt | Out-Null; break } catch { Start-Sleep 1 }
+            }
+            winget validate --manifest $env:MANIFEST
+            winget install --manifest $env:MANIFEST --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+            # A new shell's PATH: the machine's and the user's from the
+            # registry, not this process's inherited one.
+            $path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+            $out = cmd /c "set PATH=$path&& where jitllm && jitllm version"
+            $out
+            if (-not ($out -match 'Programs\\jitllm\\jitllm.exe')) { throw "jitllm is not on a new shell's PATH" }
+            winget list --id jitllm.jitllm --exact --disable-interactivity
+            winget uninstall --id jitllm.jitllm --exact --silent --disable-interactivity
+            $dir = Join-Path $env:LOCALAPPDATA 'Programs\jitllm'
+            for ($i = 0; $i -lt 30 -and (Test-Path (Join-Path $dir 'jitllm.exe')); $i++) { Start-Sleep 1 }
+            if (Test-Path (Join-Path $dir 'jitllm.exe')) { throw "winget uninstall left jitllm.exe" }
+            if (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\jitllm') { throw "winget uninstall left the Add/Remove Programs entry" }
+            $path = [Environment]::GetEnvironmentVariable('Path', 'User')
+            if (($path -split ';') -contains $dir) { throw "winget uninstall left $dir on the user PATH" }
+          } finally {
+            Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
+          }

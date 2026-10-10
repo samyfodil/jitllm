@@ -425,8 +425,18 @@ jobs:
           grep '^ids ' err.txt
           grep -q 'Paris' out.txt || { echo "::error::decode did not answer Paris"; exit 1; }
 
+  # The winget manifests for these setups, validated, installed with winget,
+  # run and uninstalled on both Windows hosts (winget.yml).
+  winget:
+    needs: windows-setup
+    permissions:
+      contents: read
+    uses: ./.github/workflows/winget.yml
+    with:
+      release: true
+
   publish:
-    needs: smoke
+    needs: [smoke, winget]
     if: ${{ !contains(github.ref_name, '-draft') }}
     runs-on: ubuntu-24.04
     permissions:
@@ -469,6 +479,7 @@ jobs:
       contents: read
     env:
       HAS_TAP: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+      JITLLM_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v7
         with:

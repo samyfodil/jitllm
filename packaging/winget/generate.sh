@@ -8,7 +8,12 @@
 # (manifests/j/jitllm/jitllm/<version>/), three files in the 1.10 schema: the
 # version, the installer (both architectures, nullsoft, user scope) and the
 # en-US locale. Submitting it is a separate, deliberate step
-# (packaging/README.md); `winget validate --manifest <dir>` checks it first.
+# (packaging/README.md); `winget validate --manifest <dir>` checks it first,
+# and .github/workflows/winget.yml installs it.
+#
+# JITLLM_REPO (owner/name) is the repository the URLs name; the release
+# workflow passes its own. JITLLM_INSTALLER_BASE replaces the directory the
+# setups are downloaded from, for a check that serves them itself.
 set -eu
 
 [ $# -eq 3 ] || { echo "usage: $0 <tag> <checksums.txt> <out-dir>" >&2; exit 2; }
@@ -18,6 +23,9 @@ out=$3
 case $tag in v*) ;; *) echo "generate: tag $tag does not start with v" >&2; exit 2 ;; esac
 version=${tag#v}
 repo=${JITLLM_REPO:-samyfodil/jitllm}
+# Where the setups are downloaded from; the release's assets unless a check
+# serves them from somewhere else (.github/workflows/winget.yml).
+base=${JITLLM_INSTALLER_BASE:-https://github.com/$repo/releases/download/$tag}
 id=jitllm.jitllm
 schema=1.10.0
 
@@ -62,7 +70,7 @@ EOF
 		f="jitllm-setup_${version}_windows_${a%%:*}.exe"
 		cat <<EOF
   - Architecture: ${a#*:}
-    InstallerUrl: https://github.com/$repo/releases/download/$tag/$f
+    InstallerUrl: $base/$f
     InstallerSha256: $(sha "$f")
 EOF
 	done
