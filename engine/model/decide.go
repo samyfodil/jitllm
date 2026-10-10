@@ -2,7 +2,6 @@ package model
 
 import (
 	"fmt"
-	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -84,6 +83,13 @@ type Decider struct {
 
 	scores []float32
 	input  int
+	// pick is a question's label ids, the groups flattened, and pickVals
+	// their logits: picked on the device where the head is there
+	// (nn.Head.Pick), gathered from the row where it is not. picked counts
+	// the prompts whose labels the device picked.
+	pick     []int32
+	pickVals []float32
+	picked   int
 
 	// The answer's scratch: the averaged probabilities, one variant's, a
 	// working row, and the ramp 0..n-1 (answer).
@@ -164,6 +170,27 @@ func (d *Decider) Close() error {
 		return nil
 	}
 	return d.st.Close()
+}
+
+// SetDevice places the Decider's blocks on d through the one placement path
+// (State.SetDeviceLayers): max caps how many are offered, -1 offers every
+// block and lets the device's memory decide, and nil detaches. A decoder
+// readout's prompts then prefill there and its label logits come from the
+// device's head; an encoder readout's blocks are placed the same way
+// (Embedder.SetDevice).
+func (d *Decider) SetDevice(dev nn.Device, max int) error {
+	if d.emb != nil {
+		return d.emb.SetDeviceLayers(dev, max)
+	}
+	return d.st.SetDeviceLayers(dev, max)
+}
+
+// DeviceBlocks is how many of the readout's blocks run on a device.
+func (d *Decider) DeviceBlocks() int {
+	if d.emb != nil {
+		return d.emb.DeviceBlocks()
+	}
+	return d.st.GPULayers()
 }
 
 // single is the id text encodes to when it is exactly one token.
@@ -266,6 +293,59 @@ func (d *Decider) order(q *DecisionQuestion) []DecisionOption {
 // option in the shown order (reversed for variant 1), or lev's nine ratings
 // for a noul.
 func (d *Decider) run(state jinja.Value, q *DecisionQuestion, v int) ([]float32, error) {
+	if d.kind == jlm.DecisionLaya {
+		return d.layaRun(state, q)
+	}
+	ids, groups, err := d.prompt(state, q, v)
+	if err != nil {
+		return nil, err
+	}
+	d.st.Reset()
+	// The labels' logits: where the head is on a device, gathered there and
+	// those alone read back (nn.Head.Pick) -- not under a head bias or a
+	// logit scale, which the host adds after the head.
+	flat := d.pick[:0]
+	for _, g := range groups {
+		flat = append(flat, g...)
+	}
+	d.pick = flat
+	h := d.st.head
+	if h != nil && d.m.outB == nil && d.st.c.LogitScale == 1 && d.violation != "no-pick" {
+		if cap(d.pickVals) < len(flat) {
+			d.pickVals = make([]float32, len(flat))
+		}
+		h.Pick, h.PickVals, h.Picked = flat, d.pickVals[:len(flat)], false
+		if d.violation == "pick-off-by-one" {
+			h.Pick = make([]int32, len(flat))
+			for i, id := range flat {
+				h.Pick[i] = id + 1
+			}
+		}
+		defer func() { h.Pick, h.PickVals = nil, nil }()
+	}
+	lg, err := d.st.Prefill(ids)
+	if err != nil {
+		return nil, err
+	}
+	d.input += len(ids)
+	if h != nil && h.Picked {
+		d.picked++
+		return d.labelScoresOf(h.PickVals, groups)
+	}
+	vals := d.pickVals[:0]
+	for _, id := range flat {
+		if int(id) >= len(lg) {
+			return nil, fmt.Errorf("label id %d is past the %d logits", id, len(lg))
+		}
+		vals = append(vals, lg[id])
+	}
+	d.pickVals = vals
+	return d.labelScoresOf(vals, groups)
+}
+
+// prompt is variant v of q as a decoder readout asks it: the prompt's ids,
+// and the label ids each output reads, a group per option (or per rating).
+func (d *Decider) prompt(state jinja.Value, q *DecisionQuestion, v int) ([]int32, [][]int32, error) {
 	opts := d.order(q)
 	var groups [][]int32
 	var labels []string
@@ -282,40 +362,51 @@ func (d *Decider) run(state jinja.Value, q *DecisionQuestion, v int) ([]float32,
 	case jlm.DecisionLFM2D1:
 		var err error
 		if labels, groups, err = d.d1Labels(q.Type, opts); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-	}
-	if d.kind == jlm.DecisionLaya {
-		return d.layaRun(state, q)
 	}
 	prompt, err := d.render(state, q, opts, labels, v)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ids := d.m.Vocab.EncodeSpecial(prompt, false)
 	if len(ids) == 0 {
-		return nil, fmt.Errorf("the prompt is empty")
+		return nil, nil, fmt.Errorf("the prompt is empty")
 	}
 	if len(ids) > d.st.MaxSeq() {
-		return nil, fmt.Errorf("the prompt is %d tokens and this decider holds %d", len(ids), d.st.MaxSeq())
+		return nil, nil, fmt.Errorf("the prompt is %d tokens and this decider holds %d", len(ids), d.st.MaxSeq())
 	}
-	d.st.Reset()
-	lg, err := d.st.Prefill(ids)
-	if err != nil {
-		return nil, err
-	}
-	d.input += len(ids)
-	// A group scores by its largest logit (d1's code and " "+code).
-	s := make([]float32, len(groups))
-	for i, g := range groups {
-		best := float32(math.Inf(-1))
+	return ids, groups, nil
+}
+
+// labelScores is one score per label group of the prompt's last logits lg.
+func (d *Decider) labelScores(lg []float32, groups [][]int32) ([]float32, error) {
+	var vals []float32
+	for _, g := range groups {
 		for _, id := range g {
 			if int(id) >= len(lg) {
 				return nil, fmt.Errorf("label id %d is past the %d logits", id, len(lg))
 			}
-			best = max(best, lg[id])
+			vals = append(vals, lg[id])
 		}
-		s[i] = best
+	}
+	return d.labelScoresOf(vals, groups)
+}
+
+// labelScoresOf is one score per label group from the groups' logits, vals,
+// in the groups' order: a group scores by its largest logit (d1's code and
+// " "+code), which the generated argmax picks.
+func (d *Decider) labelScoresOf(vals []float32, groups [][]int32) ([]float32, error) {
+	s := make([]float32, len(groups))
+	at := 0
+	for i, g := range groups {
+		gv := vals[at : at+len(g)]
+		at += len(g)
+		best, ok := nn.Argmax32JIT(gv)
+		if !ok {
+			return nil, fmt.Errorf("model: no generated argmax on this host")
+		}
+		s[i] = gv[best]
 	}
 	return s, nil
 }

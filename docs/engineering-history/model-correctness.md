@@ -3111,8 +3111,9 @@ Go's stdlib lacks, so scripts/genunicode now emits llama.cpp's pinned 15.1
 `unicode_ranges_nfd` beside the existing tables (every existing table
 byte-identical, so no token id moved).
 
-Not done: the device tier (an encoder offers no block; a bidirectional decoder
-refuses a device by name), the Unigram tokenizer (C12c: bge-m3,
+Not done: a bidirectional decoder on a device (it embeds on the host; the
+encoders run there, `docs/design/decision-models.md` section 10), the Unigram
+tokenizer (C12c: bge-m3,
 paraphrase-multilingual, granite-embedding, snowflake-arctic-embed2),
 nomic-bert-moe, rerankers (pooling_type 4 is refused at conversion), and input
 longer than the position table (refused, not truncated as sentence-transformers

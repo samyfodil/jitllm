@@ -97,7 +97,7 @@ func (e *Engine) Embed(ctx context.Context, o EmbedOptions) (*EmbedResult, error
 		}
 	}
 
-	gs := e.gatesFor([]string{HostGateID})
+	gs := e.gatesFor(lm.gateIDs())
 	var waited time.Duration
 	depth := gs.acquire(e.nextID("emb"))
 	defer gs.release()
@@ -190,6 +190,15 @@ func (lm *LoadedModel) takeEmbedder() (*model.Embedder, error) {
 	if err != nil {
 		lm.giveEmbedder(nil)
 		return nil, err
+	}
+	// Its blocks go where a session's would: an encoder's through its
+	// segment, a decoder's through its State.
+	if lm.dev != nil {
+		if err := x.SetDeviceLayers(lm.dev, lm.deviceBlocks()); err != nil {
+			x.Close()
+			lm.giveEmbedder(nil)
+			return nil, err
+		}
 	}
 	return x, nil
 }

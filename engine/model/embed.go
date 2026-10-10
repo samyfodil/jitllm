@@ -32,6 +32,11 @@ type Embedder struct {
 	m   *Model
 	jit *nn.JIT
 	st  *State // a decoder embedding model's session; nil for an encoder
+	// seg is an encoder's segment State, the one its blocks are placed on a
+	// device through (encdev.go); nil until a device is attached.
+	seg *State
+	// wins is the row windows a ModernBERT local block is handed (devPrepare).
+	wins []nn.KeyRun
 
 	// The encoder's scratch, grown to the longest sequence seen.
 	cap                       int
@@ -145,6 +150,10 @@ func (e *Embedder) Close() {
 	if e.st != nil {
 		e.st.Close()
 		return
+	}
+	if e.seg != nil {
+		e.seg.Close()
+		e.seg = nil
 	}
 	if e.jit != nil {
 		e.jit.Close()

@@ -15,9 +15,11 @@ import (
 // nothing else, so an answer served here is the answer `jitllm decide` prints
 // for the same model and request.
 //
-// A decision runs on the host gate in one turn, like an embedding: its
-// prompts are prefilled on the model's Decider, one State the model keeps
-// and reuses, and a second request for the same model waits for the first.
+// A decision runs in one turn on the model's gates (its devices' and the
+// host's, as a generate does), like an embedding: its prompts are prefilled
+// on the model's Decider, one State the model keeps and reuses, its blocks
+// placed on the model's device as a session's are (decideMaxBlocks), and a
+// second request for the same model waits for the first.
 
 // DecideOptions is Decide's input.
 type DecideOptions struct {
@@ -50,7 +52,7 @@ func (e *Engine) Decide(ctx context.Context, o DecideOptions) (*DecideResult, er
 			"decision readout, so no score of its forward pass is an answer the weights were trained for",
 			ErrInvalid, lm.id, lm.m.Cfg.Arch)
 	}
-	gs := e.gatesFor([]string{HostGateID})
+	gs := e.gatesFor(lm.gateIDs())
 	t0 := time.Now()
 	gs.acquire(e.nextID("dec"))
 	defer gs.release()
@@ -62,9 +64,17 @@ func (e *Engine) Decide(ctx context.Context, o DecideOptions) (*DecideResult, er
 		return nil, fmt.Errorf("%w: model %q was unloaded", ErrNotFound, lm.id)
 	}
 	if lm.dec == nil {
-		if lm.dec, err = lm.m.NewDecider(e.defaultMaxSeq(lm)); err != nil {
+		d, err := lm.m.NewDecider(e.defaultMaxSeq(lm))
+		if err != nil {
 			return nil, err
 		}
+		if lm.dev != nil {
+			if err := d.SetDevice(lm.dev, lm.deviceBlocks()); err != nil {
+				d.Close()
+				return nil, err
+			}
+		}
+		lm.dec = d
 	}
 	if err := lm.dec.Prepare(o.State, o.Questions); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
@@ -80,6 +90,15 @@ func (e *Engine) Decide(ctx context.Context, o DecideOptions) (*DecideResult, er
 	n := lm.dec.InputTokens()
 	lm.tokensPrefilled.Add(int64(n))
 	return &DecideResult{ModelID: lm.id, Answers: ans, InputTokens: n, QueuedFor: queued, Took: time.Since(t1)}, nil
+}
+
+// deviceBlocks is how many blocks a State, Decider or Embedder of this model
+// offers its device: the load's cap, or every block (-1).
+func (lm *LoadedModel) deviceBlocks() int {
+	if lm.maxBlocks != 0 {
+		return lm.maxBlocks
+	}
+	return -1
 }
 
 // closeDecider closes the model's Decider; a decision in flight holds decMu

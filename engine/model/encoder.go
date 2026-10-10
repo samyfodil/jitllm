@@ -44,6 +44,9 @@ type encoder struct {
 	rope     *nn.Rope // nomic-bert's rotary, nil for BERT
 	swiglu   bool
 	mb       *modernBERT // ModernBERT's own graph; nil for BERT and nomic-bert
+	// zeros is the bias a LayerNorm without one is handed on a device
+	// (encZeros).
+	zeros []float32
 }
 
 // buildEncoder loads an encoder container. It touches no block page: every
@@ -111,6 +114,7 @@ func buildEncoder(c *jlm.File, m *Model) error {
 			return err
 		}
 		m.enc = enc
+		m.layers = make([]layer, m.encBlocks())
 		return nil
 	}
 	if c.Has(jlm.RoleTokenTypes, jlm.DenseBlock, -1) {
@@ -196,6 +200,10 @@ func buildEncoder(c *jlm.File, m *Model) error {
 		return fmt.Errorf("model: %d heads of %d do not make a %d-wide residual", cfg.NHead, cfg.HeadDim, d)
 	}
 	m.enc = enc
+	// One zero entry a block: the encoder's blocks are encBlock's, and the
+	// segment State a device places them through (encdev.go) indexes the
+	// model's block list.
+	m.layers = make([]layer, m.encBlocks())
 	return nil
 }
 
@@ -265,7 +273,26 @@ func (e *Embedder) encode(ids []int32) error {
 		}
 	}
 	scale := float32(1 / math.Sqrt(float64(c.HeadDim)))
-	for li := range enc.blocks {
+	if err := e.devPrepare(n, 0); err != nil {
+		return err
+	}
+	var cs []float32
+	if enc.rope != nil {
+		cs = e.cs[:n*c.NRot]
+	}
+	for li := 0; li < len(enc.blocks); li++ {
+		// A run of placed blocks is one device call over the sequence.
+		if e.onDevice(li) {
+			hi, err := e.devRun(li, len(enc.blocks), n, x, cs, nil)
+			if err != nil {
+				return err
+			}
+			li = hi - 1
+			if e.afterBlock != nil {
+				e.afterBlock(li, x)
+			}
+			continue
+		}
 		if err := m.encPageIn(li); err != nil {
 			return err
 		}

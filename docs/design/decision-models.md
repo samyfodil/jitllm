@@ -236,7 +236,8 @@ question id when it is absent as Clef's code does).
 What exists: `qwen35` (Lev's and Clef's backbone), `lfm2` (d1's), the GGUF
 chat templates carried by name into the container (so `systemone` arrives
 already), `tok/jinja` to render it, the prefix cache to reuse a state's rows
-across questions, the bert/nomic-bert encoder on the host (no device tier).
+across questions, the bert/nomic-bert encoder (on the host when this was
+written; section 10 puts every encoder on the device).
 
 Order, by what each unlocks (coordinator's priorities):
 
@@ -247,8 +248,8 @@ Order, by what each unlocks (coordinator's priorities):
    and `dev/decisionbench`. Covers Lev and d1 (text) on every tier the backbone
    already runs on, and SemIf/Rizzo/Nimble/OpenJev as readout modes.
 2. **Laya**: ModernBERT as a new encoder architecture to RULE 7's bar, plus the
-   marker head and scorer as generated kernels; host first (the encoder path has
-   no device tier today, which is the larger missing piece).
+   marker head and scorer as generated kernels; host first, then the device
+   (section 10).
 3. **Clef-Flash**: the joint head on qwen35.
 4. Kev's pointer head, NanoJev, d1's vision tower.
 
@@ -281,9 +282,65 @@ object state (the gate keeps it at five questions).
 Not done, named: Clef-Flash's joint head; Kev's pointer head, NanoJev, Nimble;
 lev's mode-B head (option sets past the 255 single-token codes) and its
 safetensors adapter merge (the GGUF path reads ggml-org's merged file); the
-device tier for encoders (Laya runs on the host); the five principles' device
-gates for the decision readouts (they run through Prefill, but no device gate
-runs a decision model); prefix reuse of a request's state across its
-questions (a hybrid's recurrent state is sealed only at a prompt's end, so the
-qwen35 and lfm2 backbones restore nothing shorter); the Connect RPC beside the
-JSON endpoint; images and video in a decision request.
+label pick on the device (section 10: the head's logits come home whole and
+the readout's gather, group max and answer arithmetic run on the host's
+generated kernels); a decision head of another geometry than its encoder on
+the same device (declined by name, section 10); prefix reuse of a request's
+state across its questions (a hybrid's recurrent state is sealed only at a
+prompt's end, so the qwen35 and lfm2 backbones restore nothing shorter); the
+Connect RPC beside the JSON endpoint; images and video in a decision request.
+
+## 10. On the device
+
+Every readout runs on CUDA, Vulkan and Metal, through the one placement path
+(`Decider.SetDevice`; the server places a model's Decider and Embedders where
+its sessions go, `jitllm decide` and `jitllm embed` take `-devices`).
+
+- **d1 and lev**: their backbones' blocks and head are placed as any State's
+  (`State.SetDeviceLayers`); a question's prompt prefills there. The device
+  gate found that `State.Reset` left a placed linear block's recurrent state
+  on the card, so each question after the first started from the last one's
+  summary (d1's second question 0.27 of a logit off on CUDA and Vulkan, its
+  first 0.02); Reset now zeroes it there as Retire zeroes a row's
+  (`TestResetZeroesTheDeviceRecurrentState`).
+- **Encoders** (ModernBERT, Laya's head, BERT, nomic-bert): an encoder's
+  blocks are non-causal blocks -- the sequence goes in whole and the keys die
+  with the block -- which is what a vision tower's are, so they reach a device
+  the way a tower's do: a segment State over the encoder's blocks
+  (`engine/model/encdev.go`) offers each one (`offerRange`) with the plan and
+  weights read off the encoder's own structs, and the Embedder runs each run
+  of placed blocks as one `Layers` call over the sequence's rows and every
+  other block on its host kernels. What the tier gained for them, each a
+  plan field rather than a model name: a window a row
+  (`nn.RowWindowDevice`, ModernBERT's symmetric local window, staged once a
+  sequence into the existing window mask), the local rotary table chosen by
+  `SWALocal` (`nn.LayerPlan.LocalRope`: ModernBERT's local blocks are all but
+  every third from the FIRST, which the period's own expression does not
+  say), a block with no attention norm beside an FFN norm (ModernBERT's
+  block 0), the norms after the residual adds (`PostResidNorm`, BERT's
+  order), and per block on a non-causal set its own MLP width, gating,
+  activation and rotary (Laya's ungated ReLU head beside a gated GELU-erf
+  encoder, the set grown to the wider MLP). No kernel is new: each is a
+  launch of an existing generated one (the window mask, the LayerNorm, the
+  activations, the row copy).
+- **Declined by name**: a non-causal block whose heads or width differ from
+  the set it would join (`tier.nonCausalConflict`), which before ran on the
+  first block's kernels unasked. Laya's random fixture is the one case (its
+  head: 2 heads of 64 beside an encoder's 4 of 32); its head runs on the
+  host. EmbeddingGemma's bidirectional decoder blocks stay home too (the
+  decoder path plans them causal on a device).
+- **The readout**: with the head on the device the label logits come from
+  the device's projection; the gather of a question's label ids, a group's
+  max (the generated argmax) and the answer arithmetic run on the host's
+  generated kernels over those few numbers. Reading back only the label
+  logits (an `nn.Head` pick beside `SampleK`) is the lever left.
+
+| gate | what it holds |
+|---|---|
+| `TestDecisionOnEveryDevice` | each readout's answers with every block on each device, and with half, against the host; a feature removed from the device's plan must move them past the band (d1, lev: NORM pairs for NEOX; laya: every block global) |
+| `TestDecisionRelocatesMidPrompt`, `TestDecisionRelocatesBetweenDevices` | blocks onto a device a third into a prompt and home at two thirds (history and recurrent state with them), and a Decider moved host, each device, host; the violation is the recurrent state lost on the way |
+| `TestDecisionPagesWithTheSameAnswer`, `TestLayaPagesWithTheSameAnswer` | half the block pages (d1, lev) or one frame (Laya, host and with half the blocks placed): the resident answer bit for bit |
+| `TestDecisionEncodeDoesNotAllocate` | a warm Laya question: no engine allocation on the host or the devices |
+| `TestLayaMatchesReference`, `TestLayaFeaturesAreLoadBearing` | a device arm each: every block placed against Laya's own code, and each feature removed from what the device is handed |
+| `TestEmbeddingsOnEveryDevice` | every BERT-family embedding model on each device against the host and llama.cpp; the violation is BERT's output norm without its weight |
+| `TestEveryModelRunsGenerated` | answers a request on every decision model it finds (`auditRun`) |

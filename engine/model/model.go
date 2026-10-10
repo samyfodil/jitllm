@@ -1885,6 +1885,10 @@ func (m *Model) pageIn(li int) error {
 	if m.container == nil || li >= len(m.layers) || li >= m.container.NPages() {
 		return nil
 	}
+	// An encoder's blocks are its own structs (encoder.go, modernbert.go).
+	if m.enc != nil {
+		return m.encBlockPageIn(li)
+	}
 	// The block's own weights, not its experts: moe() ensures those after the
 	// router has chosen. EnsureRanges tracks which chunks hold real bytes, so an
 	// expert nobody ensured is absent rather than stale, and every consumer of

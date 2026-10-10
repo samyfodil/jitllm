@@ -54,6 +54,9 @@ type modernBERT struct {
 	sc, scOut          tensor
 	scB, scOutB        []float32
 	ropeG, ropeL       nn.Rope
+	// local is the blocks that attend inside the window, at the local base:
+	// all but every SWAPeriod'th from the first (nn.LayerPlan.SWALocal).
+	local func(li int) bool
 }
 
 func (b *mbBlock) weights() []*tensor {
@@ -132,6 +135,7 @@ func buildModernBERT(c *jlm.File, m *Model, enc *encoder) error {
 	mb.ropeG = nn.Rope{NRot: cfg.NRot, Base: cfg.RopeBase, Neox: true, Scale: 1}
 	mb.ropeL = nn.Rope{NRot: cfg.NRot, Base: cfg.RopeBaseSWA, Neox: true, Scale: 1}
 	mb.blocks = make([]mbBlock, cfg.NLayer)
+	mb.local = func(li int) bool { return li < len(mb.blocks) && !mb.blocks[li].global }
 	for i := range mb.blocks {
 		b, bi := &mb.blocks[i], int32(i)
 		b.global = cfg.SWAWindow == 0 || cfg.SWAPeriod <= 1 || i%cfg.SWAPeriod == 0
@@ -295,7 +299,23 @@ func (e *Embedder) mbEncode(ids []int32) error {
 		e.jit.RopeTable(mb.ropeL, e.csL[i*c.NRot:(i+1)*c.NRot], i)
 	}
 	scale := float32(1 / math.Sqrt(float64(c.HeadDim)))
-	for li := range mb.blocks {
+	if err := e.devPrepare(n, c.SWAWindow/2); err != nil {
+		return err
+	}
+	for li := 0; li < len(mb.blocks); li++ {
+		// A run of placed blocks is one device call over the sequence; the
+		// global table in cs, the local one in csSWA (nn.LayerPlan.LocalRope).
+		if e.onDevice(li) {
+			hi, err := e.devRun(li, len(mb.blocks), n, x, e.cs[:n*c.NRot], e.csL[:n*c.NRot])
+			if err != nil {
+				return err
+			}
+			li = hi - 1
+			if e.afterBlock != nil {
+				e.afterBlock(li, x)
+			}
+			continue
+		}
 		if err := m.mbPageIn(li); err != nil {
 			return err
 		}
@@ -412,7 +432,20 @@ func (e *Embedder) layaScores(out []float32, n int, qt jlm.QuestionType, markers
 	scale := float32(1 / math.Sqrt(float64(hd)))
 	all := func(int) (int, int) { return 0, n }
 	nm := len(markers)
-	for bi := range mb.head {
+	// The marker rows the scorer reads are x's first nm once the last block
+	// has run: the host's last block runs them alone, and a device's runs
+	// every row, so they are gathered after it.
+	gather := false
+	for bi := 0; bi < len(mb.head); bi++ {
+		if li := len(mb.blocks) + bi; e.onDevice(li) {
+			hi, err := e.devRun(li, len(mb.blocks)+len(mb.head), n, x, nil, nil)
+			if err != nil {
+				return err
+			}
+			bi = hi - len(mb.blocks) - 1
+			gather = bi == len(mb.head)-1
+			continue
+		}
 		if err := m.mbPageIn(len(mb.blocks) + bi); err != nil {
 			return err
 		}
@@ -465,6 +498,11 @@ func (e *Embedder) layaScores(out []float32, n int, qt jlm.QuestionType, markers
 		}
 		e.addBiasRows(t, b.bDown, rows)
 		e.axpyRows(xr, t)
+	}
+	if gather {
+		for j, r := range markers {
+			copy(x[j*d:(j+1)*d], x[r*d:(r+1)*d])
+		}
 	}
 	// The scorer on the marker rows: LN, Linear, GELU, Linear to one value.
 	h := e.xb[:nm*d]

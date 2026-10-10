@@ -26,6 +26,8 @@ func decideCmd(args []string) error {
 	maxSeq := fs.Int("max-seq", 8192, "the longest prompt one question may render to, in tokens")
 	repeat := fs.Int("repeat", 1, "answer each request this many times, to tell a cold call from a warm one")
 	cpuProf := fs.String("cpuprofile", "", "write a CPU profile of the answering (not the load) here")
+	dev := fs.String("devices", "auto", "where the blocks run, as run's -devices")
+	layers := fs.Int("gpu-layers", -1, "cap the blocks offered to the device; -1 fits as many as the card holds")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -49,8 +51,19 @@ func decideCmd(args []string) error {
 		return err
 	}
 	defer d.Close()
-	fmt.Fprintf(os.Stderr, "%s: %s, %v readout, loaded in %v\n",
-		fs.Arg(0), m.Cfg.Arch, m.Decision(), time.Since(t0).Round(time.Millisecond))
+	g, closeDev, devName, err := openDevices(*dev, 0, 0, m.StreamGroups())
+	if err != nil {
+		return err
+	}
+	defer closeDev()
+	if g != nil {
+		if err := d.SetDevice(g, *layers); err != nil {
+			return err
+		}
+		defer d.SetDevice(nil, 0)
+	}
+	fmt.Fprintf(os.Stderr, "%s: %s, %v readout, %d blocks on %s, loaded in %v\n",
+		fs.Arg(0), m.Cfg.Arch, m.Decision(), d.DeviceBlocks(), devName, time.Since(t0).Round(time.Millisecond))
 	if *cpuProf != "" {
 		f, err := os.Create(*cpuProf)
 		if err != nil {
