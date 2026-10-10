@@ -3,9 +3,9 @@ package model
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // hostHungryDevice is a device whose memory is the host's, as an integrated GPU

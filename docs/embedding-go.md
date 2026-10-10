@@ -14,7 +14,7 @@ import (
     "fmt"
     "log"
 
-    "github.com/samyfodil/jitllm/engine/model"
+    "github.com/jitllm/jitllm/engine/model"
 )
 
 func main() {

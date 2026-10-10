@@ -6,7 +6,7 @@ import (
 	"github.com/gogpu/ui/geometry"
 	"github.com/gogpu/ui/widget"
 
-	"github.com/samyfodil/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/app"
 )
 
 // The map is built before any model loads, so it is first measured empty. A

@@ -3,12 +3,12 @@
 package cpu
 
 import (
-	"github.com/samyfodil/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/internal/oracle"
 	"math/rand"
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // TestPackWidthSweep finds where interleaving stops paying. Measured on one core

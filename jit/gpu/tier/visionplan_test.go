@@ -1,6 +1,6 @@
 package tier
 
-import "github.com/samyfodil/jitllm/engine/nn"
+import "github.com/jitllm/jitllm/engine/nn"
 
 // This helper is untagged so the package compiles on darwin: the untagged
 // actdecline_test.go uses it, and keeping it in the linux-only

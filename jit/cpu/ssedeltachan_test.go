@@ -8,7 +8,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/internal/oracle"
 )
 
 func hybCallDeltaChan(c *Code, o, st, k, q, v, decay []float32, gate float32, n int) {

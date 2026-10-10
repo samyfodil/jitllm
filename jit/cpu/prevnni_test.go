@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // prevnniFormats is the packed family, named here rather than derived so that

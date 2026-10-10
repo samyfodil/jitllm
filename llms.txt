@@ -23,29 +23,29 @@ Things to know before using or changing it:
 
 ## Docs
 
-- [README](https://github.com/samyfodil/jitllm/blob/main/README.md): install, convert, serve, run, memory and device flags, vision, the desktop app, embedding in Go
-- [AGENTS.md](https://github.com/samyfodil/jitllm/blob/main/AGENTS.md): the project's binding rules, covering measurement, correctness gates, architecture scope and the no-mmap and no-Go-compute rules
-- [ROADMAP](https://github.com/samyfodil/jitllm/blob/main/ROADMAP.md): the seven planned items and where each stands
-- [Supported models](https://github.com/samyfodil/jitllm/blob/main/docs/models.md): every GGUF architecture, Hugging Face class and vision projector that converts, and the models each covers; generated from the converter's lists
-- [Testing](https://github.com/samyfodil/jitllm/blob/main/docs/testing.md): how tests find models (`JITLLM_MODELS`), and `internal/testmodels/fetch.sh`
-- [Performance scoreboard](https://github.com/samyfodil/jitllm/blob/main/docs/perf/current.md): ratios against llama.cpp by host, backend and model
+- [README](https://github.com/jitllm/jitllm/blob/main/README.md): install, convert, serve, run, memory and device flags, vision, the desktop app, embedding in Go
+- [AGENTS.md](https://github.com/jitllm/jitllm/blob/main/AGENTS.md): the project's binding rules, covering measurement, correctness gates, architecture scope and the no-mmap and no-Go-compute rules
+- [ROADMAP](https://github.com/jitllm/jitllm/blob/main/ROADMAP.md): the seven planned items and where each stands
+- [Supported models](https://github.com/jitllm/jitllm/blob/main/docs/models.md): every GGUF architecture, Hugging Face class and vision projector that converts, and the models each covers; generated from the converter's lists
+- [Testing](https://github.com/jitllm/jitllm/blob/main/docs/testing.md): how tests find models (`JITLLM_MODELS`), and `internal/testmodels/fetch.sh`
+- [Performance scoreboard](https://github.com/jitllm/jitllm/blob/main/docs/perf/current.md): ratios against llama.cpp by host, backend and model
 
 ## Code
 
-- [engine/model](https://github.com/samyfodil/jitllm/tree/main/engine/model): the inference engine (Open, State, Prefill/Forward, batching, Scheduler, KV stores, prefix cache, embeddings, vision)
-- [engine/nn](https://github.com/samyfodil/jitllm/tree/main/engine/nn): the kernel entry points the graph calls, and per-shape kernel selection
-- [engine/sched](https://github.com/samyfodil/jitllm/tree/main/engine/sched): the worker pool, core sets and memory budgets
-- [jit/cpu](https://github.com/samyfodil/jitllm/tree/main/jit/cpu): the x86-64 (SSE, AVX2, VNNI) and ARM64 code generators
-- [jit/gpu](https://github.com/samyfodil/jitllm/tree/main/jit/gpu): the kernel IR, the PTX/SPIR-V/MSL lowering, the CUDA/Vulkan/Metal backends and the device tier (placement, budgets, multi-GPU)
-- [format/jlm](https://github.com/samyfodil/jitllm/tree/main/format/jlm): the `.jlm` container and its pager (O_DIRECT reads, block and expert pages)
-- [convert](https://github.com/samyfodil/jitllm/tree/main/convert): GGUF and safetensors to `.jlm`, the supported architecture list (`convert.archOf`) and the model catalog
-- [tok](https://github.com/samyfodil/jitllm/tree/main/tok): tokenizers (BPE, SentencePiece, WordPiece), pre-tokenizer tables and the Jinja chat-template engine
-- [server](https://github.com/samyfodil/jitllm/tree/main/server): `jitllmd`, the OpenAI/Anthropic-compatible and Connect API server
-- [cmd/jitllm](https://github.com/samyfodil/jitllm/tree/main/cmd/jitllm): the CLI (`convert`, `run`, `embed`, `info`, `hardware`, `library`, `verify`, `asm`)
+- [engine/model](https://github.com/jitllm/jitllm/tree/main/engine/model): the inference engine (Open, State, Prefill/Forward, batching, Scheduler, KV stores, prefix cache, embeddings, vision)
+- [engine/nn](https://github.com/jitllm/jitllm/tree/main/engine/nn): the kernel entry points the graph calls, and per-shape kernel selection
+- [engine/sched](https://github.com/jitllm/jitllm/tree/main/engine/sched): the worker pool, core sets and memory budgets
+- [jit/cpu](https://github.com/jitllm/jitllm/tree/main/jit/cpu): the x86-64 (SSE, AVX2, VNNI) and ARM64 code generators
+- [jit/gpu](https://github.com/jitllm/jitllm/tree/main/jit/gpu): the kernel IR, the PTX/SPIR-V/MSL lowering, the CUDA/Vulkan/Metal backends and the device tier (placement, budgets, multi-GPU)
+- [format/jlm](https://github.com/jitllm/jitllm/tree/main/format/jlm): the `.jlm` container and its pager (O_DIRECT reads, block and expert pages)
+- [convert](https://github.com/jitllm/jitllm/tree/main/convert): GGUF and safetensors to `.jlm`, the supported architecture list (`convert.archOf`) and the model catalog
+- [tok](https://github.com/jitllm/jitllm/tree/main/tok): tokenizers (BPE, SentencePiece, WordPiece), pre-tokenizer tables and the Jinja chat-template engine
+- [server](https://github.com/jitllm/jitllm/tree/main/server): `jitllmd`, the OpenAI/Anthropic-compatible and Connect API server
+- [cmd/jitllm](https://github.com/jitllm/jitllm/tree/main/cmd/jitllm): the CLI (`convert`, `run`, `embed`, `info`, `hardware`, `library`, `verify`, `asm`)
 
 ## Optional
 
-- [Engineering history](https://github.com/samyfodil/jitllm/tree/main/docs/engineering-history): what was measured and tried per subsystem, including approaches that did not pay and the numbers behind them
-- [Design notes](https://github.com/samyfodil/jitllm/tree/main/docs/design): block paging, device sessions, model coverage and prior art
-- [Kernel capabilities](https://github.com/samyfodil/jitllm/blob/main/docs/kernel-capabilities.md): which kernels exist on which tier and backend
-- [Desktop app](https://github.com/samyfodil/jitllm/tree/main/ui): an in-process GUI for downloads, conversion and chat
+- [Engineering history](https://github.com/jitllm/jitllm/tree/main/docs/engineering-history): what was measured and tried per subsystem, including approaches that did not pay and the numbers behind them
+- [Design notes](https://github.com/jitllm/jitllm/tree/main/docs/design): block paging, device sessions, model coverage and prior art
+- [Kernel capabilities](https://github.com/jitllm/jitllm/blob/main/docs/kernel-capabilities.md): which kernels exist on which tier and backend
+- [Desktop app](https://github.com/jitllm/jitllm/tree/main/ui): an in-process GUI for downloads, conversion and chat

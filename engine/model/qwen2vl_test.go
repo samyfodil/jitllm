@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 var qwen2vlText = testmodels.Path("Qwen2-VL-2B-Instruct-Q4_K_M.gguf")

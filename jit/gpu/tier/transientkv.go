@@ -1,6 +1,6 @@
 package tier
 
-import "github.com/samyfodil/jitllm/engine/nn"
+import "github.com/jitllm/jitllm/engine/nn"
 
 // One k/v pair for every non-causal block on a device.
 //

@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/samyfodil/jitllm/common/session"
+	"github.com/jitllm/jitllm/common/session"
 )
 
 // The probe as plain lines of text, for every front end that shows it.

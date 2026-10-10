@@ -6,8 +6,8 @@ import (
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 
-	"github.com/samyfodil/jitllm/ui/app"
-	"github.com/samyfodil/jitllm/ui/widgets"
+	"github.com/jitllm/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/widgets"
 )
 
 // memoryMap is the Placement section's picture: where each block runs, and

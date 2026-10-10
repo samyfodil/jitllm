@@ -93,8 +93,10 @@ correctness gates -- a gate that never runs a model does not cover it
   are deterministic. `perf stat` instructions above one thread are NOT a work
   measure: the pool spins, so a spinning worker's count tracks how long the
   region took, which on a clamped box is temperature.
-- **An over-committed row gives both arms the same ceiling by shrinking the
-  cgroup, never by `-maxmem` on one arm.** llama.cpp mmaps and reaches the whole
+- **A row runs outside any memory cgroup** (RULE 3). The one exception is an
+  over-committed row, where the ceiling IS the experiment: **it gives both arms
+  the same ceiling by shrinking the cgroup, stated with the row, never by
+  `-maxmem` on one arm.** llama.cpp mmaps and reaches the whole
   cgroup through the page cache, while jitllm self-limits to `sched.MemBudget()`;
   a row where one arm holds 14 GiB of weights and the other 26 is not an engine
   comparison.
@@ -185,10 +187,13 @@ budget 6 GC cycles, 8.99 GiB 648).
 Evidence: `docs/engineering-history/scheduling-and-measurement.md` ("THE GO
 COLLECTOR WAS 42% OF THE ENGINE'S CPU", "RULE 2f as it stood in AGENTS.md").
 
-## RULE 3: every heavy job runs under `scripts/cap`. No exceptions, including subagents.
+## RULE 3: on the developer's machine, every heavy job runs under `scripts/cap`. Agents included.
 
     ./scripts/cap 8G -- taskset -c 0,2,4,6,8,10 go test ./... -count=1
 
+`scripts/cap` protects the machine the developer is working on from OOM:
+systemd-oomd has killed the desktop session three times here, and MemoryHigh
+throttling keeps the pressure that triggers it inside the job's cgroup.
 `MemoryMax=8G MemoryHigh=7G MemorySwapMax=0`. Use `24G` for a model over ~16 GB
 (cgroup v2 charges a mmap'd file's page cache to the cgroup) and for `-race`:
 the detector's shadow memory pushes a suite that converts a GGUF past
@@ -196,16 +201,27 @@ the detector's shadow memory pushes a suite that converts a GGUF past
 reporting anything. A slow `-race` run is a cap question before it is a code
 question.
 
+**It is not a measurement tool.** A benchmark host (a server, a rented runner)
+runs both engines bare, with only the measurement lock; a comparison row never
+runs inside a memory cgroup, which charges llama.cpp's page cache and throttles
+it while jitllm's O_DIRECT reads are not charged that way.
+`scripts/vs-llamacpp.sh` takes the lock itself and runs no cgroup; on the
+laptop the hook still wraps it in `scripts/cap`, and the script reuses that
+lock. A container with no writable cgroup runs uncapped and says so, never
+under `ulimit -v`, which aborts the CUDA runtime.
+
 There is no bypass variable in `scripts/cap`, on purpose. `JITLLM_NO_CAP=1`
 belongs to the HOOK, where it lets a command run without this script and is
 visible in the command line; a bypass that makes a capped-looking command
-uncapped is a trap. systemd-oomd has killed the desktop three times here.
+uncapped is a trap.
 
-1. **Every prompt dispatching an agent that may build or measure must contain the
-   cap command verbatim.** An agent that has not been told will not do it.
+1. **Every prompt dispatching an agent that may build or measure on the
+   developer's machine must contain the cap command verbatim.** An agent that
+   has not been told will not do it.
 2. **Never fan out parallel measurement agents.** Measure serially, in the main
    loop.
-3. `scripts/cap` takes a `flock`: measurements EXCLUSIVE, builds SHARED. It
+3. The lock (`$TMPDIR/jitllm-cap.lock`, `flock`): measurements EXCLUSIVE,
+   builds SHARED, taken by `scripts/cap` and by the comparison scripts. It
    protects this repo only — another project's `go test` is invisible to every
    gate here and will land mid-round.
 4. **Kill background jobs when the work that spawned them finishes.** Work
@@ -213,7 +229,8 @@ uncapped is a trap. systemd-oomd has killed the desktop three times here.
    knows.
 
 Evidence: `docs/engineering-history/scheduling-and-measurement.md` ("RULE 3 as
-it stood in AGENTS.md").
+it stood in AGENTS.md", "The cap is the developer machine's, not a
+measurement's").
 
 ## RULE 4: no perf floors inside correctness tests.
 

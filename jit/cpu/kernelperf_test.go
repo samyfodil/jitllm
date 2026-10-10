@@ -3,14 +3,14 @@
 package cpu
 
 import (
-	"github.com/samyfodil/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/internal/oracle"
 	"math/rand"
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/samyfodil/jitllm/dev/bench"
+	"github.com/jitllm/jitllm/dev/bench"
 )
 
 // TestQ40Throughput measures the generated kernel on a DRAM-resident weight set

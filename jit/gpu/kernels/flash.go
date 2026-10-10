@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // FlashShape specializes online attention. KStride == 0 means row-major K;

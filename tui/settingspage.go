@@ -10,8 +10,8 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
-	"github.com/samyfodil/jitllm/common/hardware"
-	"github.com/samyfodil/jitllm/common/session"
+	"github.com/jitllm/jitllm/common/hardware"
+	"github.com/jitllm/jitllm/common/session"
 )
 
 // settingsPage is the window's settings as a huh form over the same file:

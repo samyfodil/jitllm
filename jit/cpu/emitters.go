@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/samyfodil/jitllm/format/quant"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // Emitters is every kernel emitter one ISA tier offers, as one table.

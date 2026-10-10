@@ -11,10 +11,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/samyfodil/jitllm/engine/sched"
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // gemmKey identifies a prefill kernel: quantization, blocks per row, and the

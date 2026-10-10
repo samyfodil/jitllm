@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/tok/jinja"
+	"github.com/jitllm/jitllm/tok/jinja"
 )
 
 // chatGoldDate is the date strftime_now prints, pinned as scripts/chatgold.py

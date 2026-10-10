@@ -1415,8 +1415,8 @@ const file_jitllm_v1_inference_proto_rawDesc = "" +
 	"\bGenerate\x12\x1a.jitllm.v1.GenerateRequest\x1a\x1b.jitllm.v1.GenerateResponse\"\x000\x01\x12E\n" +
 	"\bComplete\x12\x1a.jitllm.v1.GenerateRequest\x1a\x1b.jitllm.v1.CompleteResponse\"\x00\x12?\n" +
 	"\x06Cancel\x12\x18.jitllm.v1.CancelRequest\x1a\x19.jitllm.v1.CancelResponse\"\x00\x12<\n" +
-	"\x05Embed\x12\x17.jitllm.v1.EmbedRequest\x1a\x18.jitllm.v1.EmbedResponse\"\x00B\x9f\x01\n" +
-	"\rcom.jitllm.v1B\x0eInferenceProtoP\x01Z9github.com/samyfodil/jitllm/server/gen/jitllm/v1;jitllmv1\xa2\x02\x03JXX\xaa\x02\tJitllm.V1\xca\x02\tJitllm\\V1\xe2\x02\x15Jitllm\\V1\\GPBMetadata\xea\x02\n" +
+	"\x05Embed\x12\x17.jitllm.v1.EmbedRequest\x1a\x18.jitllm.v1.EmbedResponse\"\x00B\x9c\x01\n" +
+	"\rcom.jitllm.v1B\x0eInferenceProtoP\x01Z6github.com/jitllm/jitllm/server/gen/jitllm/v1;jitllmv1\xa2\x02\x03JXX\xaa\x02\tJitllm.V1\xca\x02\tJitllm\\V1\xe2\x02\x15Jitllm\\V1\\GPBMetadata\xea\x02\n" +
 	"Jitllm::V1b\x06proto3"
 
 var (

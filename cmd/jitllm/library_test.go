@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/convert/library"
+	"github.com/jitllm/jitllm/convert/library"
 )
 
 // A library name must become the model's pinned references; anything else

@@ -5,7 +5,7 @@ import (
 	"math"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // PackActConsts is the constant block EmitPackAct reads, on both architectures:

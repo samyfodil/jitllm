@@ -6,8 +6,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/samyfodil/jitllm/convert/meta"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // kimiK3HF is Kimi-K3 (KimiK3ForConditionalGeneration) from safetensors, to

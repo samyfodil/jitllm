@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/model"
 )
 
 // Two models loaded into one engine divide its host budget: neither may

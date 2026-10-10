@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // embPend is a prompt chunk whose rows EmbedRows promised and has not yet

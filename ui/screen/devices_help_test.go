@@ -7,8 +7,8 @@ import (
 
 	"github.com/gogpu/ui/widget"
 
-	"github.com/samyfodil/jitllm/ui/app"
-	"github.com/samyfodil/jitllm/ui/screen"
+	"github.com/jitllm/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/screen"
 )
 
 // helpLimit is the most characters one piece of text on the Machine page may

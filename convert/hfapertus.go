@@ -7,7 +7,7 @@ import (
 	"math"
 	"strings"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // apertusHF is Apertus (ApertusForCausalLM) from safetensors, to the container

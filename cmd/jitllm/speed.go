@@ -4,7 +4,7 @@ import (
 	"cmp"
 	"flag"
 	"fmt"
-	"github.com/samyfodil/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/engine/sched"
 	"maps"
 	"os"
 	"runtime"
@@ -12,10 +12,10 @@ import (
 	"slices"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // speedCmd is llama-bench's pp/tg measurement: a prompt of -p tokens and a

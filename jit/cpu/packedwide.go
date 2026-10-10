@@ -5,9 +5,9 @@ package cpu
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // PackedWideGroup is how many rows one iteration of the wide kernel's row loop

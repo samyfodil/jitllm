@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // phi3 slides every layer, and a converted phi3 must say so (llama.cpp applies

@@ -5,10 +5,10 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
-	"github.com/samyfodil/jitllm/jit/gpu/vulkan"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/vulkan"
 )
 
 // realDevices opens every device on this host -- CUDA, Vulkan and Metal --

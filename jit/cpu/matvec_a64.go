@@ -3,7 +3,7 @@ package cpu
 import (
 	"fmt"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // a64KernelTypes is the quantized formats with a NEON kernel. Tests iterate it

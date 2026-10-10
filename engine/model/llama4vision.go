@@ -5,8 +5,8 @@ import (
 	"image"
 	"math"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // Llama 4's vision: a CLIP-style tower over ImageSz tiles, and the adapter.

@@ -5,9 +5,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // hostStepNMSE is what a violation of the host step must read above: a row

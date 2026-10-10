@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // The arm64 kernels cannot run on an amd64 box, so these gates check what can

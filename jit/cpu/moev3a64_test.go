@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/internal/oracle"
 )
 
 // The NEON DeepSeek-V3 router gate. It is the amd64 file's arms against the A64

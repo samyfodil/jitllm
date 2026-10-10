@@ -5,9 +5,9 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/format/quant"
-	"github.com/samyfodil/jitllm/jit/cpu"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // The embedding lookup: one row of a table into float32, generated.

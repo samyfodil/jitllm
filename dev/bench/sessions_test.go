@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/model"
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/internal/testmodels"
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // The perf floors of sessions running at once, beside the correctness gates

@@ -5,7 +5,7 @@ package nn
 import (
 	"unsafe"
 
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // The generated attention path. The single-head kernels serve every head

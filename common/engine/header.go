@@ -2,11 +2,11 @@ package engine
 
 import (
 	"fmt"
-	"github.com/samyfodil/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/model"
 	"regexp"
 	"strings"
 
-	"github.com/samyfodil/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // header is what the session header says about the running model: its name,

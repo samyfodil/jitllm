@@ -20,18 +20,33 @@
 # a fixed order lets any drift accumulate on one side.
 set -euo pipefail
 
-# ★ THE WHOLE COMPARISON RUNS AS ONE CAPPED, EXCLUSIVE JOB.
+# ★ THE WHOLE COMPARISON HOLDS THE MEASUREMENT LOCK, AND RUNS UNDER NO MEMORY CGROUP.
 #
-# Two defects, both invisible until they bite. This script ran its engines
-# WITHOUT scripts/cap, which RULE 3 says has no exceptions -- and it is the one
-# script guaranteed to load a multi-gigabyte model. And a comparison is ATOMIC:
-# capping each sample separately would let an interloper take the lock between
-# two samples of the same ABBA round, which is precisely the failure RULE 3d
-# was written for. So the script re-execs itself once, under one cap, holding
-# the measurement lock for its entire duration; the runs inside inherit it.
-if [ -z "${JITLLM_VS_LOCKED:-}" ]; then
-  export JITLLM_VS_LOCKED=1
-  exec "$(cd "$(dirname "$0")" && pwd)/cap" "${JITLLM_CAP_MEM:-8G}" -- "$0" "$@"
+# A comparison is ATOMIC: locking each sample separately would let an
+# interloper take the lock between two samples of the same ABBA round. So the
+# script takes scripts/cap's lock file EXCLUSIVE once and holds it to the end;
+# builds still take it shared through scripts/cap and wait.
+#
+# It used to get that lock by re-execing itself under scripts/cap, which also
+# put both engines inside an 8G memory cgroup on every host. That cgroup charges
+# llama.cpp's mmap page cache and throttles it at MemoryHigh, while jitllm reads
+# with O_DIRECT, so a large model's row measured the cap as well as the engines.
+# scripts/cap protects the developer's own machine (AGENTS.md RULE 3); a bench
+# host runs both engines bare. On the laptop the hook still wants the outer
+# command wrapped in scripts/cap, which classifies this script as a measurement
+# and already holds the lock EXCLUSIVE on fd 9 when it starts. A second open of
+# the file would be a second lock and wait on its own parent forever, so when
+# fd 9 is that file the script re-takes the lock on the SAME descriptor, which
+# is immediate. JITLLM_NO_LOCK=1 opts out, as it does in scripts/cap.
+if [ "${JITLLM_NO_LOCK:-0}" != "1" ] && command -v flock >/dev/null 2>&1; then
+  vsLock="${TMPDIR:-/tmp}/jitllm-cap.lock"
+  if [ "$(readlink -f /proc/$$/fd/9 2>/dev/null)" != "$(readlink -f "$vsLock" 2>/dev/null)" ]; then
+    exec 9>>"$vsLock"
+  fi
+  if ! flock -n -x 9; then
+    echo ">> waiting for the measurement lock $vsLock (another measurement or build holds it)" >&2
+    flock -w "${JITLLM_LOCK_WAIT:-1800}" -x 9 || { echo ">> REFUSING: the box stayed busy" >&2; exit 75; }
+  fi
 fi
 
 TIER="${1:?usage: vs-llamacpp.sh <cpu|gpu> <model.gguf> [rounds]}"
@@ -81,17 +96,10 @@ fi
 if [ ! -f "$JITLLM_PATH" ] || [ "$JITLLM_PATH" -ot "$JLMBIN" ] \
    || { [ -n "$JLM_WANT" ] && [ "$JLM_HAVE" != "$JLM_WANT" ]; }; then
   echo ">> converting $(basename "$MODEL") -> $(basename "$JITLLM_PATH")"
-  # ★ JITLLM_NO_LOCK=1 BECAUSE THIS SCRIPT ALREADY HOLDS THE LOCK. It re-execs
-  # itself under one cap (see above) and holds it for the whole run, so a second
-  # cap here waits for a lock its own parent owns -- and duly refused after
-  # 1800s with "still busy", naming this script's own pid as the holder. The
-  # memory cap is still wanted (a 70B conversion needs the 26G cgroup); the lock
-  # is not, and taking it twice is a deadlock rather than a safety measure.
-  #
-  # It was latent: the branch only ran when the container was MISSING, which
-  # stopped happening once containers existed. Reconverting when the BINARY is
-  # newer made it the common path and the deadlock surfaced immediately.
-  JITLLM_NO_LOCK=1 ./scripts/cap 26G -- "$JLMBIN" convert "$MODEL" "$JITLLM_PATH" || exit 1
+  # Bare, like the runs: on the laptop the outer scripts/cap that the hook
+  # requires covers it, and a bench host has no desktop to protect. The child
+  # inherits fd 9, so the lock stays held through the conversion.
+  "$JLMBIN" convert "$MODEL" "$JITLLM_PATH" || exit 1
 fi
 ROUNDS="${3:-6}"
 N="${JITLLM_VS_N:-320}"

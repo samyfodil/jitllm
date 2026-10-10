@@ -1,6 +1,6 @@
 package cpu
 
-import "github.com/samyfodil/jitllm/format/quant"
+import "github.com/jitllm/jitllm/format/quant"
 
 // The decode kernel's own weight unpack, written so that every load and every
 // constant can be hoisted out of the sub-block loop.

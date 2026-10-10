@@ -703,8 +703,8 @@ const file_jitllm_v1_common_proto_rawDesc = "" +
 	"\x18FINISH_REASON_MAX_TOKENS\x10\x02\x12\x15\n" +
 	"\x11FINISH_REASON_EOS\x10\x03\x12\x1b\n" +
 	"\x17FINISH_REASON_CANCELLED\x10\x04\x12\x17\n" +
-	"\x13FINISH_REASON_ERROR\x10\x05B\x9c\x01\n" +
-	"\rcom.jitllm.v1B\vCommonProtoP\x01Z9github.com/samyfodil/jitllm/server/gen/jitllm/v1;jitllmv1\xa2\x02\x03JXX\xaa\x02\tJitllm.V1\xca\x02\tJitllm\\V1\xe2\x02\x15Jitllm\\V1\\GPBMetadata\xea\x02\n" +
+	"\x13FINISH_REASON_ERROR\x10\x05B\x99\x01\n" +
+	"\rcom.jitllm.v1B\vCommonProtoP\x01Z6github.com/jitllm/jitllm/server/gen/jitllm/v1;jitllmv1\xa2\x02\x03JXX\xaa\x02\tJitllm.V1\xca\x02\tJitllm\\V1\xe2\x02\x15Jitllm\\V1\\GPBMetadata\xea\x02\n" +
 	"Jitllm::V1b\x06proto3"
 
 var (

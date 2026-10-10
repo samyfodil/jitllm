@@ -3,7 +3,7 @@ package model
 import (
 	"slices"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // Falcon-H1 (jlm.ArchFalconH1) on the Mamba-2 harness (ssmfamily_test.go):

@@ -5,7 +5,7 @@ package server
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestHostBatchSampledRowsEqualAlonePreVNNI is the sampled gate on the host

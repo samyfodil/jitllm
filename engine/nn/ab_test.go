@@ -14,9 +14,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/samyfodil/jitllm/dev/bench"
+	"github.com/jitllm/jitllm/dev/bench"
 )
 
 // TestABInterleave settles whether 4-row interleaving is a win on a

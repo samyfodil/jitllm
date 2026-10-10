@@ -182,7 +182,7 @@ dockers_v2:
   - id: jitllm
     ids: [jitllm, jitllmd]
     dockerfile: Dockerfile
-    images: ["ghcr.io/samyfodil/jitllm"]
+    images: ["ghcr.io/jitllm/jitllm"]
     tags: ["{{ .Version }}"]
     platforms: [linux/amd64, linux/arm64]
     build_args:
@@ -190,7 +190,7 @@ dockers_v2:
     labels:
       org.opencontainers.image.title: jitllm
       org.opencontainers.image.description: "jitllmd, the jitllm inference daemon, with the jitllm CLI"
-      org.opencontainers.image.source: https://github.com/samyfodil/jitllm
+      org.opencontainers.image.source: https://github.com/jitllm/jitllm
       org.opencontainers.image.version: "{{ .Version }}"
       org.opencontainers.image.revision: "{{ .FullCommit }}"
       org.opencontainers.image.created: "{{ .CommitDate }}"
@@ -248,7 +248,7 @@ changelog:
 
 release:
   github:
-    owner: samyfodil
+    owner: jitllm
     name: jitllm
   # The workflow publishes the draft only after the shipped CLI archives have
   # run on Linux amd64, Linux arm64 and macOS arm64, and every archive of those

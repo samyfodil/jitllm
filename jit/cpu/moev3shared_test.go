@@ -6,7 +6,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/oracle"
+	"github.com/jitllm/jitllm/internal/oracle"
 )
 
 // The DeepSeek-V3 router's architecture-independent gates: the two byte

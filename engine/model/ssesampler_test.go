@@ -6,7 +6,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // TestSamplerOnTheForcedSSETierMatchesAVX2 runs the whole sampler -- the

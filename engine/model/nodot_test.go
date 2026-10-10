@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/internal/testmodels"
-	"github.com/samyfodil/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit/cpu"
 )
 
 // arm64 without FEAT_DotProd at the model level (jit/cpu/sdotemu.go): a

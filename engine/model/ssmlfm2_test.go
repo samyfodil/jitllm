@@ -3,7 +3,7 @@ package model
 import (
 	"slices"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // LFM2 (jlm.ArchLFM2) on the state-space harness (ssmfamily_test.go):

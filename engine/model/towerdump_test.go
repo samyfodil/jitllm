@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // The tower's node-by-node oracle: llama-mtmd-debug's graph dump.

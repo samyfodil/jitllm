@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"image"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // A picture in a prompt is rows like any other.

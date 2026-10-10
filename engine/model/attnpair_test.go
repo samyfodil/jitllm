@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // TestPairedAttentionIsBitIdentical holds decode with the paired attention

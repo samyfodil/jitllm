@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/samyfodil/jitllm/convert/safetensors"
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/convert/safetensors"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestShardsReadInPlaceWriteTheSameContainer converts one model twice: from its

@@ -4,9 +4,9 @@
 package config
 
 import (
-	"github.com/samyfodil/jitllm/common/api"
-	"github.com/samyfodil/jitllm/common/catalog"
-	"github.com/samyfodil/jitllm/common/session"
+	"github.com/jitllm/jitllm/common/api"
+	"github.com/jitllm/jitllm/common/catalog"
+	"github.com/jitllm/jitllm/common/session"
 
 	"encoding/json"
 	"os"

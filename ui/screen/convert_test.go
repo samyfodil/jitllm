@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/common/catalog"
-	"github.com/samyfodil/jitllm/common/convertjob"
-	"github.com/samyfodil/jitllm/ui/app"
+	"github.com/jitllm/jitllm/common/catalog"
+	"github.com/jitllm/jitllm/common/convertjob"
+	"github.com/jitllm/jitllm/ui/app"
 )
 
 // convertRows is one of each kind of row the Convert table shows.

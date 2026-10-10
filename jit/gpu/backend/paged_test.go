@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // The gates for the paged KV kernels (docs/design/device-kv-paging.md). Every

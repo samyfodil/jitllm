@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // The modern text group from safetensors (convert/moefamily2.go is the GGUF

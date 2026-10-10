@@ -6,11 +6,11 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/samyfodil/jitllm/convert"
-	"github.com/samyfodil/jitllm/convert/gguf"
-	"github.com/samyfodil/jitllm/format/jlm"
-	"github.com/samyfodil/jitllm/internal/testmodels"
-	"github.com/samyfodil/jitllm/tok/jinja"
+	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/convert/gguf"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/tok/jinja"
 )
 
 // Mistral-7B-Instruct-v0.3's GGUF carries a template with no system role, so a

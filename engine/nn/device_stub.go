@@ -2,7 +2,7 @@
 
 package nn
 
-import "github.com/samyfodil/jitllm/format/quant"
+import "github.com/jitllm/jitllm/format/quant"
 
 // Device on a platform with no generated code at all. The interface still
 // exists so callers compile everywhere; nothing ever calls it.

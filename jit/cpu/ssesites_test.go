@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // TestEveryMatvecEmitterHasAnSSEAnswer is TestEveryVPDPBUSDSiteIsCoveredOrRefused

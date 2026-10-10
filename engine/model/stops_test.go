@@ -4,8 +4,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
-	"github.com/samyfodil/jitllm/tok"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/tok"
 )
 
 // TestChatStopsAtTheTurnsEnd: under its chat template HunyuanOCR closes its

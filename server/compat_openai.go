@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/samyfodil/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/model"
 )
 
 // OpenAI-compatible HTTP.
@@ -49,10 +49,12 @@ type oaChatRequest struct {
 	oaSampling
 	// Tools is handed to the model's own chat template as `tools`, bytes
 	// untouched so the schema keeps the key order the client wrote.
-	// tool_choice "none" withholds them; "auto", "required" and a named
-	// function are all rendered as "auto": nothing constrains the sampler.
-	Tools      json.RawMessage `json:"tools"`
-	ToolChoice json.RawMessage `json:"tool_choice"`
+	// tool_choice "none" withholds them; "required" and a named function
+	// hold the reply to a call in the model's own syntax (tools.go), and
+	// parallel_tool_calls false to one call.
+	Tools             json.RawMessage `json:"tools"`
+	ToolChoice        json.RawMessage `json:"tool_choice"`
+	ParallelToolCalls *bool           `json:"parallel_tool_calls"`
 
 	// MaxCompletionTokens is the newer spelling; the OpenAI SDKs send it for
 	// reasoning models and clients in the wild send either.
@@ -269,8 +271,11 @@ func (e *compat) openAIChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if t, err := oaTools(req.Tools, req.ToolChoice); err != nil {
 		oaFail(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
 		return
-	} else {
-		chat.Tools = t
+	} else if chat.Tools = t; t != nil {
+		if chat.ToolChoice, err = oaToolChoice(req.ToolChoice, req.ParallelToolCalls, toolNames(t)); err != nil {
+			oaFail(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+			return
+		}
 	}
 	sampling, err := req.sampler(req.JitllmSession)
 	if err != nil {
@@ -413,7 +418,10 @@ func (e *compat) openAICompletions(w http.ResponseWriter, r *http.Request) {
 
 // oaChoice is one continuation's state while a response is built.
 type oaChoice struct {
-	tt      *toolText
+	tt *toolText
+	// ncalls is how many tool calls the stream has sent: each streamed
+	// call carries its index.
+	ncalls  int
 	text    strings.Builder
 	started *Started
 	fin     *Finished
@@ -577,8 +585,9 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 			switch ev.Kind {
 			case EventStarted:
 				c.started = ev.Started
+				c.tt.start(ev.Started)
 			case EventToken:
-				c.tt.push(ev.Token.Text)
+				c.tt.push(ev.Token)
 				c.text.WriteString(ev.Token.Text)
 				c.take(ev.Token, lp)
 			case EventFinished:
@@ -617,9 +626,9 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 		for i, c := range cs {
 			reason := oaFinish(c.fin.Reason)
 			msg := &oaOutMsg{Role: "assistant", Content: c.text.String()}
-			if _, content, calls := c.tt.finish(); len(calls) > 0 {
+			if _, _, content := c.tt.finish(c.fin.StopMatched); len(c.tt.calls) > 0 {
 				reason = "tool_calls"
-				msg.Content, msg.ToolCalls = content, e.oaCalls(calls, false)
+				msg.Content, msg.ToolCalls = content, e.oaCalls(c.tt.calls, false, 0)
 			}
 			resp.Choices = append(resp.Choices, oaChatChoice{Index: i, Message: msg,
 				FinishReason: &reason, Logprobs: c.chatLogprobs(lp)})
@@ -662,13 +671,16 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 		}
 		// What the tool holdback kept back goes out now: the calls, or the
 		// text that turned out not to be one.
-		tail, _, calls := c.tt.finish()
+		tail, calls, _ := c.tt.finish(c.fin.StopMatched)
 		if tail != "" {
 			chunk(oaChatChoice{Index: i, Delta: &oaOutMsg{Content: tail}, Logprobs: c.chatLogprobs(lp)})
 		}
 		if len(calls) > 0 {
+			chunk(oaChatChoice{Index: i, Delta: &oaOutMsg{ToolCalls: e.oaCalls(calls, true, c.ncalls)}})
+			c.ncalls += len(calls)
+		}
+		if c.ncalls > 0 {
 			reason = "tool_calls"
-			chunk(oaChatChoice{Index: i, Delta: &oaOutMsg{ToolCalls: e.oaCalls(calls, true)}})
 		}
 		var lps *oaChatLogprobs
 		if len(c.pend) > 0 {
@@ -689,6 +701,7 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 		switch ev.Kind {
 		case EventStarted:
 			c.started = ev.Started
+			c.tt.start(ev.Started)
 			if chat {
 				// The first chunk carries the role and no content, which is
 				// what the reference implementation emits and what several
@@ -697,15 +710,26 @@ func (e *compat) runOpenAI(w http.ResponseWriter, r *http.Request, o GenerateOpt
 			}
 		case EventToken:
 			c.take(ev.Token, lp)
-			if ev.Token.Text == "" {
+			// A token with no text still goes to the tool reader: a control
+			// token ([TOOL_CALLS], <｜tool▁sep｜>) is call markup.
+			if ev.Token.Text == "" && (!chat || !c.tt.ids) {
 				return nil
 			}
 			if chat {
-				txt := c.tt.push(ev.Token.Text)
-				if txt == "" {
+				txt, calls := c.tt.push(ev.Token)
+				if txt != "" {
+					if err := chunk(oaChatChoice{Index: i, Delta: &oaOutMsg{Content: txt},
+						Logprobs: c.chatLogprobs(lp)}); err != nil {
+						return err
+					}
+				}
+				if len(calls) == 0 {
 					return nil
 				}
-				return chunk(oaChatChoice{Index: i, Delta: &oaOutMsg{Content: txt}, Logprobs: c.chatLogprobs(lp)})
+				// A call goes out as soon as its markup closes.
+				err := chunk(oaChatChoice{Index: i, Delta: &oaOutMsg{ToolCalls: e.oaCalls(calls, true, c.ncalls)}})
+				c.ncalls += len(calls)
+				return err
 			}
 			out := legacyBody(id, object, created, modelName)
 			out.Choices = []legacyChoice{{Index: i, Text: ev.Token.Text, Logprobs: c.legacyLogprobs(lp)}}
@@ -895,14 +919,16 @@ func oaTools(raw, choice json.RawMessage) ([]byte, error) {
 	return raw, nil
 }
 
-// oaCalls is calls in the API's shape; a streamed delta carries each index.
-func (e *compat) oaCalls(calls []model.ToolCall, stream bool) []oaToolCall {
+// oaCalls is calls in the API's shape; a streamed delta carries each index,
+// counting from first.
+func (e *compat) oaCalls(calls []model.ToolCall, stream bool, first int) []oaToolCall {
 	out := make([]oaToolCall, len(calls))
 	for i, c := range calls {
 		out[i].ID, out[i].Type = "call_"+e.b.NextID("tc"), "function"
 		out[i].Function.Name, out[i].Function.Arguments = c.Name, c.Arguments
 		if stream {
-			out[i].Index = &i
+			k := first + i
+			out[i].Index = &k
 		}
 	}
 	return out

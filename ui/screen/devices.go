@@ -15,10 +15,10 @@ import (
 	"github.com/gogpu/ui/state"
 	"github.com/gogpu/ui/widget"
 
-	"github.com/samyfodil/jitllm/common/hardware"
-	"github.com/samyfodil/jitllm/common/session"
-	"github.com/samyfodil/jitllm/ui/app"
-	"github.com/samyfodil/jitllm/ui/widgets"
+	"github.com/jitllm/jitllm/common/hardware"
+	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/widgets"
 )
 
 // Devices is the hardware page and the placement control: what this machine

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // Gemma 4's vision: an RMSNorm ViT at the picture's own size within a soft

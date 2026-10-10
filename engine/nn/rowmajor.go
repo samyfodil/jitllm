@@ -3,7 +3,7 @@ package nn
 import (
 	"sync/atomic"
 
-	"github.com/samyfodil/jitllm/format/quant"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // rowMajorQuant counts quantized weights read through the GGUF-block

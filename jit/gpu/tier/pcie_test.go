@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
 )
 
 // TestPCIeBandwidth measures the number that decides where weights should live.

@@ -5,7 +5,7 @@ package model
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // TestGreedyDivergenceControl calibrates how long two numerically-equivalent

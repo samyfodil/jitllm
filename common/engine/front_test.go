@@ -4,7 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/samyfodil/jitllm/common/session"
+	"github.com/jitllm/jitllm/common/session"
 )
 
 // The tests drive the engine through a front end with nothing on screen: a

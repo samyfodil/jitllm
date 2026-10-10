@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samyfodil/jitllm/convert/gguf"
-	"github.com/samyfodil/jitllm/internal/testmodels"
-	"github.com/samyfodil/jitllm/tok"
+	"github.com/jitllm/jitllm/convert/gguf"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/tok"
 )
 
 // The oracle is llama.cpp's own tokenizer (llama-tokenize --ids), not a round

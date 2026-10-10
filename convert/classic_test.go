@@ -5,7 +5,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // TestUnfuseSplitsAFusedQKVBias holds the fused q|k|v bias (phi-2's older

@@ -17,11 +17,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/samyfodil/jitllm/common/catalog"
-	"github.com/samyfodil/jitllm/common/hardware"
-	"github.com/samyfodil/jitllm/ui/app"
-	"github.com/samyfodil/jitllm/ui/screen"
-	"github.com/samyfodil/jitllm/ui/widgets"
+	"github.com/jitllm/jitllm/common/catalog"
+	"github.com/jitllm/jitllm/common/hardware"
+	"github.com/jitllm/jitllm/ui/app"
+	"github.com/jitllm/jitllm/ui/screen"
+	"github.com/jitllm/jitllm/ui/widgets"
 )
 
 // Model is one fixture: a catalog entry and what the engine publishes once it

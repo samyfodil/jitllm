@@ -3,7 +3,7 @@ package engine
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/common/session"
+	"github.com/jitllm/jitllm/common/session"
 )
 
 // Every knob must reach the engine's sampler.

@@ -1,8 +1,8 @@
 package model
 
 import (
-	"github.com/samyfodil/jitllm/engine/nn"
-	"github.com/samyfodil/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // DeepSeek V4 on a device (ds4.go is the graph, jit/gpu/tier/ds4.go its

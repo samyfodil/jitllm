@@ -1382,8 +1382,8 @@ const file_jitllm_v1_placement_proto_rawDesc = "" +
 	"\rSetRelocation\x12\x1f.jitllm.v1.SetRelocationRequest\x1a .jitllm.v1.SetRelocationResponse\"\x00\x12G\n" +
 	"\bTuneSeam\x12\x1a.jitllm.v1.TuneSeamRequest\x1a\x1b.jitllm.v1.TuneSeamResponse\"\x000\x01\x12Q\n" +
 	"\fGetResidency\x12\x1e.jitllm.v1.GetResidencyRequest\x1a\x1f.jitllm.v1.GetResidencyResponse\"\x00\x12T\n" +
-	"\rSetPageBudget\x12\x1f.jitllm.v1.SetPageBudgetRequest\x1a .jitllm.v1.SetPageBudgetResponse\"\x00B\x9f\x01\n" +
-	"\rcom.jitllm.v1B\x0ePlacementProtoP\x01Z9github.com/samyfodil/jitllm/server/gen/jitllm/v1;jitllmv1\xa2\x02\x03JXX\xaa\x02\tJitllm.V1\xca\x02\tJitllm\\V1\xe2\x02\x15Jitllm\\V1\\GPBMetadata\xea\x02\n" +
+	"\rSetPageBudget\x12\x1f.jitllm.v1.SetPageBudgetRequest\x1a .jitllm.v1.SetPageBudgetResponse\"\x00B\x9c\x01\n" +
+	"\rcom.jitllm.v1B\x0ePlacementProtoP\x01Z6github.com/jitllm/jitllm/server/gen/jitllm/v1;jitllmv1\xa2\x02\x03JXX\xaa\x02\tJitllm.V1\xca\x02\tJitllm\\V1\xe2\x02\x15Jitllm\\V1\\GPBMetadata\xea\x02\n" +
 	"Jitllm::V1b\x06proto3"
 
 var (

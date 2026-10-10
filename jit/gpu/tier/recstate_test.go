@@ -3,7 +3,7 @@ package tier
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // TestRecurrentStateIsChargedAndReturned: a linear block's four state buffers

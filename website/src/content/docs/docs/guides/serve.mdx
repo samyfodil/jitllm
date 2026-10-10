@@ -92,7 +92,7 @@ Supported fields: `model`, `messages`, `max_tokens` or `max_completion_tokens`, 
 - **`response_format`** (`json_object`, or `json_schema` with its `schema`) constrains every sampled token to the schema; a schema keyword that is not supported is a 400 naming it.
 - **`jitllm_speculate: true`** turns on speculative decoding for a greedy request: it drafts with the model's own prediction block where it has one and by prompt lookup otherwise, and the output is plain greedy's token for token.
 
-The [server reference](https://github.com/samyfodil/jitllm/blob/main/docs/server.md) has how these combine.
+The [server reference](https://github.com/jitllm/jitllm/blob/main/docs/server.md) has how these combine.
 
 ## OpenAI embeddings
 
@@ -216,7 +216,7 @@ jitllmd run -session SESSION -continue "and then?"       # continue from its pos
 
 ## The Connect API
 
-Everything the client does is a Connect RPC, generated from the protobuf definitions in [`proto/jitllm/v1`](https://github.com/samyfodil/jitllm/tree/main/proto/jitllm/v1). Any Connect, gRPC or gRPC-Web client can call it, over HTTP/1.1 or cleartext HTTP/2.
+Everything the client does is a Connect RPC, generated from the protobuf definitions in [`proto/jitllm/v1`](https://github.com/jitllm/jitllm/tree/main/proto/jitllm/v1). Any Connect, gRPC or gRPC-Web client can call it, over HTTP/1.1 or cleartext HTTP/2.
 
 | Service | Methods |
 |---|---|

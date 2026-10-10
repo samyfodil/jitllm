@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
 // TestHybridImageChatRestoresAtItsEnd is gate c”” of

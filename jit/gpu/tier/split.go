@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/samyfodil/jitllm/jit/gpu/backend"
-	"github.com/samyfodil/jitllm/jit/gpu/ir"
-	"github.com/samyfodil/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // Split width, measured on the device that will run it rather than tabulated:

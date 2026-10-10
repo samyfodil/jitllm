@@ -3,7 +3,7 @@ package vulkan
 import (
 	"testing"
 
-	"github.com/samyfodil/jitllm/internal/testlock"
+	"github.com/jitllm/jitllm/internal/testlock"
 )
 
 // gpuLock is jit/gpu/backend's cross-process test lock (internal/testlock).
