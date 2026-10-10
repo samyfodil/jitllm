@@ -634,6 +634,13 @@ func (g *devTier) heldLayers(sid uint64, f func(li int, l *kvLayerPool) error) e
 // Callers hold g.mu.
 func (g *devTier) pagedAppend(sid uint64, seqs []seqEnd) error {
 	kp := g.kvPages()
+	for _, se := range seqs {
+		if se.start >= 0 {
+			if err := g.rewind(sid, kp, se.s, se.start); err != nil {
+				return err
+			}
+		}
+	}
 	err := g.heldLayers(sid, func(li int, l *kvLayerPool) error {
 		for _, se := range seqs {
 			need := (l.positions(se.end) + kp.p - 1) / kp.p
@@ -1072,6 +1079,15 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 	npages := (pos + P - 1) / P
 	// The sequence's oldest pages may be at home (kvevict.go): the same count
 	// in every layer, so a layer joining keeps them there too.
+	// Sent up, the host's position is the history: past it the device's
+	// record is a sequence that has since restarted lower. Read home, pos is
+	// only how much of the history is wanted (a prefix a store saves), and the
+	// device keeps the rest.
+	if toDevice {
+		if err := g.rewind(sid, kp, s, pos); err != nil {
+			return err
+		}
+	}
 	e := min(kp.evicted[s], npages)
 	if toDevice && e > 0 && len(pl.owned[s]) == 0 {
 		if err := g.ensureRange(kp, s, e); err != nil {

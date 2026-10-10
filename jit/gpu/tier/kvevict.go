@@ -240,6 +240,93 @@ func (g *devTier) streamWidth(l *kvLayerPool, left int) int {
 	return min(w, left)
 }
 
+// rewind tells the pool that sequence s's history now ends at pos: the
+// sequence restarted lower (a State reset and taking a new prompt, a row
+// retired and reused, a rollback), and its positions from pos on are about to
+// be written again. Pages at home past pos are not its history any more, and
+// a page a call writes into must be on the card, so the evicted prefix comes
+// down to the pages wholly below pos: the page pos lies inside, when it is at
+// home, comes back to the card with its home copy (its rows below pos are
+// still the sequence's), and every page past it is released, as trimSeq
+// releases them, for the call to take fresh. The written mark comes down to
+// pos, so no page about to be written counts as full and goes home.
+//
+// Left as it was -- the count and the mark were only ever raised -- the rows
+// written into a page at home landed on the dummy, the stream uploaded the old
+// copy over them, and a layer joining later (pagedMigrate) took a shorter
+// prefix than the count every other layer streams: the index past a layer's
+// home copies in streamDecode.
+//
+// All or nothing: the one id per layer the page pos lies inside needs is
+// taken first and given back if any layer cannot have it, so a refused call
+// finds the pool as it was and rewinds again when retried. Callers hold g.mu,
+// between submissions.
+func (g *devTier) rewind(sid uint64, kp *kvPool, s seqID, pos int) error {
+	e, keep := kp.evicted[s], pos/kp.p
+	if e <= keep {
+		if kp.written[s] > pos {
+			kp.written[s] = pos
+		}
+		return nil
+	}
+	if err := g.flushTabs(); err != nil {
+		return err
+	}
+	// Nothing of s is evictable while ids are found below.
+	kp.written[s] = pos
+	n := keep
+	if pos%kp.p != 0 {
+		n = keep + 1
+		var took []*kvLayerPool
+		for li, l := range kp.layers {
+			// A windowed layer's page released behind its window has no copy;
+			// the call's windowPages gives the page it writes a fresh id.
+			if len(l.owned[s]) <= keep || l.home[s][keep] == nil {
+				continue
+			}
+			if err := g.allocAt(sid, kp, l, s, keep); err != nil {
+				for _, t := range took {
+					t.free = append(t.free, t.owned[s][keep])
+					t.owned[s][keep] = 0
+				}
+				// Only the ids just taken are queued (flushed above).
+				clear(g.tabPend)
+				g.tabPend = g.tabPend[:0]
+				return fmt.Errorf("block %d: bringing page %d's home copy back for a rewind to %d: %w", li, keep, pos, err)
+			}
+			took = append(took, l)
+		}
+		for _, l := range took {
+			part := l.home[s][keep]
+			kw, vw := l.geom.kWords(kp.p), l.geom.vWords(kp.p)
+			id := int(l.owned[s][keep])
+			if err := l.k.WriteAt(id*kw*4, f32b(part[:kw])); err != nil {
+				return err
+			}
+			if vw > 0 {
+				if err := l.v.WriteAt(id*vw*4, f32b(part[kw:])); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	for _, l := range kp.layers {
+		if ids := l.owned[s]; len(ids) > n {
+			l.fenceIDs(ids[n:])
+			l.owned[s] = ids[:n]
+		}
+		if len(l.home[s]) > keep {
+			l.home[s] = l.home[s][:keep]
+		}
+		if l.rel[s] > n {
+			l.rel[s] = n
+		}
+	}
+	kp.evicted[s] = keep
+	g.roomGen.Add(1) // released pages are room (kvCompact), as trimKV's are
+	return g.flushTabs()
+}
+
 // forgetFrom drops s's history from page keep on: evicted pages go from home
 // and the counts shrink to match. Callers hold g.mu.
 func (kp *kvPool) forgetFrom(s seqID, keep int) {

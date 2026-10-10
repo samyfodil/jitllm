@@ -248,6 +248,14 @@ func (g *devTier) allocPages(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, co
 	if count <= 0 {
 		return nil
 	}
+	// The table run first: a run that moves may grow every layer's table
+	// arena, and the room for that comes from compacting the layers
+	// (kvCompact), this one included, which gives its free pages back. Taken
+	// after the free list was made long enough, it emptied the list again.
+	have := len(l.owned[s])
+	if err := g.ensureRange(kp, s, have+count); err != nil {
+		return err
+	}
 	if len(l.free) < count {
 		// Growth first -- a page-out of streamed weights or more pool -- and
 		// when nothing can grow, cold history goes home (kvevict.go). A
@@ -255,10 +263,6 @@ func (g *devTier) allocPages(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, co
 		if err := g.growKVLayer(kp, l, l.n+count-len(l.free)); err != nil && !g.evictForRoom(sid, kp, l, count) {
 			return err
 		}
-	}
-	have := len(l.owned[s])
-	if err := g.ensureRange(kp, s, have+count); err != nil {
-		return err
 	}
 	take := l.free[len(l.free)-count:]
 	l.owned[s] = append(l.owned[s], take...)
@@ -643,7 +647,12 @@ func (g *devTier) compactViaHost(kp *kvPool, l *kvLayerPool, order []uint32, n i
 		err = writePagesIn(v, hv, vw, order)
 	}
 	if err != nil {
+		// As above: the history goes back in at the old size rather than
+		// leaving the layer with no buffers for the next read.
 		freeKV2(k, v)
+		if rk, rv, rerr := g.restoreLayer(l, kp.p, hk, hv); rerr == nil {
+			l.k, l.v = rk, rv
+		}
 		return nil, nil, err
 	}
 	return k, v, nil
