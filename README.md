@@ -32,7 +32,31 @@ are [desktop](#desktop-app) and [terminal](#terminal-app) apps too.
 
 ## Install
 
-Linux and macOS:
+**macOS:** download `jitllm_<version>_darwin_arm64.dmg` (Apple silicon) or
+`_amd64.dmg` (Intel) from the [latest release](https://github.com/samyfodil/jitllm/releases/latest),
+open it and drag **jitllm** to Applications. The app carries `jitllm` and
+`jitllmd`; on first launch it offers to put them on your `PATH`, and its
+Settings can start the server at login. With Homebrew (available once the tap
+is published):
+
+```sh
+brew install --cask jitllm/tap/jitllm   # the app, with jitllm and jitllmd on PATH
+brew install jitllm/tap/jitllm          # jitllm and jitllmd only
+```
+
+**Windows:** run `jitllm-setup_<version>_windows_amd64.exe` (or `_arm64.exe`)
+from the [latest release](https://github.com/samyfodil/jitllm/releases/latest).
+It installs for your account only, with no administrator prompt: the CLI, the
+server and the desktop app into `%LOCALAPPDATA%\Programs\jitllm`, on your
+`PATH`, with Start menu shortcuts, an optional "start the server at login",
+and an uninstaller under Settings > Apps. With winget (available once
+published): `winget install jitllm.jitllm`.
+
+Until releases are signed, macOS and Windows warn the first time:
+[packaging/README.md](packaging/README.md#first-launch-of-an-unsigned-build)
+says what each warning means and how to open the app.
+
+**Any platform, from a script.** Linux and macOS:
 
 ```sh
 curl -fsSL https://jitllm.org/install.sh | sh
@@ -44,7 +68,7 @@ Windows (PowerShell):
 irm https://jitllm.org/install.ps1 | iex
 ```
 
-This installs the CLI, `jitllm`, and the server, `jitllmd`, from the latest
+The script installs the CLI, `jitllm`, and the server, `jitllmd`, from the latest
 release, after checking each archive against the release's checksums: into
 `~/.local/bin` (`/usr/local/bin` as root), or on Windows into
 `%LOCALAPPDATA%\Programs\jitllm`, which it adds to your `PATH`. Add the apps with
