@@ -113,6 +113,20 @@ and the conversation keeps its history across the move. Install it with
 <img src="website/public/shots/tui-engine.png" width="400" alt="The terminal app's Engine screen: every block and where it runs, the rate over time, memory and the pager">
 </p>
 
+## Built for agents
+
+- **For an agent using jitllm:** the OpenAI- and Anthropic-compatible APIs work
+  with the SDKs and agent frameworks as they are; tool calls are read in each
+  model's own format and `tool_choice` is enforced by constrained decoding, so a
+  forced call is a call. [`llms.txt`](llms.txt) is a short index of what jitllm
+  is and where its documentation lives.
+- **For an agent changing jitllm:** [`AGENTS.md`](AGENTS.md) is the one file
+  that holds the project's binding rules, with a table that routes each
+  subsystem to its evidence; the [model list](docs/models.md) is generated from
+  the converter and CI fails when it drifts; and the model-free suite
+  (`go run ./scripts/modelfree`) runs every check that needs no model or GPU,
+  reporting a missing model or device as a skip, never as a pass.
+
 ## Install
 
 Linux and macOS:
