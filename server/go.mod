@@ -5,13 +5,13 @@ go 1.26.0
 require (
 	connectrpc.com/connect v1.21.0
 	github.com/jitllm/jitllm v0.0.0
+	golang.org/x/image v0.45.0
 	golang.org/x/net v0.59.0
 	google.golang.org/protobuf v1.36.12
 )
 
 require (
 	github.com/go-webgpu/goffi v0.6.3 // indirect
-	golang.org/x/image v0.45.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 )
 
