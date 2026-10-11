@@ -249,7 +249,14 @@ func (s *ModelService) ApplyChatTemplate(ctx context.Context, req *connect.Reque
 			fmt.Errorf("model %q carries no chat template", lm.id))
 	}
 	msgs := make([]model.ChatMessage, 0, len(req.Msg.Messages))
-	for _, m := range req.Msg.Messages {
+	for i, m := range req.Msg.Messages {
+		if len(m.Images) > 0 {
+			// A picture is rows of the prompt, not token ids: there is no
+			// text or id list to return for it.
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("messages[%d] carries a picture, which ApplyChatTemplate does not render; "+
+					"Generate takes it", i))
+		}
 		msgs = append(msgs, model.ChatMessage{Role: m.Role, Content: m.Content})
 	}
 	prompt, err := lm.m.ChatPrompt(msgs, req.Msg.AddGenerationPrompt)

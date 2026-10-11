@@ -10,7 +10,10 @@ import (
 	"strings"
 	"testing"
 
+	"connectrpc.com/connect"
+
 	"github.com/jitllm/jitllm/engine/model"
+	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // Pictures beside the request features the text path has: tools and a forced
@@ -200,5 +203,41 @@ func TestImageContinuesASession(t *testing.T) {
 	}
 	if p1 == 0 || p2 <= p1 {
 		t.Fatalf("the session went from %d to %d positions: the second turn did not continue it", p1, p2)
+	}
+}
+
+// TestConnectGenerateTakesPictures: a chat's pictures sent through the Connect
+// API give the engine's own image run's tokens; a model with no tower, a bad
+// picture and ApplyChatTemplate with a picture are each InvalidArgument.
+func TestConnectGenerateTakesPictures(t *testing.T) {
+	e, lm, c := loadedEngine(t, visionModel, "vlm", LoadOptions{})
+	quad := readTestdata(t, "quad-and-disc.png")
+	want, _ := engineRun(t, e, lm, quad)
+	chat := func(model string, img *v1.ChatImage) *v1.GenerateRequest {
+		return &v1.GenerateRequest{ModelId: model, MaxTokens: 12, Prompt: &v1.PromptInput{
+			Input: &v1.PromptInput_Chat{Chat: &v1.ChatPrompt{AddGenerationPrompt: true,
+				Messages: []*v1.ChatMessage{{Role: "user", Content: askPicture, Images: []*v1.ChatImage{img}}}}}}}
+	}
+	res, err := c.inference.Complete(context.Background(), req(chat("vlm", &v1.ChatImage{Data: quad, MediaType: "image/png"})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Msg.Text != want {
+		t.Fatalf("Connect: %q, want the engine's %q", res.Msg.Text, want)
+	}
+	_, err = c.inference.Complete(context.Background(), req(chat("vlm", &v1.ChatImage{Data: quad, MediaType: "image/webp"})))
+	if ce := wantCode(t, "a mismatched media type", err, connect.CodeInvalidArgument); !strings.Contains(ce.Message(),
+		"prompt.chat.messages[0].images[0] is declared image/webp") {
+		t.Fatalf("the refusal does not name the part: %s", ce.Message())
+	}
+	_, err = c.model.ApplyChatTemplate(context.Background(), req(&v1.ApplyChatTemplateRequest{ModelId: "vlm",
+		Messages: []*v1.ChatMessage{{Role: "user", Content: "x", Images: []*v1.ChatImage{{Data: quad}}}}}))
+	wantCode(t, "ApplyChatTemplate with a picture", err, connect.CodeInvalidArgument)
+
+	_, _, tc := loadedEngine(t, chatModel, "txt", LoadOptions{})
+	_, err = tc.inference.Complete(context.Background(), req(chat("txt", &v1.ChatImage{Data: quad})))
+	if ce := wantCode(t, "a picture to a model with no tower", err, connect.CodeInvalidArgument); !strings.Contains(ce.Message(),
+		`model "txt" does not accept images`) {
+		t.Fatalf("%s", ce.Message())
 	}
 }

@@ -216,6 +216,21 @@ message DetokenizeResponse {
 message ChatMessage {
   string role = 1;
   string content = 2;
+  // Pictures of this turn, in order, placed where the model's chat template
+  // puts its image markers (before the turn's text). Only a model whose
+  // container carries a vision tower takes them; any other refuses the
+  // request. Generate reads them; ApplyChatTemplate refuses them, since a
+  // picture is rows of the prompt and not token ids.
+  repeated ChatImage images = 3;
+}
+
+// ChatImage is one picture: its encoded bytes, PNG, JPEG, WebP or GIF (its
+// first frame), within the server's byte and pixel limits.
+message ChatImage {
+  bytes data = 1;
+  // The declared media type (image/png, image/jpeg, image/webp, image/gif);
+  // empty takes the bytes' own. A declared type the bytes are not is refused.
+  string media_type = 2;
 }
 
 message ApplyChatTemplateRequest {
