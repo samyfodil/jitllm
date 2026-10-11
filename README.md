@@ -184,8 +184,8 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 Flags go before the model path. `jitllm <command>` with no arguments prints the
 usage.
 
-Models run from `.jlm` containers, converted once from GGUF or Hugging Face
-weights. See the [CLI and conversion guide](docs/cli.md) for other inputs and flags,
+**Bring GGUF or Hugging Face (safetensors) weights**, from the catalog or your
+own files. See the [CLI and conversion guide](docs/cli.md) for inputs and flags,
 and the [server reference](docs/server.md) for endpoints and daemon commands.
 
 ### Docker
