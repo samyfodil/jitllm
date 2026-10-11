@@ -17,10 +17,11 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// TestTheREADMEGoExamplesBuild compiles every ```go block of the top-level
-// README as the main package it claims to be, against the tree it sits in. A
-// renamed or re-signatured API the README still calls fails here rather than
-// on the first reader who pastes it.
+// TestTheREADMEGoExamplesBuild compiles every ```go block of the Go library
+// guide (docs/embedding-go.md, which the README links for embedding) as the
+// main package it claims to be, against the tree it sits in. A renamed or
+// re-signatured API the guide still calls fails here rather than on the first
+// reader who pastes it.
 //
 // Each block is laid into the module through `go build -overlay` at a
 // directory that does not exist on disk, so the build sees the example as a
@@ -31,13 +32,13 @@ func TestTheREADMEGoExamplesBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	readme, err := os.ReadFile(filepath.Join(root, "README.md"))
+	readme, err := os.ReadFile(filepath.Join(root, "docs", "embedding-go.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	blocks := goBlocks(string(readme))
 	if len(blocks) == 0 {
-		t.Fatal("README.md has no ```go block, so this gate proved nothing")
+		t.Fatal("docs/embedding-go.md has no ```go block, so this gate proved nothing")
 	}
 	goTool := filepath.Join(runtime.GOROOT(), "bin", "go")
 	if _, err := os.Stat(goTool); err != nil {

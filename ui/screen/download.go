@@ -7,6 +7,7 @@ import (
 
 	"github.com/gogpu/ui/state"
 
+	"github.com/jitllm/jitllm/common/crash"
 	"github.com/jitllm/jitllm/common/discover"
 	"github.com/jitllm/jitllm/convert/hf"
 	"github.com/jitllm/jitllm/convert/library"
@@ -123,6 +124,7 @@ func (d *downloadScreen) fetch(m library.Model) {
 	d.sh.SetStatus("downloading " + m.Name)
 
 	go func() {
+		defer crash.Recover("download")
 		got, err := discover.Download(m, dir, hf.FindToken(os.Getenv, os.UserHomeDir), downloadFetch,
 			func(f float64) { d.sh.Post(func() { d.progress.Set(f) }) })
 		if err != nil {

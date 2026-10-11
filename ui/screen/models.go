@@ -13,6 +13,7 @@ import (
 	"github.com/gogpu/ui/widget"
 
 	"github.com/jitllm/jitllm/common/catalog"
+	"github.com/jitllm/jitllm/common/crash"
 	"github.com/jitllm/jitllm/common/discover"
 	"github.com/jitllm/jitllm/ui/app"
 	"github.com/jitllm/jitllm/ui/widgets"
@@ -209,6 +210,7 @@ func (m *modelsScreen) rescan() {
 	dirs := append([]string(nil), m.sh.Cfg.ModelDirs...)
 
 	go func() {
+		defer crash.Recover("model scan")
 		defer func() {
 			m.mu.Lock()
 			m.scanRunning = false

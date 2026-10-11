@@ -2,10 +2,8 @@ package main
 
 import (
 	"log"
-	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 
 	"github.com/jitllm/jitllm/common/config"
 )
@@ -14,11 +12,10 @@ import (
 // the settings file when nothing would read standard error: a Windows GUI
 // program started from Explorer has no console (its handle does not stat), and
 // a macOS app opened from Finder or `open` has its standard error on
-// /dev/null. Started from a terminal, the output stays there. A crash's
-// traceback goes to the same file, since the runtime writes it to a standard
-// error nobody sees.
-func logToFileWithoutAConsole() {
-	if stderrIsRead() {
+// /dev/null. Started from a terminal, the output stays there. noConsole is
+// !stderrIsRead(), asked once: on Windows asking attaches the console.
+func logToFileWithoutAConsole(noConsole bool) {
+	if !noConsole {
 		return
 	}
 	p := config.ConfigPath()
@@ -30,19 +27,18 @@ func logToFileWithoutAConsole() {
 		return
 	}
 	// One run's log, truncated at start, so it never grows without bound.
-	f, err := os.OpenFile(filepath.Join(dir, "jitllm-ui.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	f, err := os.OpenFile(filepath.Join(dir, logName), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return
 	}
-	os.Stdout, os.Stderr = f, f
+	replaceStdio(f)
 	log.SetOutput(f)
-	slog.SetDefault(slog.New(slog.NewTextHandler(f, nil)))
-	// Failing here leaves a crash's traceback where it was before; the log
-	// above still reaches the file.
-	if err := debug.SetCrashOutput(f, debug.CrashOptions{}); err != nil {
-		log.Printf("crash output stays on stderr: %v", err)
-	}
 }
+
+// logName is the log file beside the settings. A crash's traceback is not in
+// it: the runtime writes that to crash.log (package crash), which is shown on
+// the next launch, since this file is truncated by the launch that follows.
+const logName = "jitllm-ui.log"
 
 // stderrIsRead reports whether standard error goes anywhere a person sees.
 func stderrIsRead() bool {
@@ -57,4 +53,17 @@ func stderrIsRead() bool {
 		return true
 	}
 	return !os.SameFile(fi, null)
+}
+
+// stdio holds the standard files os.Stdout and os.Stderr held before they were
+// replaced. An *os.File closes its descriptor when collected, and descriptor
+// 2 is where the runtime writes a fatal error: dropped, the collector closes
+// it, the next file opened takes its number, and a crash's traceback is
+// written into that file -- or nowhere.
+var stdio []*os.File
+
+// replaceStdio points os.Stdout and os.Stderr at f, keeping the old ones.
+func replaceStdio(f *os.File) {
+	stdio = append(stdio, os.Stdout, os.Stderr)
+	os.Stdout, os.Stderr = f, f
 }

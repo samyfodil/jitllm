@@ -57,8 +57,17 @@ cd ui && ../scripts/cap 8G -- go run ./cmd/pack app -bin jitllm-ui -version 1.2.
 - Every icon is drawn from `app.IconAt`, the window icon, so there is no image
   file to keep in step.
 - With no console to read it (a GUI .exe from Explorer, an app from Finder),
-  the log goes to `jitllm-ui.log` beside the settings file, crashes included.
-  A GUI .exe run from cmd or PowerShell writes to that terminal.
+  the log goes to `jitllm-ui.log` beside the settings file. A GUI .exe run
+  from cmd or PowerShell writes to that terminal.
+- A crash is a report (package `common/crash`): the runtime writes a fatal
+  error's traceback, every goroutine's, to `crash.log` beside the settings
+  (`%AppData%\jitllm` on Windows, `~/Library/Application Support/jitllm` on
+  macOS, `~/.config/jitllm` on Linux), and the next launch shows it over every
+  screen with Copy report, Open an issue and Dismiss, saved as
+  `crash-report.txt`. A panic on one of the app's own goroutines (the engine
+  worker, the model scan, the hardware probe, a download) is reported the same
+  way while the window stays up. Home paths are shortened to `~`; no prompt or
+  chat text is in a report.
 
 `.goreleaser.yaml` runs the same steps per target; CI's `ui` job runs them on
 its Windows and macOS hosts.
