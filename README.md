@@ -8,6 +8,18 @@
 </p>
 
 <p align="center">
+<img src="https://img.shields.io/badge/CUDA-supported-76B900?logo=nvidia&logoColor=white" alt="CUDA supported">
+<img src="https://img.shields.io/badge/Vulkan-supported-AC162C?logo=vulkan&logoColor=white" alt="Vulkan supported">
+<img src="https://img.shields.io/badge/Metal-Apple%20Silicon-000000?logo=apple&logoColor=white" alt="Metal on Apple Silicon">
+<img src="https://img.shields.io/badge/ROCm-untested-ED1C24?logo=amd&logoColor=white" alt="ROCm untested">
+<img src="https://img.shields.io/badge/CPU-x86%20%7C%20Arm-0071C5?logo=intel&logoColor=white" alt="CPU x86 and Arm">
+<br>
+<img src="https://img.shields.io/badge/Linux-x86--64%20%7C%20arm64-FCC624?logo=linux&logoColor=black" alt="Linux x86-64 and arm64">
+<img src="https://img.shields.io/badge/macOS-arm64%20%7C%20x86--64-000000?logo=apple&logoColor=white" alt="macOS arm64 and x86-64">
+<img src="https://img.shields.io/badge/Windows-x86--64%20%7C%20arm64-0078D4" alt="Windows x86-64 and arm64">
+</p>
+
+<p align="center">
 <a href="https://jitllm.org">jitllm.org</a> ·
 <a href="#quick-start">Get started</a> ·
 <a href="#performance">Benchmarks</a> ·
