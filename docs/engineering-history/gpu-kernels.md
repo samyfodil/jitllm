@@ -5422,7 +5422,9 @@ What was built, every kernel generated:
   a trip of 32 elements decoded once a workgroup to signed bytes with
   float32 scales and minimums per sub-block, the int8 activations with their
   scales and sums beside them, a lane's two words one 8-byte load. Bit for
-  bit the dp4a matvec unsplit. The default on sm_80 and later.
+  bit the dp4a matvec unsplit. It was the default on sm_80 and later until
+  the L4 and A100 rows (below) put the binary16 GEMM ahead; it stays behind
+  JITLLM_GPU_GEMM_INT8.
 - **PagedAttnAccMMA**: the weighted sum of V on m16n8k8 behind the m16n8k16
   scores: 6.5 ms where the FMA tiles read 15.
 - **The tile and split by the card** (`fillTile`, `fillSplit`): about one
@@ -5439,6 +5441,16 @@ before, 0.63 after with the binary16 GEMM). Its ceilings are not the
 A100's (binary16 with float32 sums at the full rate, int8 at twice it) or
 an Ada card's (int8 at four times the float32-accumulate rate), and the rows
 that matter have to be taken there.
+
+### The L4 and A100 rows of the staged GEMMs
+
+From 8dad3b3e, CUDA against llama.cpp b10825, n=20 paired, both arms warm:
+Llama-3.2-1B Q4_K_M prefill read 0.67 on an L4 and 0.78 on an A100 with
+GemmInt8, 0.75 and 0.91 with the m16n8 binary16 GEMM
+(JITLLM_GPU_NO_GEMM_INT8, as the knob was then); Qwen3.5-0.8B 0.89 and 0.96
+on the binary16 GEMM. The cold arm (the old harness) read 0.22 and 0.24. The
+binary16 GEMM is the default from sm_80 since; sm_75 has no int8 m16n8k32
+and takes the binary16 GEMM's k8 form.
 
 ### The three items left after the GEMMs
 
@@ -5459,7 +5471,9 @@ the time sits, not a rate:
 
 - **FlashPrefill80** is FlashPrefill70 in FlashAttention-2's layout, so the
   score fragment is the next product's A fragment and P never reaches shared
-  memory. Heads past 128 are declined by name.
+  memory. A head past 128 (gemma-2b's 256) splits its dims over two warps of
+  a row block, its queries in shared memory and its tiles 16 keys; past 256
+  it is declined by name.
 - **The fused operands.** A first form gave each thread a whole
   (token, sub-block) as ActF16T does. It was slower than the two launches it
   replaced: the norm's second phase had 64 of 1024 threads busy per row, and
