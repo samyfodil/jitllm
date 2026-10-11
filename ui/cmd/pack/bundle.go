@@ -82,8 +82,11 @@ func bundle(bin string, clis []string, version, out, entitlements string) error 
 	// Nested code is signed before the bundle that seals it: codesign refuses
 	// to seal a bundle whose Resources hold an unsigned Mach-O.
 	for _, p := range append(signFirst, out) {
-		cmd := exec.Command("codesign", "--force", "--sign", "-", "--options", "runtime",
-			"--entitlements", entitlements, p)
+		args := []string{"--force", "--sign", "-", "--options", "runtime", "--entitlements", entitlements}
+		if id := signingID(filepath.Base(p)); id != "" {
+			args = append(args, "--identifier", id)
+		}
+		cmd := exec.Command("codesign", append(args, p)...)
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("codesign %s: %v", p, err)
@@ -91,6 +94,22 @@ func bundle(bin string, clis []string, version, out, entitlements string) error 
 	}
 	fmt.Printf("%s: written and signed ad-hoc\n", out)
 	return nil
+}
+
+// signingID is the code-signing identifier of a program the release ships on
+// macOS: the bundle's own executable takes bundleID from Info.plist, and each
+// command-line program is named here so its signature does not carry a bare
+// file name. "" leaves codesign's default.
+func signingID(name string) string {
+	switch name {
+	case "jitllm":
+		return "org.jitllm.cli"
+	case "jitllmd":
+		return "org.jitllm.service"
+	case "jitllm-tui":
+		return "org.jitllm.tui"
+	}
+	return ""
 }
 
 // copyExe copies the executable src to dst, mode 0755.

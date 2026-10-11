@@ -161,7 +161,28 @@ jobs:
             mv checksums.new checksums.txt
             gh release upload "$GITHUB_REF_NAME" "$1" --clobber --repo "$GITHUB_REPOSITORY"
           }
+          signing_id() { # program: its code-signing identifier (ui/cmd/pack signingID)
+            case "$1" in
+              jitllm) echo org.jitllm.cli ;;
+              jitllmd) echo org.jitllm.service ;;
+              jitllm-tui) echo org.jitllm.tui ;;
+              *) echo "signing_id: no identifier for $1" >&2; return 1 ;;
+            esac
+          }
           cd dist
+          # The bare command-line programs carry the same identifiers as the
+          # copies inside the bundle.
+          for archive in jitllm_*_darwin_*.tar.gz jitllmd_*_darwin_*.tar.gz jitllm-tui_*_darwin_*.tar.gz; do
+            prog=${archive%%_*}
+            work=$(mktemp -d)
+            tar -xzf "$archive" -C "$work"
+            codesign --force --options runtime $ts --entitlements "$ent" -s "$id" \
+              --identifier "$(signing_id "$prog")" "$work/$prog"
+            codesign --verify --strict --verbose=2 "$work/$prog"
+            (cd "$work" && tar -czf "$OLDPWD/$archive" -- *)
+            resum "$archive"
+            rm -rf "$work"
+          done
           for archive in jitllm-desktop_*_darwin_*.tar.gz; do
             # jitllm-desktop_<version>_darwin_<arch>.tar.gz
             rest=${archive#jitllm-desktop_}
@@ -176,7 +197,10 @@ jobs:
             for prog in jitllm jitllmd; do
               tar -xzf "${prog}_${ver}_darwin_${arch}.tar.gz" -C "$app/Contents/Resources/bin" "$prog"
             done
-            codesign --force --options runtime $ts --entitlements "$ent" -s "$id" "$app/Contents/Resources/bin/"*
+            for bin in "$app/Contents/Resources/bin/"*; do
+              codesign --force --options runtime $ts --entitlements "$ent" -s "$id" \
+                --identifier "$(signing_id "$(basename "$bin")")" "$bin"
+            done
             codesign --force --options runtime $ts --entitlements "$ent" -s "$id" "$app/Contents/MacOS/"*
             codesign --force --options runtime $ts --entitlements "$ent" -s "$id" "$app"
             codesign --verify --strict --deep --verbose=2 "$app"

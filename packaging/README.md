@@ -26,7 +26,7 @@ checksums.
 bundle:
 
 ```
-jitllm.app/Contents/Info.plist           bundle id org.jitllm.app, version from the tag
+jitllm.app/Contents/Info.plist           bundle id org.jitllm.app (the CLIs inside: org.jitllm.cli, org.jitllm.service; the bare jitllm-tui: org.jitllm.tui), version from the tag
 jitllm.app/Contents/MacOS/jitllm-desktop the desktop app
 jitllm.app/Contents/Resources/jitllm.icns drawn from app.IconAt, the window icon
 jitllm.app/Contents/Resources/bin/jitllm  the CLI
