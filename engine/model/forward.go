@@ -132,6 +132,9 @@ type State struct {
 	// visState is the vision State a text State encodes its pictures in
 	// (Vision), nil until the first picture.
 	visState *State
+	// enc is an encoder segment's run: set on the State an Embedder places
+	// its encoder's blocks through (encdev.go), nil everywhere else.
+	enc *encRun
 	// kvErr is the first page fault of the current step that could not be
 	// recovered. It is set inside a pool closure, which has no error path, and
 	// drained by kvCheck at the entry point.
@@ -878,7 +881,7 @@ func (s *State) Close() error {
 	// placed on gets its room back with the State: its text sessions' blocks
 	// run every token. Through the session view, so another session's hold on
 	// the same blocks keeps them there.
-	if s.vis != nil && s.ld != nil && s.devCount() > 0 {
+	if (s.vis != nil || s.enc != nil) && s.ld != nil && s.devCount() > 0 {
 		s.SetGPULayers(s.lo)
 	}
 	// The session's history on the device goes back to the tier, which keeps
@@ -904,6 +907,10 @@ func (s *State) Close() error {
 				s.m.hostRuns(li, li+1, -1)
 			}
 		}
+	}
+	// An encoder segment's JIT is its Embedder's to close.
+	if s.enc != nil {
+		return nil
 	}
 	// A vision State's prompt buffers are the tower's shape, which no text
 	// State could take; and a JIT it borrowed is the text State's to close.
@@ -988,7 +995,7 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 		}
 	}
 	// A borrowed JIT is the text State's, attached to its device by it.
-	if s.vis == nil || !s.vis.borrowed {
+	if !s.borrowsJIT() {
 		s.jit.SetDevice(d)
 	}
 	s.clearOnDev()
@@ -1087,7 +1094,7 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 		// second State would inherit the first's sample and run the same
 		// token with different kernels
 		// (TestHybridSecondSessionMatchesTheFirst).
-		if s.vis == nil || !s.vis.borrowed {
+		if !s.borrowsJIT() {
 			s.jit.SetDevice(ld)
 		}
 	}
@@ -1401,6 +1408,9 @@ func (s *State) placeHeadOn(name string) bool {
 func (s *State) layerWeightsAt(li int) nn.LayerWeights {
 	if s.vis != nil {
 		return s.visWeights(li)
+	}
+	if s.enc != nil {
+		return s.encWeights(li)
 	}
 	l := &s.m.layers[li]
 	qn, kn := s.qkNorms(li)
@@ -1810,6 +1820,9 @@ func (s *State) planFor(li int) *nn.LayerPlan {
 	plan := s.plan
 	if s.vis != nil {
 		return s.visPlan(li)
+	}
+	if s.enc != nil {
+		return s.encPlan(li)
 	}
 	// The sinks and the mixture biases are resident vectors read at build(),
 	// not page bytes, so asking about them here still needs no page-in.

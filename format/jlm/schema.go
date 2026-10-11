@@ -179,6 +179,15 @@ const (
 	// bias and no activation between them.
 	RoleEmbdDense1 Role = 8
 	RoleEmbdDense2 Role = 9
+	// A decision model's scorer (Laya's): a LayerNorm with bias, a square
+	// projection with bias, GELU, and a projection to one score per row with
+	// bias, read at the option markers.
+	RoleScorerNorm     Role = 10
+	RoleScorerNormBias Role = 11
+	RoleScorer         Role = 12 // [k=n_embd, rows=n_embd]
+	RoleScorerBias     Role = 13
+	RoleScorerOut      Role = 14 // [k=n_embd, rows=1]
+	RoleScorerOutBias  Role = 15
 
 	// Attention, per block.
 	RoleAttnNorm     Role = 16
@@ -478,6 +487,9 @@ var roleNames = map[Role]string{
 	RoleTokenTypes: "token_types", RolePosEmbd: "position_embd",
 	RoleTokenEmbdNorm: "token_embd_norm", RoleTokenEmbdNormBias: "token_embd_norm.bias",
 	RoleEmbdDense1: "embd_dense1", RoleEmbdDense2: "embd_dense2",
+	RoleScorerNorm: "scorer_norm", RoleScorerNormBias: "scorer_norm.bias",
+	RoleScorer: "scorer", RoleScorerBias: "scorer.bias",
+	RoleScorerOut: "scorer_out", RoleScorerOutBias: "scorer_out.bias",
 	RoleAttnOutNorm: "attn_out_norm", RoleAttnOutNormBias: "attn_out_norm.bias",
 	RoleLayerOutNorm: "layer_out_norm", RoleLayerOutNormBias: "layer_out_norm.bias",
 	RoleFFNUpBias: "ffn_up.bias", RoleFFNDownBias: "ffn_down.bias",
@@ -647,6 +659,8 @@ func (r Role) Expanded() bool {
 		// And its embedding stage's vectors. They are dense-block tensors and
 		// always resident anyway; stating their kind keeps the predicate honest.
 		RoleTokenTypes, RoleTokenEmbdNorm, RoleTokenEmbdNormBias,
+		// A decision scorer's norm and biases.
+		RoleScorerNorm, RoleScorerNormBias, RoleScorerBias, RoleScorerOutBias,
 		// The classic block's norm biases (C6), vectors like the norms beside
 		// them. The head's bias is a dense-block tensor and resident anyway.
 		RoleAttnNormBias, RoleFFNNormBias, RoleOutputNormBias, RoleOutputBias,

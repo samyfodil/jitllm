@@ -12,6 +12,7 @@ import (
 
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/convert/gguf"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -94,9 +95,32 @@ func TestEveryModelRunsGenerated(t *testing.T) {
 
 // auditRun is the gate's body for one opened model: an encoder runs its
 // embedder, everything else the three decoder entry points (and its embedder
-// too when the container carries pooling).
+// too when the container carries pooling); a decision model answers a request
+// through its readout first (an encoder's, Laya's, has nothing else to run).
 func auditRun(t *testing.T, m *Model) {
 	t.Helper()
+	if m.Decision() != jlm.DecisionNone {
+		d, err := m.NewDecider(4096)
+		if err != nil {
+			t.Fatalf("NewDecider: %v", err)
+		}
+		state, qs := decisionRequest(t, filepath.Join("testdata", "decision", "support.json"))
+		ans, err := d.Decide(state, qs)
+		d.Close()
+		if err != nil {
+			t.Fatalf("Decide: %v", err)
+		}
+		for i, a := range ans {
+			for _, p := range append([]float64{a.Noul, a.Score, a.Confidence}, a.Probs...) {
+				if math.IsNaN(p) || math.IsInf(p, 0) {
+					t.Fatalf("Decide: question %s answered %v", qs[i].ID, p)
+				}
+			}
+		}
+		if m.enc != nil {
+			return
+		}
+	}
 	ids := []int32{1, 2, 3, 4, 5}
 	if m.IsEmbedding() {
 		e, err := m.NewEmbedder()
@@ -191,6 +215,13 @@ func auditModels(t *testing.T) []auditModel {
 			add(name+" (safetensors)", dir, true)
 		}
 	}
+	// The decision models' files, which sit deeper than one directory down
+	// (laya/gguf/, laya/fixture/) where the glob above does not reach.
+	for _, rel := range auditDecision {
+		if p := testmodels.Path(rel); fileExists(p) {
+			add(rel, p, false)
+		}
+	}
 	for _, rel := range auditHFDirs {
 		if dir := testmodels.Path(rel); fileExists(filepath.Join(dir, "config.json")) {
 			add(rel+" (safetensors)", dir, true)
@@ -203,6 +234,10 @@ func auditModels(t *testing.T) []auditModel {
 // testdata/golden/hf, relative to the model directory: a class whose
 // fixtures carry their own goldens appends them (kimik3_test.go).
 var auditHFDirs []string
+
+// auditDecision is the decision models' GGUFs two directories down; d1's and
+// lev's one directory down are found by the glob.
+var auditDecision = []string{"laya/fixture/laya-fixture.gguf", "laya/gguf/Laya-BF16.gguf"}
 
 // isProjector reads general.architecture, as languageModels does: a vision
 // projector is the wrong input, not missing work.

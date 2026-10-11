@@ -150,6 +150,8 @@ func actCase(t *testing.T, d backend.Device) {
 			return math.Max(v, 0)
 		case kernels.ActSqrtSoftplus:
 			return math.Sqrt(math.Log1p(math.Exp(v)))
+		case kernels.ActGELUErf:
+			return 0.5 * v * (1 + math.Erf(v/math.Sqrt2))
 		}
 		return v / (1 + math.Exp(-v))
 	}

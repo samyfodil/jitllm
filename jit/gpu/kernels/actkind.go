@@ -75,7 +75,20 @@ const (
 	// converter refuses another pair. Substituting SwiGLU is silent below the
 	// bounds and wrong past them.
 	ActSitu
+	// ActGELUErf is GELU as transformers' GELUActivation and torch's default
+	// compute it, 0.5x(1 + erf(x/sqrt 2)), where ActGELU is the tanh
+	// approximation. erf is Abramowitz and Stegun 7.1.26 (absolute error
+	// under 1.5e-7) on |x|, and the product is written
+	// 0.5*((x + |x|) - |x|*q) with q = 1 - erf(|x|/sqrt 2), so a negative x
+	// is the small q times |x| and nothing cancels.
+	ActGELUErf
 )
+
+// GELUErfP and GELUErfA are ActGELUErf's erf: t = 1/(1 + P*z), and
+// 1 - erf(z) = t*(A[0] + t*(A[1] + t*(A[2] + t*(A[3] + t*A[4])))) * exp(-z*z).
+const GELUErfP = float32(0.3275911)
+
+var GELUErfA = [5]float32{0.254829592, -0.284496736, 1.421413741, -1.453152027, 1.061405429}
 
 // SituBeta and SituLinearBeta are the bounds ActSitu bakes.
 const (
@@ -102,11 +115,11 @@ var (
 
 // Ungated is the set an ungated kernel may bake, in code order. It exists so a
 // gate can enumerate the kinds rather than restate them.
-var Ungated = [...]ActKind{ActSiLU, ActGELU, ActQuickGELU, ActReLU2, ActReLU, ActSqrtSoftplus}
+var Ungated = [...]ActKind{ActSiLU, ActGELU, ActQuickGELU, ActReLU2, ActReLU, ActSqrtSoftplus, ActGELUErf}
 
 // Gated is the set a gated kernel (dst = act(dst) combined with up) may bake,
 // for the same reason.
-var Gated = [...]ActKind{ActSiLU, ActGELU, ActSwiGLUOAI, ActIdentity, ActSwiGLUClamp, ActSitu}
+var Gated = [...]ActKind{ActSiLU, ActGELU, ActSwiGLUOAI, ActIdentity, ActSwiGLUClamp, ActSitu, ActGELUErf}
 
 func (k ActKind) String() string {
 	switch k {
@@ -134,6 +147,8 @@ func (k ActKind) String() string {
 		return "sqrt-softplus"
 	case ActSitu:
 		return "situ"
+	case ActGELUErf:
+		return "gelu-erf"
 	}
 	return "act(" + strconv.Itoa(int(k)) + ")"
 }

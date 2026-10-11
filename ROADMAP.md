@@ -389,3 +389,20 @@ for macOS (`packaging/README.md`); neither installs itself yet.
   to Applications" and relaunches from there, so its PATH links and launchd
   agent point at a bundle that stays put.
 - **Linux, if wanted later:** an AppImage, and `.deb`/`.rpm` packages.
+
+## 18. Dense blocks streamed through a device in tiles (an idea to explore)
+
+**Not started.** A dense block larger than every device's whole budget runs on
+the host today, and so does every block a partial placement leaves home. Its
+weights could be cut into page-sized tiles and streamed through a card,
+uploaded double-buffered while the previous tile computes, as the device
+already streams a mixture's routed expert sheets and a session's evicted
+history.
+
+It pays only where a tile is reused across many rows: prefill and wide batched
+steps, where a PCIe stream feeds the tensor cores. Single-sequence decode reads
+each weight once per token, and the host reads its own memory faster than PCIe
+carries it, so that stays home. The choice would be made per step from the
+measured transfer rate against the host's, and the block's home stays on the
+host. The wider prize is GPU prompt speed for the blocks a partial placement
+leaves home, the common case on consumer machines.

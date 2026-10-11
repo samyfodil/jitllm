@@ -23,6 +23,8 @@ func TestEmitActMulMatchesReference(t *testing.T) {
 		switch k {
 		case ActGELU:
 			return refGELU(g) * u
+		case ActGELUErf:
+			return 0.5 * g * (1 + math.Erf(g/math.Sqrt2)) * u
 		case ActIdentity:
 			return g * u
 		case ActSwiGLUOAI:

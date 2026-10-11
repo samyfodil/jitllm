@@ -43,6 +43,10 @@ type encoder struct {
 	blocks   []encBlock
 	rope     *nn.Rope // nomic-bert's rotary, nil for BERT
 	swiglu   bool
+	mb       *modernBERT // ModernBERT's own graph; nil for BERT and nomic-bert
+	// zeros is the bias a LayerNorm without one is handed on a device
+	// (encZeros).
+	zeros []float32
 }
 
 // buildEncoder loads an encoder container. It touches no block page: every
@@ -104,6 +108,14 @@ func buildEncoder(c *jlm.File, m *Model) error {
 	var err error
 	if m.embd, err = get(jlm.RoleTokenEmbd, jlm.DenseBlock); err != nil {
 		return err
+	}
+	if cfg.Arch == jlm.ArchModernBERT.String() {
+		if err := buildModernBERT(c, m, enc); err != nil {
+			return err
+		}
+		m.enc = enc
+		m.layers = make([]layer, m.encBlocks())
+		return nil
 	}
 	if c.Has(jlm.RoleTokenTypes, jlm.DenseBlock, -1) {
 		tt, err := vec(jlm.RoleTokenTypes, jlm.DenseBlock, 0)
@@ -188,6 +200,10 @@ func buildEncoder(c *jlm.File, m *Model) error {
 		return fmt.Errorf("model: %d heads of %d do not make a %d-wide residual", cfg.NHead, cfg.HeadDim, d)
 	}
 	m.enc = enc
+	// One zero entry a block: the encoder's blocks are encBlock's, and the
+	// segment State a device places them through (encdev.go) indexes the
+	// model's block list.
+	m.layers = make([]layer, m.encBlocks())
 	return nil
 }
 
@@ -257,7 +273,26 @@ func (e *Embedder) encode(ids []int32) error {
 		}
 	}
 	scale := float32(1 / math.Sqrt(float64(c.HeadDim)))
-	for li := range enc.blocks {
+	if err := e.devPrepare(n, 0); err != nil {
+		return err
+	}
+	var cs []float32
+	if enc.rope != nil {
+		cs = e.cs[:n*c.NRot]
+	}
+	for li := 0; li < len(enc.blocks); li++ {
+		// A run of placed blocks is one device call over the sequence.
+		if e.onDevice(li) {
+			hi, err := e.devRun(li, len(enc.blocks), n, x, cs, nil)
+			if err != nil {
+				return err
+			}
+			li = hi - 1
+			if e.afterBlock != nil {
+				e.afterBlock(li, x)
+			}
+			continue
+		}
 		if err := m.encPageIn(li); err != nil {
 			return err
 		}
@@ -354,6 +389,11 @@ func (e *Embedder) mm(out []float32, w tensor, x []float32, n int) error {
 		}
 		return nil
 	}
+	// A float matrix (F32, F16, BF16) reads each row once per tile of tokens
+	// on the float GEMM; MatVec per token is the path for a type it declines.
+	if n > 1 && e.jit.MatMulFloat(out, w.typ, w.data, x, w.rows, w.k, n) {
+		return nil
+	}
 	for i := 0; i < n; i++ {
 		if !e.jit.MatVec(out[i*w.rows:(i+1)*w.rows], w.typ, w.data, x[i*w.k:(i+1)*w.k], w.rows, w.k) {
 			return fmt.Errorf("jitllm: no host kernel reads %s (%s, %dx%d) on %s",
@@ -417,7 +457,7 @@ func buildEncoderModel(c *jlm.File, options ...tok.Option) (*Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Pooling == jlm.PoolNone {
+	if cfg.Pooling == jlm.PoolNone && c.Config().Decision == jlm.DecisionNone {
 		return nil, fmt.Errorf("model: %s is an encoder with no pooling; the container "+
 			"says nothing about how to read a vector out of it", cfg.Arch)
 	}

@@ -271,7 +271,7 @@ func EmitSigmoidMulSSE() ([]byte, error) { return emitActKernelSSE(actSigmoid, t
 // temporaries, XMM4/XMM5 the body's.
 func emitActKernelSSE(k ActKind, mul bool) ([]byte, error) {
 	switch k {
-	case ActSiLU, ActGELU, ActQuickGELU, actSigmoid, ActReLU2, ActReLU, ActSqrtSoftplus:
+	case ActSiLU, ActGELU, ActQuickGELU, actSigmoid, ActReLU2, ActReLU, ActSqrtSoftplus, ActGELUErf:
 	case ActSwiGLUOAI, ActIdentity, ActSwiGLUClamp, ActSitu:
 		if !mul {
 			return nil, fmt.Errorf("jit: act/%s: it clamps and offsets `up`, so it exists only gated", k)
@@ -444,6 +444,38 @@ func emitActBodySSE(a *Buf, k ActKind, mul bool, ld func(Reg, Reg), st func(Reg,
 		ld(XMM0, RDX)
 		bound(XMM0, XMM0, 112, 116)
 		a.MULPS(XMM0, XMM0, XMM6)
+	case ActGELUErf:
+		// The AVX2 body's sequence with a multiply and an add for each FMA;
+		// XMM3 and XMM6 carry no hoisted constant for this kind.
+		bcastSS(a, XMM5, At(RBX, 100))
+		a.MOVAPS(XMM3, XMM0)
+		a.ANDPS(XMM3, XMM3, XMM5) // |x|
+		bcastSS(a, XMM5, At(RBX, 180))
+		a.MOVAPS(XMM6, XMM3)
+		a.MULPS(XMM6, XMM6, XMM5) // z
+		a.MOVAPS(XMM5, XMM6)
+		a.MULPS(XMM5, XMM5, XMM6)
+		a.XORPS(XMM4, XMM4, XMM4)
+		a.SUBPS(XMM4, XMM4, XMM5) // -z^2
+		emitExpSSE(a, XMM4, XMM1, XMM2)
+		bcastSS(a, XMM5, At(RBX, 184))
+		a.MULPS(XMM6, XMM6, XMM5)
+		a.ADDPS(XMM6, XMM6, XMM8)
+		a.MOVAPS(XMM5, XMM8)
+		a.DIVPS(XMM5, XMM5, XMM6) // t
+		bcastSS(a, XMM6, At(RBX, 204))
+		for _, off := range []int32{200, 196, 192, 188} {
+			a.MULPS(XMM6, XMM6, XMM5)
+			bcastSS(a, XMM1, At(RBX, off))
+			a.ADDPS(XMM6, XMM6, XMM1)
+		}
+		a.MULPS(XMM6, XMM6, XMM5) // the polynomial times t
+		a.MULPS(XMM6, XMM6, XMM4) // q
+		a.MULPS(XMM6, XMM6, XMM3) // |x| q
+		a.ADDPS(XMM0, XMM0, XMM3) // x + |x|
+		a.SUBPS(XMM0, XMM0, XMM6)
+		bcastSS(a, XMM5, At(RBX, 56))
+		a.MULPS(XMM0, XMM0, XMM5)
 	case ActGELU:
 		// GELU-tanh: z = sqrt(2/pi)*(x + 0.044715x^3), and
 		// 0.5x(1 + tanh z) = 0.5x(2 - 2/(exp(2z)+1)).

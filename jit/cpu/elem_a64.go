@@ -427,6 +427,35 @@ func emitA64ActBody(a *A64, act ActKind, mul bool, ld func(VReg, XReg), st func(
 		ld(6, X3)
 		bound(6, 112, 116)
 		a.FMUL4s(0, 0, 4)
+	case ActGELUErf:
+		// See the amd64 twin: 0.5*((x + |x|) - |x|*q).
+		cst := func(v VReg, off int32) {
+			a.LDRs(v, X5, off)
+			a.DUPs4(v, v)
+		}
+		a.FABS4s(4, 3) // |x|
+		cst(5, 180)
+		a.FMUL4s(6, 4, 5) // z
+		a.FMUL4s(0, 6, 6)
+		a.FNEG4s(0, 0) // -z^2
+		emitA64Exp(a, 0, 1, 2)
+		cst(5, 184)
+		a.FMUL4s(6, 6, 5)
+		a.FADD4s(6, 6, 23)
+		a.FDIV4s(6, 23, 6) // t
+		cst(7, 204)
+		for _, off := range []int32{200, 196, 192, 188} {
+			cst(5, off)
+			a.FMUL4s(7, 7, 6)
+			a.FADD4s(7, 7, 5)
+		}
+		a.FMUL4s(7, 7, 6)
+		a.FMUL4s(7, 7, 0) // q
+		a.FMUL4s(7, 7, 4) // |x| q
+		a.FADD4s(0, 3, 4) // x + |x|
+		a.FSUB4s(0, 0, 7)
+		cst(5, 56)
+		a.FMUL4s(0, 0, 5)
 	default:
 		a.LDRs(5, X5, 44) // 0.044715
 		a.DUPs4(5, 5)

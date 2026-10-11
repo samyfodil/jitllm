@@ -190,6 +190,33 @@ func emitActBody(a *Buf, act ActKind, mul bool, ld func(Reg, Reg), st func(Reg, 
 		ld(Y3, RDX)
 		bound(Y3, 112, 116)
 		a.VMULPS(Y0, Y0, Y6)
+	case ActGELUErf:
+		// 0.5*((x + |x|) - |x|*q), q = 1 - erf(|x|/sqrt 2) by Abramowitz and
+		// Stegun 7.1.26 (kernels.ActGELUErf).
+		a.VBROADCASTSS(Y5, At(RBX, 100)) // the |x| mask
+		a.VPAND(Y4, Y3, Y5)              // |x|
+		a.VBROADCASTSS(Y5, At(RBX, 180)) // 1/sqrt 2
+		a.VMULPS(Y6, Y4, Y5)             // z
+		a.VMULPS(Y0, Y6, Y6)
+		a.VPXOR(Y1, Y1, Y1)
+		a.VSUBPS(Y0, Y1, Y0) // -z^2
+		emitExpPS(a, Y0, Y1, Y2)
+		a.VBROADCASTSS(Y5, At(RBX, 184)) // p
+		a.VMULPS(Y6, Y6, Y5)
+		a.VADDPS(Y6, Y6, Y8)
+		a.VDIVPS(Y6, Y8, Y6)             // t = 1/(1 + p z)
+		a.VBROADCASTSS(Y1, At(RBX, 204)) // a5
+		for _, off := range []int32{200, 196, 192, 188} {
+			a.VBROADCASTSS(Y5, At(RBX, off))
+			a.VFMADD213PS(Y1, Y6, Y5)
+		}
+		a.VMULPS(Y1, Y1, Y6) // the polynomial times t
+		a.VMULPS(Y1, Y1, Y0) // q
+		a.VMULPS(Y1, Y1, Y4) // |x| q
+		a.VADDPS(Y0, Y3, Y4) // x + |x|
+		a.VSUBPS(Y0, Y0, Y1)
+		a.VBROADCASTSS(Y5, At(RBX, 56)) // 0.5
+		a.VMULPS(Y0, Y0, Y5)
 	default:
 		// GELU-tanh. z = k*(x + 0.044715 x^3); the cube is two multiplies and
 		// an FMA rather than a pow.

@@ -5,6 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // A vision tower's set is sized to the picture it encodes.
@@ -295,6 +296,37 @@ func (g *devTier) towerTwins() bool {
 				return false
 			}
 		}
+		// A block's own activation bakes the set's rows too.
+		if l.actK != nil {
+			l.actK.Close()
+			l.actK = nil
+		}
+		if !g.ownActKern(l) {
+			return false
+		}
+	}
+	return true
+}
+
+// ownActKern builds non-causal block l's own activation kernel at the set's
+// rows, where its MLP's gating or activation is not the set's (layer.actK):
+// the set's bs.actMul bakes the first block's. Callers hold g.mu with the
+// non-causal set in use.
+func (g *devTier) ownActKern(l *layer) bool {
+	bs := g.bs
+	if bs == nil || (l.ungated == ungatedFFN(&bs.p) && l.act == bs.p.Act) {
+		return true
+	}
+	k, err := kernels.ActMul(bs.rows*l.nffn, l.act)
+	if l.ungated {
+		k, err = kernels.Act(bs.rows*l.nffn, l.act)
+	}
+	if err == nil {
+		l.actK, err = g.dev.Compile(k)
+	}
+	if err != nil {
+		g.LastErr = fmt.Sprintf("a non-causal block's own %s activation: %v", l.act, err)
+		return false
 	}
 	return true
 }

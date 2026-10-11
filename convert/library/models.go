@@ -284,6 +284,17 @@ var Models = []Model{
 	{Name: "mxbai-embed-large-v1", Title: "mxbai-embed-large v1 (embeddings)", Arch: "bert", Params: "335M",
 		Quant: "F16", Repo: "ChristianAzinn/mxbai-embed-large-v1-gguf", File: "mxbai-embed-large-v1_fp16.gguf",
 		Bytes: 669603712, Note: "A text embedding model: `jitllm embed`, 1024 dims."},
+	// --- decision models: typed answers through `jitllm decide` and
+	// /v1/systemone, not `run` (docs/design/decision-models.md) ---
+	{Name: "laya", Title: "Laya (decision model)", Arch: "modern-bert", Params: "421M", Quant: "BF16",
+		Repo: "ggml-org/Laya-GGUF", File: "Laya-BF16.gguf", Bytes: 844026720,
+		Note: "A decision model: `jitllm decide` or POST /v1/systemone, English."},
+	{Name: "d1-3b", Title: "d1-3B (decision model)", Arch: "lfm2", Params: "3B", Quant: "Q8_0",
+		Repo: "LiquidAI/d1-3B-GGUF", File: "d1-3B-Q8_0.gguf", Bytes: 2874781280,
+		Note: "A decision model: `jitllm decide` or POST /v1/systemone; text states only."},
+	{Name: "lev", Title: "Lev 4B (decision model)", Arch: "qwen35", Params: "4B", Quant: "Q8_0",
+		Repo: "ggml-org/lev-GGUF", File: "lev-Q8_0.gguf", Bytes: 4482405280,
+		Note: "A decision model: `jitllm decide` or POST /v1/systemone; the adapter merged into Qwen3.5-4B."},
 	{Name: "qwen3-embedding-0.6b", Title: "Qwen3-Embedding 0.6B (embeddings)", Arch: "qwen3", Params: "0.6B",
 		Quant: "F16", Repo: "Qwen/Qwen3-Embedding-0.6B-GGUF", File: "Qwen3-Embedding-0.6B-f16.gguf",
 		Bytes: 1197629632, Note: "A text embedding model: `jitllm embed`, 1024 dims, last-token pooled."},
