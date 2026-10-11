@@ -64,6 +64,8 @@ local-*
 /website/dist/
 /website/.astro/
 /website/node_modules/
+# Copied from docs/recipes by website/scripts/recipes.mjs at build time.
+/website/src/content/docs/docs/recipes/
 
 # goreleaser --snapshot output
 /dist/
