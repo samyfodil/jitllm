@@ -23,28 +23,9 @@
 <a href="#memory-and-placement"><img src="docs/assets/readme/experts.gif" width="400" alt="Expert pages: each expert of a mixture is its own page, so a token reads only the routed experts that are not resident"></a>
 </p>
 
-**An operating system for LLM inference: generate the compute for your hardware,
-page models larger than memory, and move execution without losing the conversation.**
-
-[jitllm.org](https://jitllm.org) · [Documentation](https://jitllm.org/docs/) · [Latest release](https://github.com/jitllm/jitllm/releases/latest)
-
-- **Every kernel JIT-generated at load time** for your CPU (AVX2, SSE, NEON)
-  or GPU (CUDA, Vulkan, Metal), specialised to the model's shapes and weight
-  formats. No precompiled kernels or interpreted compute fallback.
-- **Disk, RAM and VRAM form the memory system.** Weights, routed MoE experts
-  and KV state page as needed. Blocks move between CPU and GPUs at run time,
-  carrying their attention and recurrent state with them.
-- **Many sessions share the work.** Continuous batching on the CPU and the GPU
-  shares each weight read across requests, prompts are fed in chunks beside
-  running decodes, and a fairness level (`-fairness 0-100`) time-slices sessions
-  through the card when they do not all fit.
-- **Runs everywhere, depends on nothing.** One binary per platform (Linux, macOS,
-  Windows; x86 and Arm) that finds CUDA, Vulkan or Metal at run time and
-  otherwise runs on the CPU.
-
-Serve it as an **OpenAI- and Anthropic-compatible API** with streaming and tool
-calling from one standalone binary, `jitllmd`, or embed it as a Go library. There
-are [desktop](#desktop-app) and [terminal](#terminal-app) apps too.
+<p align="center"><b>An operating system for LLM inference.</b><br>
+Kernels generated for your hardware, models bigger than memory, and execution
+that moves between CPU and GPUs without losing the conversation.</p>
 
 | Use jitllm for | Start here |
 |---|---|
@@ -99,6 +80,33 @@ One binary, `jitllmd`, many models and many sessions at once:
 - **A control plane**: load and unload models, create, park and resume
   sessions, move blocks between devices (`jitllmd models`, `sessions`,
   `place`, `stats`), and `/metrics` for Prometheus.
+
+## Desktop app
+
+Model downloads, conversion, text and image chat, and a live view of where each
+block of the model sits, in one window. Install it with `| sh -s -- desktop` (or
+take its archive from the Releases page) and run `jitllm-desktop`.
+
+<p align="center">
+<picture><source media="(prefers-color-scheme: light)" srcset="website/public/shots/chat-light.png"><img src="website/public/shots/chat-dark.png" width="400" alt="The desktop app's Chat screen: a reply with its thinking folded, sampling controls, and the rate and bandwidth of the reply"></picture>
+<picture><source media="(prefers-color-scheme: light)" srcset="website/public/shots/machine-light.png"><img src="website/public/shots/machine-dark.png" width="400" alt="The Machine screen: which blocks run on the GPU and which on the CPU, the KV cache, and the pages held in each memory"></picture>
+</p>
+<p align="center">
+<picture><source media="(prefers-color-scheme: light)" srcset="website/public/shots/discover-smartest-light.png"><img src="website/public/shots/discover-smartest-dark.png" width="400" alt="The Discover screen: the catalog ranked for this machine, with an expected rate and whether each model fits"></picture>
+<picture><source media="(prefers-color-scheme: light)" srcset="website/public/shots/models-light.png"><img src="website/public/shots/models-dark.png" width="400" alt="The Models screen: the converted models, each with whether it fits on the GPU, fits in memory or pages from disk"></picture>
+</p>
+
+## Terminal app
+
+The same screens in a terminal, over SSH too, sharing the desktop app's settings
+and chats. The arrow keys move the model's blocks between the CPU and the GPU,
+and the conversation keeps its history across the move. Install it with
+`| sh -s -- tui` and run `jitllm-tui models/qwen3.jlm`.
+
+<p align="center">
+<img src="website/public/shots/tui-chat.png" width="400" alt="The terminal app's Chat screen: Qwen3-30B-A3B answering, the engine panel beside it">
+<img src="website/public/shots/tui-engine.png" width="400" alt="The terminal app's Engine screen: every block and where it runs, the rate over time, memory and the pager">
+</p>
 
 ## Install
 
@@ -182,33 +190,6 @@ docker run -d -p 8080:8080 -v jitllm-models:/models ghcr.io/jitllm/jitllm -load 
 Add `--gpus all` (with the NVIDIA Container Toolkit) to run on an NVIDIA GPU. The image is
 `jitllmd` with the `jitllm` CLI beside it, for linux/amd64 and linux/arm64;
 `docker build -t jitllm .` builds it from a checkout. See [docs/docker.md](docs/docker.md).
-
-### Desktop app
-
-Model downloads, conversion, text and image chat, and a live view of where each
-block of the model sits, in one window. Install it with `| sh -s -- desktop` (or
-take its archive from the Releases page) and run `jitllm-desktop`.
-
-<p align="center">
-<picture><source media="(prefers-color-scheme: light)" srcset="website/public/shots/chat-light.png"><img src="website/public/shots/chat-dark.png" width="400" alt="The desktop app's Chat screen: a reply with its thinking folded, sampling controls, and the rate and bandwidth of the reply"></picture>
-<picture><source media="(prefers-color-scheme: light)" srcset="website/public/shots/machine-light.png"><img src="website/public/shots/machine-dark.png" width="400" alt="The Machine screen: which blocks run on the GPU and which on the CPU, the KV cache, and the pages held in each memory"></picture>
-</p>
-<p align="center">
-<picture><source media="(prefers-color-scheme: light)" srcset="website/public/shots/discover-smartest-light.png"><img src="website/public/shots/discover-smartest-dark.png" width="400" alt="The Discover screen: the catalog ranked for this machine, with an expected rate and whether each model fits"></picture>
-<picture><source media="(prefers-color-scheme: light)" srcset="website/public/shots/models-light.png"><img src="website/public/shots/models-dark.png" width="400" alt="The Models screen: the converted models, each with whether it fits on the GPU, fits in memory or pages from disk"></picture>
-</p>
-
-### Terminal app
-
-The same screens in a terminal, over SSH too, sharing the desktop app's settings
-and chats. The arrow keys move the model's blocks between the CPU and the GPU,
-and the conversation keeps its history across the move. Install it with
-`| sh -s -- tui` and run `jitllm-tui models/qwen3.jlm`.
-
-<p align="center">
-<img src="website/public/shots/tui-chat.png" width="400" alt="The terminal app's Chat screen: Qwen3-30B-A3B answering, the engine panel beside it">
-<img src="website/public/shots/tui-engine.png" width="400" alt="The terminal app's Engine screen: every block and where it runs, the rate over time, memory and the pager">
-</p>
 
 ## Supported models
 
