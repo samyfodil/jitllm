@@ -19,6 +19,10 @@
 <img src="https://img.shields.io/badge/Windows-x86--64%20%7C%20arm64-0078D4" alt="Windows x86-64 and arm64">
 </p>
 
+<p align="center"><b>An operating system for LLM inference.</b><br>
+Generated kernels · models bigger than memory · layers that move mid-conversation</p>
+
+
 <p align="center">
 <a href="https://jitllm.org">jitllm.org</a> ·
 <a href="#quick-start">Get started</a> ·
@@ -35,9 +39,6 @@
 <a href="#how-it-works"><img src="docs/assets/readme/jit.gif" width="400" alt="The JIT: the inner loop of a Q4_K matrix-vector product emitted for an AVX2+VNNI CPU, then for CUDA"></a>
 <a href="#memory-and-placement"><img src="docs/assets/readme/experts.gif" width="400" alt="Expert pages: each expert of a mixture is its own page, so a token reads only the routed experts that are not resident"></a>
 </p>
-
-<p align="center"><b>An operating system for LLM inference.</b><br>
-Generated kernels · models bigger than memory · layers that move mid-conversation</p>
 
 <p align="center">
 <a href="#quick-start">Server</a> ·
