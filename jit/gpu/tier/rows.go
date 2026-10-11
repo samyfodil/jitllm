@@ -1021,6 +1021,77 @@ func (g *devTier) f16Gemm(m mv, ntok int) (mv, bool) {
 	return g.stagedGemm(m, ntok, f16Tiles, k, g.dev.Slots()/16)
 }
 
+// fusedKern is a prompt chunk's fused operand kernel under key, compiled on
+// first use from build, or nil where the generator or the device refuses it
+// -- remembered, so the caller keeps its two launches without asking again.
+func (g *devTier) fusedKern(key ragKey, build func() (*ir.Kernel, error)) backend.Kernel {
+	// A build reached from inside a submission takes g.mu (subLock).
+	defer g.subUnlock(g.subLock())
+	if k, ok := g.ragK[key]; ok {
+		return k
+	}
+	ker, err := build()
+	var c backend.Kernel
+	if err == nil {
+		if c, err = g.dev.Compile(ker); err != nil {
+			c = nil
+		}
+	}
+	if g.ragK == nil {
+		g.ragK = map[ragKey]backend.Kernel{}
+	}
+	g.ragK[key] = c
+	return c
+}
+
+// rmsF16For is the RMSNorm that also writes m's binary16 operand
+// (kernels.RMSNormF16TRows; with add, x+y and its norm as bs.addRms), and
+// the conversion it stands in for: m's batched twin's ActF16T kernel, which
+// the caller names in the conversion memo so the GEMM finds its operand
+// written. nil where m's twin reads int8 (no conversion to save), where the
+// norm is not RMSNorm's one launch, or NoOperandFuse.
+func (g *devTier) rmsF16For(bs *blockScratch, m mv, ntok int, add bool) (norm, conv backend.Kernel) {
+	if g.NoOperandFuse || m.kern == nil || bs.rms == nil || bs.normVar != nil {
+		return nil, nil
+	}
+	bm, ok := g.batchMV(m, ntok, bs.tok)
+	if !ok || bm.act == nil || m.k != bs.p.NEmbd {
+		return nil, nil
+	}
+	kind := "rmsf16t"
+	if add {
+		kind = "addrmsf16t"
+	}
+	p := &bs.p
+	k := g.fusedKern(ragKey{kind: kind, q: bm.q, k: p.NEmbd, rows: bs.rows}, func() (*ir.Kernel, error) {
+		return kernels.RMSNormF16TRows(p.NEmbd, bs.rows, float32(p.RMSEps), false, add, bm.q, g.warpNorm())
+	})
+	if k == nil {
+		return nil, nil
+	}
+	return k, bm.act
+}
+
+// actF16For is the gated activation that writes m's binary16 operand
+// (kernels.ActMulF16T), the conversion it stands in for, and its thread
+// count; nil as rmsF16For.
+func (g *devTier) actF16For(bs *blockScratch, m mv, ntok int) (act, conv backend.Kernel, threads int) {
+	if g.NoOperandFuse || m.kern == nil {
+		return nil, nil, 0
+	}
+	bm, ok := g.batchMV(m, ntok, bs.tok)
+	if !ok || bm.act == nil {
+		return nil, nil, 0
+	}
+	k := g.fusedKern(ragKey{kind: "actmulf16t", q: bm.q, k: m.k, ntok: ntok, act: bs.p.Act}, func() (*ir.Kernel, error) {
+		return kernels.ActMulF16T(bm.q, ntok, m.k, bs.p.Act)
+	})
+	if k == nil {
+		return nil, nil, 0
+	}
+	return k, bm.act, kernels.ActMulF16TThreads(ntok, m.k)
+}
+
 // int8GemmOn reports whether the device lowers GemmInt8, probed once by a
 // compile (the int8 m16n8k32 instruction is sm_80's). Callers hold g.mu.
 func (g *devTier) int8GemmOn() bool {

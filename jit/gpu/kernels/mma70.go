@@ -165,6 +165,73 @@ func ActF16(q Quant, ntok, k int) (*ir.Kernel, error) {
 // permuted halves the same way, so the permutation is fixed at emit time and
 // needs none of ActF16's select chain.
 func ActF16T(q Quant, ntok, k int) (*ir.Kernel, error) {
+	return actF16T(q, ntok, k)
+}
+
+// ActMulF16T is ActMul followed by ActF16T in one launch: each element is
+// act(g) times u as ActMul computes it, packed straight into ActF16T's
+// token-major layout for q, so the gated FFN's float row is neither written
+// nor read again when the down projection is a binary16 GEMM. The same bits
+// as the two kernels. Parameters pG, pU, pB; the same launch as ActF16T.
+//
+// One thread an output word: two elements of one (token, sub-block), so a
+// warp reads and writes contiguous runs and every element is one thread's,
+// where ActF16T's thread a sub-block left an activation's exponentials 16 or
+// 32 deep on one thread. Launch ActMulF16TThreads(ntok, k) threads.
+func ActMulF16T(q Quant, ntok, k int, kind ActKind) (*ir.Kernel, error) {
+	if err := actMulKind(kind); err != nil {
+		return nil, err
+	}
+	if !Volta70OK(q) {
+		return nil, fmt.Errorf("kernels: ActMulF16T: %v has no Volta layout", q)
+	}
+	qi := qtab[q]
+	if k%qi.sub != 0 || qi.sub%8 != 0 {
+		return nil, fmt.Errorf("kernels: ActMulF16T: k=%d is not a multiple of %d", k, qi.sub)
+	}
+	nw := k / 2
+	b := ir.New("actmulf16t", [3]int{128, 1, 1})
+	pG, pU := b.Param("pG", ir.F32), b.Param("pU", ir.F32)
+	pB := b.Param("pB", ir.U32)
+	c := func(v int64) ir.Value { return b.Const(ir.U32, v) }
+	wd := b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID()), c(int64(ntok*nw-1)))
+	t, wt := b.Div(ir.U32, wd, c(int64(nw))), b.Rem(ir.U32, wd, c(int64(nw)))
+	e0, e1 := f16WordElems(b, qi, wt)
+	base := b.Mul(ir.U32, t, c(int64(k)))
+	val := func(e ir.Value) ir.Value {
+		at := b.Add(ir.U32, base, e)
+		return actMulValue(b, kind, b.Load(ir.F32, pG, at, 0), func() ir.Value { return b.Load(ir.F32, pU, at, 0) })
+	}
+	b.Store(pB, wd, b.PackF16(val(e0), val(e1)), 0)
+	return b.Done(), nil
+}
+
+// ActMulF16TThreads is ActMulF16T's launch: one thread an output word.
+func ActMulF16TThreads(ntok, k int) int { return ntok * k / 2 }
+
+// f16WordElems is which two elements of a row, in natural order, output word
+// wt (a row's word index) of ActF16T's layout packs: word 2s+h of a
+// sub-block is step s's slots 2h and 2h+1 (voltaSteps), its sub-block's
+// elements base+h and base+h+2 with base the step's first. Arithmetic on a
+// runtime word, where voltaSteps' elem is a table over compile-time steps.
+func f16WordElems(b *ir.Builder, qi qinfo, wt ir.Value) (e0, e1 ir.Value) {
+	c := func(v int64) ir.Value { return b.Const(ir.U32, v) }
+	half := qi.sub / 2
+	sb := b.Div(ir.U32, wt, c(int64(half)))
+	w := b.Rem(ir.U32, wt, c(int64(half)))
+	s, h := b.Shr(ir.U32, w, c(1)), b.And(ir.U32, w, c(1))
+	var base ir.Value
+	if qi.bits == 8 {
+		base = b.Shl(ir.U32, s, c(2))
+	} else {
+		// (s/2)*4 + (s%2)*sub/2
+		base = b.Add(ir.U32, b.Shl(ir.U32, b.Shr(ir.U32, s, c(1)), c(2)), b.Mul(ir.U32, b.And(ir.U32, s, c(1)), c(int64(qi.sub/2))))
+	}
+	e0 = b.Add(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, sb, c(int64(qi.sub))), base), h)
+	return e0, b.Add(ir.U32, e0, c(2))
+}
+
+func actF16T(q Quant, ntok, k int) (*ir.Kernel, error) {
 	if !Volta70OK(q) {
 		return nil, fmt.Errorf("kernels: ActF16T: %v has no Volta layout", q)
 	}
@@ -172,7 +239,6 @@ func ActF16T(q Quant, ntok, k int) (*ir.Kernel, error) {
 	if k%qi.sub != 0 || qi.sub%8 != 0 {
 		return nil, fmt.Errorf("kernels: ActF16T: k=%d is not a multiple of %d", k, qi.sub)
 	}
-	steps, elem := voltaSteps(qi)
 	nsub := k / qi.sub
 	b := ir.New("actf16t", [3]int{128, 1, 1})
 	pX := b.Param("pX", ir.F32)
@@ -187,7 +253,15 @@ func ActF16T(q Quant, ntok, k int) (*ir.Kernel, error) {
 	for o := 0; o < qi.sub; o += 4 {
 		x = append(x, b.LoadV(ir.F32, pX, in, int64(o), 4)...)
 	}
-	out := b.Mul(ir.U32, tid, c(int64(qi.sub/2)))
+	storeF16T(b, qi, pB, tid, x)
+	return b.Done(), nil
+}
+
+// storeF16T writes one (token, sub-block)'s values x, in natural order, as
+// ActF16T's permuted binary16 words at index tid (t*nsub + sub).
+func storeF16T(b *ir.Builder, qi qinfo, pB, tid ir.Value, x []ir.Value) {
+	steps, elem := voltaSteps(qi)
+	out := b.Mul(ir.U32, tid, b.Const(ir.U32, int64(qi.sub/2)))
 	w := make([]ir.Value, 0, 2*steps)
 	for s := 0; s < steps; s++ {
 		w = append(w, b.PackF16(x[elem(s, 0)], x[elem(s, 1)]), b.PackF16(x[elem(s, 2)], x[elem(s, 3)]))
@@ -195,7 +269,6 @@ func ActF16T(q Quant, ntok, k int) (*ir.Kernel, error) {
 	for o := 0; o < len(w); o += 4 {
 		b.StoreV(pB, out, int64(o), w[o:o+4]...)
 	}
-	return b.Done(), nil
 }
 
 // ActF16TGather is ActF16T of GatherRows: token t of the output reads source

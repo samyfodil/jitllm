@@ -31,6 +31,22 @@ func QuantizeThreads(nb int) int { return nb * 8 }
 // difference is a slightly different int8 near a boundary, which diverges deep
 // models (TestQuantizeOnTheRoundingBoundary).
 func Quantize(k, window int) (*ir.Kernel, error) {
+	return quantize(k, window, nil)
+}
+
+// QuantizeAct is ActMul followed by Quantize in one launch: element i is
+// act(g[i]) * u[i] as ActMul computes it, written to pOut as ActMul writes it,
+// and quantized exactly as Quantize quantizes pOut -- the same bits as the
+// two kernels, without the float row's second read and the second launch.
+// Parameters pG, pU, pOut, pA, pAX; launch QuantizeThreads(k/32) threads.
+func QuantizeAct(k, window int, kind ActKind) (*ir.Kernel, error) {
+	if err := actMulKind(kind); err != nil {
+		return nil, err
+	}
+	return quantize(k, window, &kind)
+}
+
+func quantize(k, window int, kind *ActKind) (*ir.Kernel, error) {
 	if k%32 != 0 {
 		return nil, fmt.Errorf("kernels: Quantize: k=%d is not a multiple of 32", k)
 	}
@@ -46,8 +62,17 @@ func Quantize(k, window int) (*ir.Kernel, error) {
 	if span > quantGroup || quantGroup%span != 0 {
 		return nil, fmt.Errorf("kernels: Quantize: window %d does not tile a %d-thread group", window, quantGroup)
 	}
-	b := ir.New("quantize", [3]int{quantGroup, 1, 1})
-	pX := b.Param("pX", ir.F32)   // activations
+	name := "quantize"
+	if kind != nil {
+		name = "quantizeact"
+	}
+	b := ir.New(name, [3]int{quantGroup, 1, 1})
+	var pX, pG, pU, pOut ir.Value
+	if kind == nil {
+		pX = b.Param("pX", ir.F32) // activations
+	} else {
+		pG, pU, pOut = b.Param("pG", ir.F32), b.Param("pU", ir.F32), b.Param("pOut", ir.F32)
+	}
 	pA := b.Param("pA", ir.U32)   // packed int8, 4 per word
 	pAX := b.Param("pAX", ir.F32) // [scale(nb) | sum16(2nb)]
 	shMax := b.Shared("amax", ir.F32, quantGroup)
@@ -64,7 +89,13 @@ func Quantize(k, window int) (*ir.Kernel, error) {
 	base := b.Mul(ir.U32, word, b.Const(ir.U32, 4))
 	var v [4]ir.Value
 	for i := range v {
-		v[i] = b.Load(ir.F32, pX, base, int64(i))
+		if kind == nil {
+			v[i] = b.Load(ir.F32, pX, base, int64(i))
+			continue
+		}
+		at := b.Add(ir.U32, base, b.Const(ir.U32, int64(i)))
+		v[i] = actMulValue(b, *kind, b.Load(ir.F32, pG, at, 0), func() ir.Value { return b.Load(ir.F32, pU, at, 0) })
+		b.Store(pOut, at, v[i], 0)
 	}
 	b.Store(shMax, b.TID(), amaxOf(b, v[:]), 0)
 	b.Barrier()
@@ -207,7 +238,30 @@ func RMSNormQuantRows(k, rows int, eps float32, addOne, add bool, window int) (*
 	return rmsNormRows(k, rows, eps, addOne, add, max(window, 32), false)
 }
 
+// RMSNormF16TRows is RMSNormRows (RMSNormRowsWarp with warp) that also
+// writes what ActF16T(q, rows, k) would write from its output: the normed
+// rows as q's token-major binary16 operand, into pB after pOut. One launch
+// where a binary16 GEMM's prompt chunk took two, with the same bits: the
+// second phase recomputes each sub-block's values with the norm's own
+// arithmetic, as RMSNormQuantRows does (RULE 13).
+func RMSNormF16TRows(k, rows int, eps float32, addOne, add bool, q Quant, warp bool) (*ir.Kernel, error) {
+	if !Volta70OK(q) {
+		return nil, fmt.Errorf("kernels: RMSNormF16TRows: %v has no binary16 layout", q)
+	}
+	qi := qtab[q]
+	if k%qi.sub != 0 || qi.sub%8 != 0 {
+		return nil, fmt.Errorf("kernels: RMSNormF16TRows: k=%d is not a multiple of %d", k, qi.sub)
+	}
+	return rmsNormRowsAs(k, rows, eps, addOne, add, 0, warp, &qi)
+}
+
 func rmsNormRows(k, rows int, eps float32, addOne, add bool, window int, warp bool) (*ir.Kernel, error) {
+	return rmsNormRowsAs(k, rows, eps, addOne, add, window, warp, nil)
+}
+
+// rmsNormRowsAs is the RMSNorm family's one emitter: window > 0 adds the
+// quantize phase, f16 the binary16 operand phase in that format's layout.
+func rmsNormRowsAs(k, rows int, eps float32, addOne, add bool, window int, warp bool, f16 *qinfo) (*ir.Kernel, error) {
 	if k < 1 || rows < 1 {
 		return nil, fmt.Errorf("kernels: RMSNormRows: k=%d rows=%d", k, rows)
 	}
@@ -215,6 +269,9 @@ func rmsNormRows(k, rows int, eps float32, addOne, add bool, window int, warp bo
 	name := "rmsnormrows"
 	if window > 0 {
 		name = "rmsnormquant"
+	}
+	if f16 != nil {
+		name = "rmsnormf16t"
 	}
 	if warp {
 		name += "w"
@@ -230,10 +287,13 @@ func rmsNormRows(k, rows int, eps float32, addOne, add bool, window int, warp bo
 		pSum = b.Param("pSum", ir.F32)
 	}
 	pOut := b.Param("pOut", ir.F32)
-	var pA, pAX, shMax, shSum ir.Value
+	var pA, pAX, shMax, shSum, pB ir.Value
 	if window > 0 {
 		pA = b.Param("pA", ir.U32)
 		pAX = b.Param("pAX", ir.F32)
+	}
+	if f16 != nil {
+		pB = b.Param("pB", ir.U32)
 	}
 	part := b.Shared("ss", ir.F32, g)
 	if window > 0 {
@@ -316,6 +376,28 @@ func rmsNormRows(k, rows int, eps float32, addOne, add bool, window int, warp bo
 	if window > 0 {
 		quantPhase(b, k, rows, window, r, tid, scale, pW, pA, pAX, shMax, shSum, addOne,
 			func(idx ir.Value) ir.Value { return value(idx, false) })
+	}
+	if f16 != nil {
+		// Output word wd of row r is thread tid's in iteration j, wd = tid +
+		// j*g, clamped to the row's last: a surplus thread writes the last
+		// word again, the same bits to the same place. A word is two elements
+		// (f16WordElems), so every thread of the group has one.
+		nw := k / 2
+		lastW := b.Const(ir.U32, int64(nw-1))
+		b.Loop(int64((nw + g - 1) / g))
+		i3 := b.Phi(ir.U32, tid)
+		wd := b.Min(ir.U32, i3, lastW)
+		e0, e1 := f16WordElems(b, *f16, wd)
+		x := func(idx ir.Value) ir.Value {
+			w := b.Load(ir.F32, pW, idx, 0)
+			if addOne {
+				w = b.Add(ir.F32, w, b.ConstF32(1))
+			}
+			return b.Mul(ir.F32, b.Mul(ir.F32, value(idx, false), scale), w)
+		}
+		b.Store(pB, b.Add(ir.U32, b.Mul(ir.U32, r, b.Const(ir.U32, int64(nw))), wd), b.PackF16(x(e0), x(e1)), 0)
+		b.SetPhi(i3, b.Add(ir.U32, i3, step))
+		b.EndLoop()
 	}
 	return b.Done(), nil
 }
@@ -440,10 +522,8 @@ func NormApplyRows(k, parts int, eps float32, addOne bool, rows int) (*ir.Kernel
 // tanh(z) is built as 1 - 2/(exp(2z)+1) because the IR has no tanh on all
 // three backends.
 func ActMul(n int, k ActKind) (*ir.Kernel, error) {
-	switch k {
-	case ActSiLU, ActGELU, ActSwiGLUOAI, ActIdentity, ActSwiGLUClamp, ActSitu:
-	default:
-		return nil, fmt.Errorf("kernels: ActMul: %v is not a gated activation", k)
+	if err := actMulKind(k); err != nil {
+		return nil, err
 	}
 	b := ir.New("actmul", [3]int{128, 1, 1})
 	pG := b.Param("pG", ir.F32)
@@ -451,24 +531,37 @@ func ActMul(n int, k ActKind) (*ir.Kernel, error) {
 	pOut := b.Param("pOut", ir.F32)
 	i := b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID()),
 		b.Const(ir.U32, int64(n-1)))
-	g := b.Load(ir.F32, pG, i, 0)
-	if k == ActSwiGLUOAI {
+	b.Store(pOut, i, actMulValue(b, k, b.Load(ir.F32, pG, i, 0), func() ir.Value { return b.Load(ir.F32, pU, i, 0) }), 0)
+	return b.Done(), nil
+}
+
+// actMulKind refuses an activation ActMul has no gated form of.
+func actMulKind(k ActKind) error {
+	switch k {
+	case ActSiLU, ActGELU, ActSwiGLUOAI, ActIdentity, ActSwiGLUClamp, ActSitu:
+		return nil
+	}
+	return fmt.Errorf("kernels: ActMul: %v is not a gated activation", k)
+}
+
+// actMulValue is ActMul's element: act(g) times u, u loaded by up when it is
+// needed. ActMul, QuantizeAct and ActMulF16T share it, so their elements are
+// the same bits.
+func actMulValue(b *ir.Builder, k ActKind, g ir.Value, up func() ir.Value) ir.Value {
+	switch k {
+	case ActSwiGLUOAI:
 		lim := b.ConstF32(7)
 		a := act(b, b.Min(ir.F32, g, lim), ActQuickGELU)
-		u := b.Load(ir.F32, pU, i, 0)
+		u := up()
 		u = b.Add(ir.F32, b.Max(ir.F32, b.Min(ir.F32, u, lim), b.ConstF32(-7)), b.ConstF32(1))
-		b.Store(pOut, i, b.Mul(ir.F32, a, u), 0)
-		return b.Done(), nil
-	}
-	if k == ActSwiGLUClamp {
+		return b.Mul(ir.F32, a, u)
+	case ActSwiGLUClamp:
 		// DeepSeek V4: x = min(gate, 10), y = clamp(up, -10, 10), silu(x)*y.
 		lim := b.ConstF32(10)
 		a := act(b, b.Min(ir.F32, g, lim), ActSiLU)
-		u := b.Max(ir.F32, b.Min(ir.F32, b.Load(ir.F32, pU, i, 0), lim), b.ConstF32(-10))
-		b.Store(pOut, i, b.Mul(ir.F32, a, u), 0)
-		return b.Done(), nil
-	}
-	if k == ActSitu {
+		u := b.Max(ir.F32, b.Min(ir.F32, up(), lim), b.ConstF32(-10))
+		return b.Mul(ir.F32, a, u)
+	case ActSitu:
 		// Kimi-K3: c*tanh(x/c) at both bounds, the gate's times sigma(gate),
 		// the tanh the host tiers' rational (TanhClamp).
 		one := b.ConstF32(1)
@@ -477,13 +570,10 @@ func ActMul(n int, k ActKind) (*ir.Kernel, error) {
 		}
 		sig := b.Div(ir.F32, one, b.Add(ir.F32, one, b.Exp(b.Sub(ir.F32, b.ConstF32(0), g))))
 		a := b.Mul(ir.F32, bound(g, SituBeta), sig)
-		u := bound(b.Load(ir.F32, pU, i, 0), SituLinearBeta)
-		b.Store(pOut, i, b.Mul(ir.F32, a, u), 0)
-		return b.Done(), nil
+		return b.Mul(ir.F32, a, bound(up(), SituLinearBeta))
 	}
 	a := act(b, g, k)
-	b.Store(pOut, i, b.Mul(ir.F32, a, b.Load(ir.F32, pU, i, 0)), 0)
-	return b.Done(), nil
+	return b.Mul(ir.F32, a, up())
 }
 
 // ActMulWeighted is ActMul for a mixture that weights each expert's input

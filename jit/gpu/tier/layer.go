@@ -1549,7 +1549,10 @@ type blockScratch struct {
 	ropeTable              backend.Kernel
 	ropeNPairs             int
 	quantE, quantF, quantQ backend.Kernel
-	normPart, normApply    backend.Kernel
+	// quantAct is ActMul and quantF in one launch (kernels.QuantizeAct), nil
+	// for an ungated FFN or an activation ActMul has no gated form of.
+	quantAct            backend.Kernel
+	normPart, normApply backend.Kernel
 	// A vision block normalises with LayerNorm, which is three kernels: the mean,
 	// the variance about it, then the apply. The passes cannot fuse because
 	// E[x^2]-E[x]^2 cancels in f32 on a ViT residual whose mean dwarfs its
@@ -4134,6 +4137,16 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	jobs := []job{
 		{&bs.quantE, func() (*ir.Kernel, error) { return kernels.Quantize(rows*p.NEmbd, actWin) }},
 		{&bs.quantF, func() (*ir.Kernel, error) { return kernels.Quantize(rows*p.NFFN, actWin) }},
+		{&bs.quantAct, func() (*ir.Kernel, error) {
+			if ungatedFFN(p) || p.NFFN == 0 {
+				return nil, nil
+			}
+			// Optional: an activation with no gated form keeps two launches.
+			if k, err := kernels.QuantizeAct(rows*p.NFFN, actWin, p.Act); err == nil {
+				return k, nil
+			}
+			return nil, nil
+		}},
 		// Quantize bakes its element count, so the gated delta output
 		// (VHeads*VDim wide, not NFFN) and the attention output (nHead*headDim,
 		// not NEmbd) each get their own quantizer. Borrowing a kernel of another
@@ -6970,7 +6983,19 @@ func (g *devTier) layersSession(s backend.Session) {
 					ain = g.k3AttnIn(lc, bs, l, R)
 				}
 				if voltaOnly && !skip["norm"] {
-					norm(ain, l.nAttn, l.nAttnB)
+					// The norm writes the first projection's binary16 operand
+					// too, and the memo tells its GEMM so.
+					nk, conv := backend.Kernel(nil), backend.Kernel(nil)
+					if l.nAttnB == nil && l.nAttn != nil && l.altRouter == nil {
+						nk, conv = g.rmsF16For(bs, l.mvq, R, false)
+					}
+					if nk != nil {
+						laRows(nk, ain, l.nAttn, bs.h, g.f16Buf)
+						actMemoK, actMemoSrc = conv, bs.h
+						g.NormF16++
+					} else {
+						norm(ain, l.nAttn, l.nAttnB)
+					}
 					fsrc = bs.h
 					g.QuantSkipped++
 				} else if !skip["norm"] && !skip["quant"] && bs.rmsQ != nil && bs.normVar == nil && l.nAttnB == nil &&
@@ -7543,6 +7568,16 @@ func (g *devTier) layersSession(s backend.Session) {
 
 			// --- feed-forward
 			quantDone := false
+			// The FFN norm's fused form where the block runs binary16 GEMMs:
+			// it writes the first FFN projection's operand too.
+			var ffnNorm, ffnConv backend.Kernel
+			if voltaOnly && l.nFFN != nil {
+				first := l.mvg
+				if first.kern == nil {
+					first = l.mvu
+				}
+				ffnNorm, ffnConv = g.rmsF16For(bs, first, R, true)
+			}
 			switch {
 			case l.k3 != nil:
 				// Kimi-K3: every stream after the attention, then the FFN's
@@ -7585,6 +7620,12 @@ func (g *devTier) layersSession(s backend.Session) {
 				laRows(bs.addRmsQ, bs.x, aout, l.nFFN, bs.x2, bs.h, bs.a, bs.ax)
 				fsrc = bs.h // what la records for a quantize: float weights read it
 				quantDone = true
+			case voltaOnly && !attnFused && !scaled && !skip["add"] && !skip["norm"] && bs.addRms != nil &&
+				bs.normVar == nil && l.nFFNB == nil && aout != bs.h && l.nFFN != nil && ffnNorm != nil:
+				// The same launch, writing the gate's binary16 operand too.
+				laRows(ffnNorm, bs.x, aout, l.nFFN, bs.x2, bs.h, g.f16Buf)
+				actMemoK, actMemoSrc = ffnConv, bs.h
+				g.NormF16++
 			case !attnFused && !scaled && !skip["add"] && !skip["norm"] && bs.addRms != nil &&
 				bs.normVar == nil && l.nFFNB == nil && aout != bs.h && l.nFFN != nil:
 				// x2 = x + attention and h = RMSNorm(x2), one launch; not when aout
@@ -7962,7 +8003,25 @@ func (g *devTier) layersSession(s backend.Session) {
 				if !gated && l.clampB == nil {
 					mvrun(l.mvu, l.up, bs.u)
 				}
-				if !skip["actmul"] && !gated {
+				// The activation writes the down projection's operand where it
+				// can: binary16 for a binary16 GEMM, int8 for the rest.
+				var actConv backend.Kernel
+				quantDoneF := false
+				if !skip["actmul"] && !gated && !ungated && l.clampB == nil {
+					if voltaOnly {
+						if ak, conv, n := g.actF16For(bs, l.mvd, R); ak != nil {
+							lc.la(ak, n, gIn, uIn, g.f16Buf)
+							actConv = conv
+							g.ActF16Fused++
+						}
+					} else if bs.quantAct != nil && !skip["quantf"] && !g.NoOperandFuse {
+						lc.la(bs.quantAct, kernels.QuantizeThreads(R*p.NFFN/32), gIn, uIn, bs.act, bs.a, bs.ax)
+						fsrc = bs.act
+						quantDoneF = true
+						g.QuantActs++
+					}
+				}
+				if !skip["actmul"] && !gated && actConv == nil && !quantDoneF {
 					if ungated && l.xielu != nil {
 						// Apertus: the block's four numbers ride as a buffer.
 						lc.la(bs.actMul, R*p.NFFN, bs.u, l.xielu, bs.act)
@@ -7976,11 +8035,14 @@ func (g *devTier) layersSession(s backend.Session) {
 				if voltaOnly {
 					fsrc = bs.act
 					g.QuantSkipped++
-				} else if l.clampB != nil {
+					if actConv != nil {
+						actMemoK, actMemoSrc = actConv, bs.act
+					}
+				} else if l.clampB != nil && !quantDoneF {
 					lc.la(bs.clampK[12], R*p.NFFN, bs.act, l.clampB, bs.cin)
 					lc.la(bs.quantF, kernels.QuantizeThreads(R*p.NFFN/32), bs.cin, bs.a, bs.ax)
 					fsrc = bs.cin
-				} else if !skip["quantf"] {
+				} else if !skip["quantf"] && !quantDoneF {
 					lc.la(bs.quantF, kernels.QuantizeThreads(R*p.NFFN/32), bs.act, bs.a, bs.ax)
 				}
 				if l.clampB == nil && l.nPostFFN == nil && !resScaled && !skip["add"] && l.k3 == nil && mvres(l.mvd, l.down, bs.x, bs.x2) {
