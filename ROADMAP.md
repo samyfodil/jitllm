@@ -390,34 +390,3 @@ carries it, so that stays home. The choice would be made per step from the
 measured transfer rate against the host's, and the block's home stays on the
 host. The wider prize is GPU prompt speed for the blocks a partial placement
 leaves home, the common case on consumer machines.
-
-## 19. Agent friendliness
-
-**Partly there:** `llms.txt`, one rules file (`AGENTS.md`), a generated model
-list CI holds to the converter, and a model-free suite that reports a missing
-model or device as a skip. Left, in order:
-
-1. **A capability manifest, machine-readable and tied to the build:**
-   architectures, input and quantization formats, projectors, backends
-   (implemented apart from verified), API fields and their limits, and the
-   feature combinations that are refused. Generated from code where it can be,
-   validated where it cannot; the docs and a runtime query read the same file.
-2. **Tested integration recipes:** first request, an OpenAI-compatible client,
-   tools and structured output, choosing and converting a checkpoint, memory
-   budgets and placement, diagnosing a slow or failed request. Each with
-   prerequisites, commands, expected output and recovery, run in CI where it
-   can be.
-3. **`jitllm doctor --json`:** version and revision, devices and usable
-   backends, memory and limits, container compatibility, and the next action
-   for whatever is missing; consistent exit codes and structured errors across
-   commands.
-4. **A task-to-check map:** a changed subsystem to the checks, fixtures and
-   devices it needs, run by a wrapper that reports missing hardware apart from a
-   pass.
-5. **Documentation retrievable in pieces:** Markdown beside every rendered page,
-   stable links, documentation per release, routes for using, operating and
-   contributing.
-6. **Measured agent success:** fresh agents through representative tasks
-   (start a CPU server, connect a client, spot an unsupported model, diagnose a
-   placement, fix a small server bug), tracking completion, time and whether
-   the required checks ran, repeated after each change to the above.
