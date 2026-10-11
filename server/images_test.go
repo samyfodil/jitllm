@@ -115,7 +115,7 @@ func TestImagePolicyRefusals(t *testing.T) {
 	small := testPNG(t, 4, 4, color.Black)
 	cases := []struct {
 		name, url, want string
-		p           ImagePolicy
+		p               ImagePolicy
 	}{
 		{"not base64", "data:image/png;base64,@@@@", "not valid base64", p},
 		{"unsupported type", dataURL("image/bmp", small), `"image/bmp"`, p},
