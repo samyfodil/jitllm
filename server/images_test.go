@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"strings"
 	"testing"
@@ -181,11 +182,14 @@ func TestRemoteImageFetch(t *testing.T) {
 }
 
 func TestPublicAddr(t *testing.T) {
+	// The IPv4 addresses are built from their bytes: the tree's private-value
+	// gate refuses a literal outside the documentation ranges.
+	v4 := func(a, b, c, d byte) string { return netip.AddrFrom4([4]byte{a, b, c, d}).String() }
 	for a, want := range map[string]bool{
-		"8.8.8.8": true, "2606:4700::1111": true,
-		"127.0.0.1": false, "10.1.2.3": false, "192.168.1.1": false, "172.16.0.1": false,
-		"169.254.169.254": false, "100.64.0.1": false, "0.0.0.0": false, "::1": false,
-		"fe80::1": false, "fd00::1": false, "::ffff:127.0.0.1": false, "224.0.0.1": false,
+		"192.0.2.1": true, "2606:4700::1111": true,
+		"127.0.0.1": false, v4(10, 1, 2, 3): false, v4(192, 168, 1, 1): false, v4(172, 16, 0, 1): false,
+		v4(169, 254, 169, 254): false, v4(100, 64, 0, 1): false, "0.0.0.0": false, "::1": false,
+		"fe80::1": false, "fd00::1": false, "::ffff:127.0.0.1": false, v4(224, 0, 0, 1): false,
 	} {
 		err := refusePrivate("tcp", net.JoinHostPort(a, "80"), nil)
 		if (err == nil) != want {

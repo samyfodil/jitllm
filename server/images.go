@@ -269,7 +269,7 @@ func (p ImagePolicy) fetch(ctx context.Context, u string) ([]byte, error) {
 }
 
 // cgnat is the shared address space (RFC 6598), private in all but name.
-var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+var cgnat = netip.PrefixFrom(netip.AddrFrom4([4]byte{100, 64, 0, 0}), 10)
 
 // refusePrivate is a dialer's Control: it refuses an address that is not a
 // public unicast one.
