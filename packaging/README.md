@@ -47,7 +47,7 @@ The app (`ui/install`, `ui/screen/cli.go`):
   `~/.local/bin` if the prompt is declined;
 - **Settings > Command line** links and unlinks them, and **Start the server
   at login** installs or removes the launchd user agent
-  `~/Library/LaunchAgents/org.jitllm.app.service.plist`, which
+  `~/Library/LaunchAgents/org.jitllm.service.plist`, which
   runs `jitllmd serve -addr 127.0.0.1:8080 -models <first model folder>`,
   restarting it if it crashes, logging to `~/Library/Logs/jitllm/jitllmd.log`.
 

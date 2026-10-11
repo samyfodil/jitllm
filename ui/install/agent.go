@@ -14,7 +14,7 @@ import (
 
 // AgentLabel names the launchd user agent that starts jitllmd at login. It
 // is the app's bundle identifier (ui/cmd/pack) with the program's name.
-const AgentLabel = "org.jitllm.app.service"
+const AgentLabel = "org.jitllm.service"
 
 // AgentAddr is where the agent's jitllmd listens: loopback only, as the app's
 // own API defaults to, and on the same port, so the two are not both on --
