@@ -43,6 +43,16 @@ func TestDeclineSizeRefusesOnlyWhatNoDeviceHolds(t *testing.T) {
 	if why := g.DeclineSize(4, 16*gib, 15*gib); why == "" {
 		t.Fatal("marking block 3 streamed let block 4 through")
 	}
+	// A dense block (no routed bank) is refused for its size alone: the
+	// reason names neither experts nor a streaming placement.
+	dense := g.DeclineSize(4, 16*gib, 0)
+	if !strings.Contains(dense, "above every device's whole budget") ||
+		strings.Contains(dense, "expert") || strings.Contains(dense, "stream") {
+		t.Fatalf("a dense block's reason: %q", dense)
+	}
+	if moe := g.DeclineSize(4, 16*gib, 15*gib); !strings.Contains(moe, "routed experts") {
+		t.Fatalf("a mixture block's reason lost its experts: %q", moe)
+	}
 	if why := mk().DeclineSize(0, 16*gib, 0); why != "" {
 		t.Fatalf("a tier with no devices refused: %q", why)
 	}
