@@ -115,7 +115,14 @@ func TestTheMemCacheRestoresAndAnswersAsAColdPrefill(t *testing.T) {
 				return ttftEngine(t, a.model, cfg, LoadOptions{})
 			}
 			cold, clm := open(Config{NoMemCache: true})
-			warm, wlm := open(Config{})
+			// The cache's bound is named, not left to follow the host: by
+			// default it is an eighth of what the host has free at each
+			// generate (storeLimit), and on a box short of memory -- the
+			// model-free suite running every package at once under its cap --
+			// that fell below one prompt's pages, evicted them, and request 1
+			// restored nothing. The starved host below holds the test to it.
+			warm, wlm := open(Config{MemCacheBytes: 64 << 20})
+			warm.hostAvail = func() uint64 { return 64 << 10 }
 			if wlm.ttft.store == nil || clm.ttft.store != nil {
 				t.Fatal("NoMemCache did not select the arms: the store is on in both or neither")
 			}
