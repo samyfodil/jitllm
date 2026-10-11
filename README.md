@@ -246,10 +246,9 @@ is. The choice here is practical:
   there is no C toolchain or vendor SDK per target.
 - **It compiles fast, so experiments are fast.** Most of this engine was found
   by trying an idea and measuring it.
-- **It is built for servers.** Goroutines, channels and the standard
-  library's HTTP stack carry `jitllmd`'s many sessions, the step loop that
-  batches them and the fairness that time-slices them, in one process with no
-  framework. The server reaches the first token up to 5.8x sooner than vLLM
+- **It is built for servers.** Go's high-performance networking and
+  synchronization let `jitllmd` serve many sessions at once, batch them in one
+  step loop and time-slice them fairly, in one process with no framework. The server reaches the first token up to 5.8x sooner than vLLM
   on the same card, and a warm decode token allocates nothing, so the
   collector never touches the hot path.
 
