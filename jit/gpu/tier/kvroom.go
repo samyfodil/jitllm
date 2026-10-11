@@ -105,7 +105,13 @@ func (g *devTier) prewarmKV(positions int) {
 		// At least a doubling, so growKVLayer grows to exactly this and asks
 		// for no more room than room() was asked for.
 		want := max(l.n+pages-len(l.free), 2*l.n)
-		if want > kp.maxPages(l) || !g.room(kp.pageBytes(l)*uint64(want)) || !g.keepsSlot(kp.pageBytes(l)*uint64(want-l.n)) {
+		// The room left must also hold another scratch as large as every
+		// one built so far: a step's batched scratch is built when the rows
+		// arrive, and pages grown ahead and then filled by histories would
+		// refuse it every step (an olmoe step on a 4 GB card did). Where that
+		// is not left, the pools stay at their first frame.
+		if want > kp.maxPages(l) || !g.room(kp.pageBytes(l)*uint64(want)+g.scratch) ||
+			!g.keepsSlot(kp.pageBytes(l)*uint64(want-l.n)) {
 			continue
 		}
 		before := l.n
