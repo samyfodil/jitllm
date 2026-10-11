@@ -19,7 +19,10 @@ func relocationModel(t *testing.T) (*Model, []int32, uint64) {
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
-	m, err := Open(p)
+	// No KV prewarm: these gates squeeze the budget to what attaching
+	// spends and need the history's growth to outrun it, which pages grown
+	// ahead into the attach's room would cover.
+	m, err := Open(p, WithKVPrewarm(false))
 	if err != nil {
 		t.Fatal(err)
 	}

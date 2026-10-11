@@ -159,7 +159,9 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
-	m, err := Open(jlmOf(t, p), append([]Option{noGEMM, noTune}, mopts...)...)
+	// No KV prewarm: the squeezed arm measures what attaching spends and
+	// needs the rows' growth to outrun it, which pages grown ahead would cover.
+	m, err := Open(jlmOf(t, p), append([]Option{noGEMM, noTune, WithKVPrewarm(false)}, mopts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

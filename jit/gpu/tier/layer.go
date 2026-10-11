@@ -9162,7 +9162,9 @@ func (g *devTier) prepBatch(width int) bool {
 		// reserved width (batchFor) or narrower submissions. Without the
 		// reservation the device asks the card, as it did before it. Nor
 		// may it take the history admitted rows were promised (PromiseKV).
-		if !g.NoScratchReserve && !g.room(g.promisedBytes()) && width != g.promptW && width != g.stepW && !g.reserving {
+		// Free pool pages are not a reservation (PrewarmKV grows them into
+		// whatever room placement left): they are given back first.
+		if !g.NoScratchReserve && !g.kvCompact(g.promisedBytes(), nil) && width != g.promptW && width != g.stepW && !g.reserving {
 			g.dropBatch(width)
 			g.ScratchRefused++
 			g.LastErr = fmt.Sprintf("a %d-row batched scratch does not fit the budget (%d of %d bytes charged)", width, g.used, g.limit)
