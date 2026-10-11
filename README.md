@@ -49,6 +49,27 @@ JIT kernels that match your hardware · paging so big models still run · auto-t
 <a href="docs/embedding-go.md">Embed</a>
 </p>
 
+## Why jitllm
+
+Inference engines are bulky and rigid. There's a lot to set up, and even after
+you get a model running, getting the most out of your hardware is another job.
+
+I wanted to build something easier to live with: one binary you can drop onto a
+machine and start running models. Something that does more of the work of
+figuring out the hardware itself.
+
+The inspiration came from operating systems and JIT compilers, two things I've
+worked on a lot. An OS detects hardware, uses the right drivers, schedules
+processes, and manages memory. A JIT compiler generates code for the machine
+it's running on. jitllm brings those ideas together to make inference faster,
+easier to run, and more flexible.
+
+That's why I call it an operating system for LLM inference. It detects your CPUs
+and GPUs, generates optimized kernels, and orchestrates model placement at
+runtime. Models larger than memory page from disk. Layers can move between
+devices while keeping their conversation state, so changing placement doesn't
+mean starting over.
+
 <a id="the-five-principles"></a>
 <a id="how-it-works"></a>
 <a id="memory-and-placement"></a>
