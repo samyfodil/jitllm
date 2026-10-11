@@ -273,7 +273,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends xvfb xauth mesa-vulkan-drivers imagemagick
           export VK_DRIVER_FILES
-          VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
+          VK_DRIVER_FILES=$(find /usr/share/vulkan/icd.d -name "lvp_icd*.json" | head -1)
           xvfb-run -a -s "-screen 0 1440x900x24" ../.github/scripts/ui-smoke.sh ./jitllm-ui smoke
       - uses: actions/upload-artifact@v7
         if: runner.os == 'Linux' && always()

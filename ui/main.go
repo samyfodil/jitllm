@@ -7,6 +7,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -38,12 +39,24 @@ func register(sh *app.Shell, d screen.Deps) {
 	sh.OnFilesDropped(func(paths []string) { screen.DropFiles(sh, paths) })
 }
 
-// version is the release's, set by the linker.
+// version is the release's, set by the linker (-X main.version).
 var version = "dev"
 
 func main() {
 	mockMode := flag.Bool("mock", false, "run against package mock: no model, no GPU, fixtures only")
+	showVersion := flag.Bool("version", false, "print the version and exit, opening no window")
 	flag.Parse()
+	if *showVersion {
+		// Before the log moves to a file: a portable copy is checked by
+		// running it with -version, which must answer on standard output.
+		// A GUI program started from a console has no standard output of its
+		// own; one whose output is redirected keeps the redirection.
+		if _, err := os.Stdout.Stat(); err != nil {
+			attachParentConsole()
+		}
+		fmt.Println("jitllm-desktop", version)
+		return
+	}
 	// The previous run's log is read before this run's truncates it: its last
 	// lines go in the report of a crash that ended it.
 	noConsole := !stderrIsRead()
@@ -89,6 +102,9 @@ func main() {
 		// container and device are released rather than leaked past the window.
 		sh.OnShutdown(eng.Close)
 		register(sh, screen.Deps{Engine: eng})
+		// The macOS app's first launch offers to put its jitllm and jitllmd
+		// on PATH; anywhere else it does nothing.
+		screen.OfferCLI(sh)
 	}
 
 	sh.UI.SetRoot(sh.Build())

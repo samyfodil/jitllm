@@ -374,6 +374,22 @@ than replacing it.
    stop strings, streaming and cancellation in combination, not only each one
    alone.
 
+## 17. Installing from the app itself
+
+The release ships a portable desktop app for Windows and the signed app zipped
+for macOS (`packaging/README.md`); neither installs itself yet.
+
+- **Windows:** the portable `jitllm-desktop` offers "Install jitllm": it copies
+  itself (and the CLI and server, fetched from the same release and checked
+  against `checksums.txt`) into `%LOCALAPPDATA%\Programs\jitllm`, adds it to
+  the user `PATH`, creates the Start menu entry and the Add/Remove Programs
+  entry the setup writes, and optionally starts the server at login -- the
+  setup's install, reached from the app.
+- **macOS:** run from Downloads or from the mounted dmg, the app offers "Move
+  to Applications" and relaunches from there, so its PATH links and launchd
+  agent point at a bundle that stays put.
+- **Linux, if wanted later:** an AppImage, and `.deb`/`.rpm` packages.
+
 ## 18. Dense blocks streamed through a device in tiles (an idea to explore)
 
 **Not started.** A dense block larger than every device's whole budget runs on

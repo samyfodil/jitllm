@@ -1,0 +1,224 @@
+name: winget
+
+# The winget manifests packaging/winget/generate.sh writes, checked the way
+# winget-pkgs' own pipeline will check them: `winget validate`, then
+# `winget install --manifest` of the setup, the CLI run from the PATH a new
+# shell sees, and `winget uninstall` taking it away. winget needs a URL, so
+# the setups are served from a local HTTP server on the runner and the
+# manifests name it, with the setups' real SHA-256.
+#
+# On a push to `installers` the setups are built here from the branch (version
+# 0.0.0); the release calls it with `release: true` and checks the setups in
+# its own `dist` artifact instead.
+on:
+  push:
+    branches: [installers]
+  workflow_call:
+    inputs:
+      release:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.27.x"
+  CGO_ENABLED: "0"
+
+jobs:
+  setups:
+    if: ${{ !inputs.release }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            go.sum
+            server/go.sum
+            ui/go.sum
+      - name: tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nsis
+      # The three programs as .goreleaser.yaml builds them, in zips under its
+      # names, then the setups from them as release.yml's windows-setup does.
+      - name: build
+        run: |
+          set -euo pipefail
+          ver=0.0.0
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            b="$RUNNER_TEMP/$arch"
+            mkdir -p "$b"
+            GOOS=windows GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$ver" -o "$b/jitllm.exe" ./cmd/jitllm
+            (cd server && GOOS=windows GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$ver" -o "$b/jitllmd.exe" ./cmd/jitllmd)
+            (cd ui && go run ./cmd/pack syso -arch "$arch" -version "$ver" &&
+              GOOS=windows GOARCH=$arch go build -trimpath -ldflags "-s -w -H=windowsgui" -o "$b/jitllm-desktop.exe" . &&
+              rm -f ./*.syso)
+            for prog in jitllm jitllmd jitllm-desktop; do
+              (cd "$b" && zip -q "$GITHUB_WORKSPACE/dist/${prog}_${ver}_windows_${arch}.zip" "$prog.exe")
+            done
+            packaging/windows/build.sh "$ver" "$arch" dist "dist/jitllm-setup_${ver}_windows_${arch}.exe"
+          done
+          (cd dist && sha256sum ./*.exe | sed 's# \./# #' > checksums.txt && cat checksums.txt)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: winget-setups
+          path: |
+            dist/*.exe
+            dist/checksums.txt
+          retention-days: 3
+
+  check:
+    needs: setups
+    timeout-minutes: 30
+    if: ${{ !cancelled() && (inputs.release || needs.setups.result == 'success') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            arch: amd64
+          - runner: windows-11-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: packaging
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.release && 'dist' || 'winget-setups' }}
+          path: dist
+      # The runner images do not all carry winget. Where it is missing it is
+      # installed as Microsoft documents for a machine without the Store: the
+      # Microsoft.WinGet.Client module's Repair-WinGetPackageManager.
+      - name: winget
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+            Install-Module -Name Microsoft.WinGet.Client -Force -Repository PSGallery -Scope CurrentUser
+            Repair-WinGetPackageManager -AllUsers -Latest -Force
+            $wa = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
+            $env:Path += ";$wa"
+            Add-Content $env:GITHUB_PATH $wa
+          }
+          winget --info
+          winget settings --enable LocalManifestFiles
+          # The Store source asks for its own agreement on every query, and
+          # this check needs only the manifest in front of it.
+          winget source remove msstore
+      - name: generate
+        shell: bash
+        env:
+          JITLLM_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          setup=$(cd dist && ls jitllm-setup_*_windows_amd64.exe)
+          ver=${setup#jitllm-setup_}
+          ver=${ver%_windows_amd64.exe}
+          JITLLM_INSTALLER_BASE=http://127.0.0.1:8765 \
+            packaging/winget/generate.sh "v$ver" dist/checksums.txt out > manifest-dir.txt
+          dir=$(cat manifest-dir.txt)
+          echo "MANIFEST=$dir" >> "$GITHUB_ENV"
+          head -n 100 "$dir"/*.yaml
+      - name: validate, install, run, uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          # The setups over HTTP from this runner: a listener in a background
+          # job, since not every image has Python on its PATH.
+          $root = (Resolve-Path dist).Path
+          $server = Start-Job -ArgumentList $root -ScriptBlock {
+            param($root)
+            $l = [System.Net.HttpListener]::new()
+            $l.Prefixes.Add('http://127.0.0.1:8765/')
+            $l.Start()
+            while ($true) {
+              $c = $l.GetContext()
+              $f = Join-Path $root ([Uri]::UnescapeDataString($c.Request.Url.AbsolutePath.TrimStart('/')))
+              if (Test-Path -PathType Leaf $f) {
+                $b = [IO.File]::ReadAllBytes($f)
+                $c.Response.ContentType = 'application/octet-stream'
+                $c.Response.ContentLength64 = $b.Length
+                if ($c.Request.HttpMethod -ne 'HEAD') { $c.Response.OutputStream.Write($b, 0, $b.Length) }
+              } else { $c.Response.StatusCode = 404 }
+              $c.Response.Close()
+            }
+          }
+          # The setups are unsigned until WINDOWS_SIGN_PFX exists, and winget
+          # starts a downloaded setup through the shell, so SmartScreen holds
+          # it at "Windows protected your PC" with nobody to click through
+          # (packaging/README.md). Turned off on this throwaway runner only.
+          New-Item -Force 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' | Out-Null
+          Set-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' EnableSmartScreen 0 -Type DWord
+          Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer' SmartScreenEnabled 'Off'
+          # winget marks the download with its zone and hands it to the
+          # attachment manager before starting it; no zone, no prompt.
+          $att = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments'
+          New-Item -Force $att | Out-Null
+          Set-ItemProperty $att SaveZoneInformation 1 -Type DWord
+          Set-ItemProperty $att ScanWithAntiVirus 1 -Type DWord
+          # Newer winget marks the download with the URL's zone itself, and
+          # 127.0.0.1 reads as the Internet: put the local server in the
+          # trusted zone, where an unsigned setup opens without the
+          # "Open File - Security Warning" dialog.
+          $range = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\ZoneMap\Ranges\jitllm-check'
+          New-Item -Force $range | Out-Null
+          Set-ItemProperty $range ':Range' '127.0.0.1'
+          Set-ItemProperty $range 'http' 2 -Type DWord
+          # And an .exe from the Internet zone is a low-risk type, so the
+          # attachment manager runs it without that dialog wherever the
+          # zone map is not honoured.
+          foreach ($h in 'HKCU', 'HKLM') {
+            $assoc = "${h}:\Software\Microsoft\Windows\CurrentVersion\Policies\Associations"
+            New-Item -Force $assoc | Out-Null
+            Set-ItemProperty $assoc LowRiskFileTypes '.exe'
+          }
+          # A SmartScreen already running keeps the settings it started with.
+          Stop-Process -Name smartscreen -Force -ErrorAction SilentlyContinue
+          try {
+            $up = $false
+            for ($i = 0; $i -lt 30 -and -not $up; $i++) {
+              try { Invoke-WebRequest -UseBasicParsing -Method Head http://127.0.0.1:8765/checksums.txt | Out-Null; $up = $true } catch { Start-Sleep 1 }
+            }
+            if (-not $up) { Receive-Job $server; throw "the local server did not come up" }
+            winget validate --manifest $env:MANIFEST
+            # Bounded: an installer that waits on something never ends the
+            # step, so after three minutes show what is still running and
+            # winget's own log, and fail.
+            $install = Start-Process -PassThru -NoNewWindow -FilePath winget -ArgumentList 'install', '--manifest', $env:MANIFEST, '--silent', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity', '--verbose-logs'
+            $null = $install.Handle # keeps the exit code readable after WaitForExit
+            if (-not $install.WaitForExit(180000)) {
+              Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, CommandLine | Format-Table -AutoSize -Wrap | Out-String -Width 400
+              Get-ChildItem "$env:LOCALAPPDATA\Packages\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\LocalState\DiagOutputDir" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1 | Get-Content -Tail 40
+              Get-Process | Where-Object MainWindowTitle | Select-Object Id, Name, MainWindowTitle | Format-Table -AutoSize | Out-String -Width 300
+              Get-Item -Force "$env:LOCALAPPDATA\Temp\WinGet\*\*.exe" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName; Get-Content -Stream Zone.Identifier $_.FullName -ErrorAction SilentlyContinue }
+              throw "winget install did not finish in three minutes"
+            }
+            if ($install.ExitCode -ne 0) { throw "winget install exited $($install.ExitCode)" }
+            # A new shell's PATH: the machine's and the user's from the
+            # registry, not this process's inherited one.
+            $path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+            $out = cmd /c "set PATH=$path&& where jitllm && jitllm version"
+            $out
+            if (-not ($out -match 'Programs\\jitllm\\jitllm.exe')) { throw "jitllm is not on a new shell's PATH" }
+            # A manifest installed from disk is in no source, so the id
+            # jitllm.jitllm means nothing to winget until winget-pkgs carries
+            # it; the install is found by its Add/Remove Programs entry's
+            # name (the runner images' winget versions differ, and only
+            # newer ones take --product-code on list).
+            winget list --name jitllm --exact --accept-source-agreements --disable-interactivity
+            winget uninstall --name jitllm --exact --silent --accept-source-agreements --disable-interactivity
+            $dir = Join-Path $env:LOCALAPPDATA 'Programs\jitllm'
+            for ($i = 0; $i -lt 30 -and (Test-Path (Join-Path $dir 'jitllm.exe')); $i++) { Start-Sleep 1 }
+            if (Test-Path (Join-Path $dir 'jitllm.exe')) { throw "winget uninstall left jitllm.exe" }
+            if (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\jitllm') { throw "winget uninstall left the Add/Remove Programs entry" }
+            $path = [Environment]::GetEnvironmentVariable('Path', 'User')
+            if (($path -split ';') -contains $dir) { throw "winget uninstall left $dir on the user PATH" }
+          } finally {
+            Stop-Job $server
+          }

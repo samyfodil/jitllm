@@ -30,6 +30,31 @@ var icnsTypes = []struct {
 	{"ic09", 512}, {"ic10", 1024},
 }
 
+// ico is the Windows icon file the installer shows: ICONDIR, one ICONDIRENTRY
+// per image with its byte offset in the file, then the PNGs. The images are
+// the executable's icon group's (icoSizes); the group names each by resource
+// id where the file gives an offset.
+func ico() ([]byte, error) {
+	var head, body bytes.Buffer
+	binary.Write(&head, binary.LittleEndian, [3]uint16{0, 1, uint16(len(icoSizes))})
+	off := 6 + 16*len(icoSizes)
+	for _, s := range icoSizes {
+		p, err := iconPNG(s)
+		if err != nil {
+			return nil, err
+		}
+		dim := uint8(s) // 256 is written as 0
+		head.Write([]byte{dim, dim, 0, 0})
+		binary.Write(&head, binary.LittleEndian, struct {
+			Planes, BitCount uint16
+			Bytes, Offset    uint32
+		}{1, 32, uint32(len(p)), uint32(off + body.Len())})
+		body.Write(p)
+	}
+	head.Write(body.Bytes())
+	return head.Bytes(), nil
+}
+
 // icns is the macOS icon file: "icns", the file's length, then one element
 // per image, each its type, its length with the eight header bytes, and the
 // PNG. Written here so a Linux runner can build the bundle without iconutil.

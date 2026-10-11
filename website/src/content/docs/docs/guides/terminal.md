@@ -7,7 +7,7 @@ The terminal app is the desktop app's screens in a terminal: chat, models, disco
 
 ## Install and run
 
-Install it with the [install script](/docs/install/#install-a-release):
+Install it with the [install script](/docs/install/#from-a-script):
 
 ```sh
 curl -fsSL https://jitllm.org/install.sh | sh -s -- tui

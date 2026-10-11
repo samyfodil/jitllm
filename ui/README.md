@@ -48,7 +48,10 @@ cd ui && ../scripts/cap 8G -- go run ./cmd/pack app -bin jitllm-ui -version 1.2.
   the icon and the version information. `check` refuses an .exe whose
   subsystem is not GUI or whose resources are missing.
 - **macOS**: `jitllm.app` with Info.plist, the `.icns` and the binary under
-  `Contents/MacOS`; on a Mac it is signed ad-hoc under the hardened runtime
+  `Contents/MacOS`, and with `-cli` the CLI and the server under
+  `Contents/Resources/bin`, which the app offers to link into PATH
+  (`install/`, `screen/cli.go`; `packaging/README.md` has the dmg and the
+  cask); on a Mac it is signed ad-hoc under the hardened runtime
   with `.github/release/entitlements.plist`. gogpu sets the regular activation
   policy and brings the window to the front itself.
 - Every icon is drawn from `app.IconAt`, the window icon, so there is no image
@@ -104,7 +107,8 @@ engine/            attaches common/engine to the window: a Front over the shell,
 mock/              stand-ins for the engine, the hardware and the files; the scenarios
 stage/             headless frames of the mounted window, and what is wrong with them
 cmd/shots/         every scenario's frames as PNGs
-cmd/pack/          the Windows resource and GUI check, the macOS bundle
+cmd/pack/          the Windows resource and GUI check, the macOS bundle, the installer icon
+install/           the macOS app linking its CLIs into PATH and its launchd agent
 ```
 
 The dependency direction is fixed and has no cycle:

@@ -12,7 +12,7 @@ import (
 
 // bundleID names the app to macOS: Launch Services, the Dock and the
 // settings an app keeps under ~/Library are keyed on it.
-const bundleID = "io.github.samyfodil.jitllm"
+const bundleID = "org.jitllm.app"
 
 // minMacOS is the oldest macOS the Go toolchain this module builds with runs
 // on.
@@ -23,30 +23,41 @@ const minMacOS = "12.0"
 //	jitllm.app/Contents/Info.plist
 //	jitllm.app/Contents/MacOS/<bin's name>
 //	jitllm.app/Contents/Resources/jitllm.icns
+//	jitllm.app/Contents/Resources/bin/<each of clis>
+//
+// clis are the command-line programs the app carries (jitllm, jitllmd): the
+// app links them into PATH on request (ui/install), and the Homebrew cask
+// links them from there. They sit under Resources rather than MacOS because
+// MacOS is where Launch Services looks for the one executable it starts.
 //
 // On macOS the bundle is then signed ad-hoc under the hardened runtime with
 // the JIT entitlements, the release's own (.github/release), since the engine
 // maps the code it generates executable. Elsewhere there is no codesign: the
 // binary keeps the ad-hoc signature Go's linker gives every darwin/arm64
 // binary, which runs, and a release signs the bundle where it is notarized.
-func bundle(bin, version, out, entitlements string) error {
+func bundle(bin string, clis []string, version, out, entitlements string) error {
 	exe := filepath.Base(bin)
 	if err := os.RemoveAll(out); err != nil {
 		return err
 	}
 	macos := filepath.Join(out, "Contents", "MacOS")
 	res := filepath.Join(out, "Contents", "Resources")
-	for _, d := range []string{macos, res} {
+	cliDir := filepath.Join(res, "bin")
+	for _, d := range []string{macos, res, cliDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
 	}
-	b, err := os.ReadFile(bin)
-	if err != nil {
+	if err := copyExe(bin, filepath.Join(macos, exe)); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(macos, exe), b, 0o755); err != nil {
-		return err
+	var signFirst []string
+	for _, c := range clis {
+		dst := filepath.Join(cliDir, filepath.Base(c))
+		if err := copyExe(c, dst); err != nil {
+			return err
+		}
+		signFirst = append(signFirst, dst)
 	}
 	ic, err := icns()
 	if err != nil {
@@ -68,14 +79,46 @@ func bundle(bin, version, out, entitlements string) error {
 			return err
 		}
 	}
-	cmd := exec.Command("codesign", "--force", "--sign", "-", "--options", "runtime",
-		"--entitlements", entitlements, out)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("codesign: %v", err)
+	// Nested code is signed before the bundle that seals it: codesign refuses
+	// to seal a bundle whose Resources hold an unsigned Mach-O.
+	for _, p := range append(signFirst, out) {
+		args := []string{"--force", "--sign", "-", "--options", "runtime", "--entitlements", entitlements}
+		if id := signingID(filepath.Base(p)); id != "" {
+			args = append(args, "--identifier", id)
+		}
+		cmd := exec.Command("codesign", append(args, p)...)
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("codesign %s: %v", p, err)
+		}
 	}
 	fmt.Printf("%s: written and signed ad-hoc\n", out)
 	return nil
+}
+
+// signingID is the code-signing identifier of a program the release ships on
+// macOS: the bundle's own executable takes bundleID from Info.plist, and each
+// command-line program is named here so its signature does not carry a bare
+// file name. "" leaves codesign's default.
+func signingID(name string) string {
+	switch name {
+	case "jitllm":
+		return "org.jitllm.cli"
+	case "jitllmd":
+		return "org.jitllm.service"
+	case "jitllm-tui":
+		return "org.jitllm.tui"
+	}
+	return ""
+}
+
+// copyExe copies the executable src to dst, mode 0755.
+func copyExe(src, dst string) error {
+	b, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, b, 0o755)
 }
 
 // repoEntitlements finds .github/release/entitlements.plist above the

@@ -1,0 +1,63 @@
+---
+// The download chooser on the landing page and the install guide. Every
+// platform is listed in the HTML, so the page works without JavaScript and
+// detection can never hide an asset: public/download.js moves the visitor's
+// platform to the top and fills each link with the latest release's asset.
+//
+// The release's asset names carry the version, so a link cannot be written
+// here; without the script (or when GitHub's API does not answer) each one
+// opens the latest release's page, where the asset is listed by that name.
+const base = import.meta.env.BASE_URL.replace(/\/$/, '')
+const rel = 'https://github.com/jitllm/jitllm/releases/latest'
+const a = (name: string) => ({ 'data-asset': name, href: rel })
+---
+<div class="dl" data-downloads>
+  <p class="dl-mine" data-dl-mine hidden>For your machine</p>
+  <div class="dl-os" data-os="mac">
+    <h3>macOS</h3>
+    <p><a class="dl-main" {...a('jitllm_{v}_darwin_arm64.dmg')}>jitllm for Apple silicon (.dmg)</a></p>
+    <ul>
+      <li><a {...a('jitllm_{v}_darwin_amd64.dmg')}>Intel Mac (.dmg)</a></li>
+      <li>The app alone, zipped: <a {...a('jitllm_{v}_darwin_arm64.app.zip')}>Apple silicon</a>, <a {...a('jitllm_{v}_darwin_amd64.app.zip')}>Intel</a></li>
+      <li>Homebrew, once the tap is published: <code>brew install --cask jitllm/tap/jitllm</code></li>
+    </ul>
+  </div>
+  <div class="dl-os" data-os="windows">
+    <h3>Windows</h3>
+    <p><a class="dl-main" data-arch="amd64" {...a('jitllm-setup_{v}_windows_amd64.exe')}>jitllm setup for x64 (.exe)</a><a class="dl-main" data-arch="arm64" {...a('jitllm-setup_{v}_windows_arm64.exe')}>jitllm setup for Arm (.exe)</a></p>
+    <ul>
+      <li>The setup for the other architecture: <a {...a('jitllm-setup_{v}_windows_amd64.exe')}>x64</a>, <a {...a('jitllm-setup_{v}_windows_arm64.exe')}>Arm</a></li>
+      <li>The desktop app alone, portable, installs nothing: <a {...a('jitllm-desktop_{v}_windows_amd64.exe')}>x64</a>, <a {...a('jitllm-desktop_{v}_windows_arm64.exe')}>Arm</a></li>
+      <li>PowerShell: <code>irm https://jitllm.org/install.ps1 | iex</code></li>
+      <li>winget, once published: <code>winget install jitllm.jitllm</code></li>
+    </ul>
+  </div>
+  <div class="dl-os" data-os="linux">
+    <h3>Linux</h3>
+    <p class="dl-main-cmd"><code>curl -fsSL https://jitllm.org/install.sh | sh</code></p>
+    <ul>
+      <li>The CLI: <a {...a('jitllm_{v}_linux_amd64.tar.gz')}>x86-64</a>, <a {...a('jitllm_{v}_linux_arm64.tar.gz')}>arm64</a></li>
+      <li>The server: <a {...a('jitllmd_{v}_linux_amd64.tar.gz')}>x86-64</a>, <a {...a('jitllmd_{v}_linux_arm64.tar.gz')}>arm64</a></li>
+      <li>The desktop app: <a {...a('jitllm-desktop_{v}_linux_amd64.tar.gz')}>x86-64</a>, <a {...a('jitllm-desktop_{v}_linux_arm64.tar.gz')}>arm64</a></li>
+    </ul>
+  </div>
+  <p class="dl-other" data-dl-other hidden>Other platforms</p>
+  <p class="dl-all">Every archive, with <code>checksums.txt</code>: <a href={rel}>the latest release</a>.</p>
+</div>
+<script is:inline src={`${base}/download.js`} defer></script>
+<style>
+  .dl { display: flex; flex-direction: column; gap: 1rem; margin: 1rem 0 1.5rem; }
+  .dl-os { background: var(--surface); border: 1px solid var(--line); padding: 1rem 1.25rem; min-width: 0; }
+  .dl-os h3 { margin: 0 0 0.5rem; font-size: 1rem; color: var(--text); }
+  .dl-os p { margin: 0 0 0.5rem; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .dl-os ul { margin: 0; padding-left: 1.1rem; color: var(--text-2); font-size: 14px; line-height: 1.7; }
+  .dl-os code { overflow-wrap: anywhere; }
+  .dl-os a { color: var(--brand); }
+  .dl a.dl-main { display: inline-block; padding: 0.5rem 0.875rem; background: var(--brand); color: var(--brand-ink); text-decoration: none; font-weight: 500; }
+  .dl a.dl-main:hover { background: var(--f-hover); }
+  .dl a.dl-main[hidden] { display: none; }
+  .dl-mine, .dl-other { margin: 0; font: 12px/1 var(--mono, monospace); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .dl-os.dl-yours { border-color: var(--brand); }
+  .dl-all { margin: 0; color: var(--text-2); font-size: 14px; }
+  .dl-all a { color: var(--brand); }
+</style>
