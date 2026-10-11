@@ -23,6 +23,7 @@ Things to know before using or changing it:
 
 ## Docs
 
+- [Recipes](https://github.com/jitllm/jitllm/blob/main/docs/recipes/README.md): tested paths to a running server, an OpenAI client, tools and structured output, conversion, memory and placement, and diagnosis; every command block is run by a test
 - [README](https://github.com/jitllm/jitllm/blob/main/README.md): install, convert, serve, run, memory and device flags, vision, the desktop app, embedding in Go
 - [AGENTS.md](https://github.com/jitllm/jitllm/blob/main/AGENTS.md): the project's binding rules, covering measurement, correctness gates, architecture scope and the no-mmap and no-Go-compute rules
 - [ROADMAP](https://github.com/jitllm/jitllm/blob/main/ROADMAP.md): the seven planned items and where each stands
@@ -48,4 +49,5 @@ Things to know before using or changing it:
 - [Engineering history](https://github.com/jitllm/jitllm/tree/main/docs/engineering-history): what was measured and tried per subsystem, including approaches that did not pay and the numbers behind them
 - [Design notes](https://github.com/jitllm/jitllm/tree/main/docs/design): block paging, device sessions, model coverage and prior art
 - [Kernel capabilities](https://github.com/jitllm/jitllm/blob/main/docs/kernel-capabilities.md): which kernels exist on which tier and backend
+- [Agent evaluations](https://github.com/jitllm/jitllm/blob/main/dev/agenteval/README.md): tasks, checked by machine, that measure whether an agent can start, integrate, diagnose and fix jitllm
 - [Desktop app](https://github.com/jitllm/jitllm/tree/main/ui): an in-process GUI for downloads, conversion and chat

@@ -820,7 +820,9 @@ type Session struct {
 
 // SessionOptions is CreateSession's input.
 type SessionOptions struct {
-	ModelID         string
+	ModelID string
+	// modelName is GenerateOptions.ModelName, for a request's own session.
+	modelName       string
 	SessionID       string
 	MaxSeq          int
 	DeviceIDs       []string
@@ -901,7 +903,7 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 	}
 	if lm.m.IsEncoder() {
 		return nil, fmt.Errorf("%w: model %q is an encoder (%s): it has no decoder session to generate "+
-			"from; embed with it instead", ErrInvalid, lm.id, lm.m.Cfg.Arch)
+			"from; embed with it instead", ErrInvalid, lm.called(o.modelName), lm.m.Cfg.Arch)
 	}
 	maxSeq := o.MaxSeq
 	if maxSeq <= 0 {
@@ -983,7 +985,7 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 	if e.models[lm.id] != lm {
 		e.mu.Unlock()
 		st.Close()
-		return nil, fmt.Errorf("%w: model %q was unloaded", ErrNotFound, lm.id)
+		return nil, fmt.Errorf("%w: model %q was unloaded", ErrNotFound, lm.called(o.modelName))
 	}
 	if _, ok := e.sessions[id]; ok {
 		e.mu.Unlock()
@@ -1161,6 +1163,10 @@ type Prompt struct {
 type GenerateOptions struct {
 	SessionID string
 	ModelID   string
+	// ModelName is the name the caller addressed the model by (BindTarget
+	// sets it), which errors repeat: a client that sent a file name cannot
+	// act on an id it never saw. Empty names the model by ModelID.
+	ModelName string
 
 	Prompt       Prompt
 	MaxTokens    int
@@ -1414,7 +1420,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 
 	lm := s.lm
 	if lm.m.Vocab == nil {
-		return fmt.Errorf("server: model %q has no tokenizer: %v", lm.id, lm.m.TokErr)
+		return fmt.Errorf("server: model %q has no tokenizer: %v", lm.called(o.ModelName), lm.m.TokErr)
 	}
 
 	if o.Prompt.Kind == PromptSpans {
@@ -1425,7 +1431,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 			return fmt.Errorf("%w: the prompt is empty", ErrInvalid)
 		}
 	}
-	ids, err := e.encode(lm, o.Prompt)
+	ids, err := e.encode(lm, o.Prompt, o.ModelName)
 	if err != nil {
 		return err
 	}
@@ -1811,7 +1817,7 @@ func (e *Engine) resolveSession(o GenerateOptions) (*Session, bool, error) {
 	if o.ModelID == "" {
 		return nil, false, fmt.Errorf("%w: one of session_id or model_id is required", ErrInvalid)
 	}
-	s, err := e.CreateSession(SessionOptions{ModelID: o.ModelID, pooled: true})
+	s, err := e.CreateSession(SessionOptions{ModelID: o.ModelID, modelName: o.ModelName, pooled: true})
 	if err != nil {
 		return nil, false, err
 	}
@@ -1822,7 +1828,7 @@ func (e *Engine) resolveSession(o GenerateOptions) (*Session, bool, error) {
 // complete prompt and must be encoded without added specials, or the first
 // turn gets a doubled BOS; model.ChatIDs owns that pairing, so chat goes
 // through it rather than ChatPrompt-then-Encode.
-func (e *Engine) encode(lm *LoadedModel, p Prompt) ([]int32, error) {
+func (e *Engine) encode(lm *LoadedModel, p Prompt, name string) ([]int32, error) {
 	switch p.Kind {
 	case PromptIDs:
 		return p.IDs, nil
@@ -1835,7 +1841,7 @@ func (e *Engine) encode(lm *LoadedModel, p Prompt) ([]int32, error) {
 		if !lm.m.ChatCapable() {
 			return nil, fmt.Errorf("%w: model %q carries no chat template, so a chat request "+
 				"would run as a RAW COMPLETION -- which produces fluent output and no signal at all; "+
-				"send a text prompt instead", ErrInvalid, lm.id)
+				"send a text prompt instead", ErrInvalid, lm.called(name))
 		}
 		msgs := p.Chat.Messages
 		if p.Chat.HasSystem {
@@ -2008,6 +2014,15 @@ func (e *Engine) ScanModels(dir string) ([]ModelFileInfo, string, error) {
 
 // ID is the stable id this model was loaded under.
 func (lm *LoadedModel) ID() string { return lm.id }
+
+// called is how an error names lm: as the request addressed it (name, its id
+// or its file name), or by its id when the request named none.
+func (lm *LoadedModel) called(name string) string {
+	if name != "" {
+		return name
+	}
+	return lm.id
+}
 
 // Name is the container's file name without its extension. The container
 // carries no model name, so this is not an identity.

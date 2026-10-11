@@ -2,10 +2,13 @@
 import { defineConfig } from 'astro/config'
 import starlight from '@astrojs/starlight'
 import { satteri } from '@astrojs/markdown-satteri'
+import { sidebar } from './src/nav.mjs'
 
 // The landing page is src/pages/index.astro, a plain page with its own CSS and
 // scripts (public/). Starlight owns only what is under src/content/docs, which
-// lives at /docs.
+// lives at /docs. Beside each page, /docs/<page>.md serves it as clean Markdown,
+// and /llms.txt and /llms-full.txt index them (src/pages/*.ts). The recipes
+// are copied in from docs/recipes before each build (scripts/recipes.mjs).
 
 // SITE and BASE_PATH are set by the Pages workflow: BASE_PATH is /jitllm on a
 // GitHub project page and empty on a custom domain or a local build.
@@ -62,45 +65,8 @@ export default defineConfig({
           },
         },
       ],
-      sidebar: [
-        {
-          label: 'Start here',
-          items: [
-            { label: 'Overview', slug: 'docs' },
-            { label: 'Install', slug: 'docs/install' },
-            { label: 'Quickstart', slug: 'docs/get-started' },
-            { label: 'Compared with other engines', slug: 'docs/compare' },
-          ],
-        },
-        {
-          label: 'Guides',
-          items: [
-            { label: 'Convert models', slug: 'docs/guides/convert' },
-            { label: 'Run from the command line', slug: 'docs/guides/run' },
-            { label: 'Serve an API', slug: 'docs/guides/serve' },
-            { label: 'Devices and placement', slug: 'docs/guides/devices' },
-            { label: 'Memory and paging', slug: 'docs/guides/memory' },
-            { label: 'Embed it in Go', slug: 'docs/guides/go' },
-            { label: 'The desktop app', slug: 'docs/guides/desktop' },
-            { label: 'The terminal app', slug: 'docs/guides/terminal' },
-            { label: 'Troubleshooting', slug: 'docs/guides/troubleshooting' },
-          ],
-        },
-        {
-          label: 'Concepts',
-          items: [{ label: 'How it works', slug: 'docs/concepts/how-it-works' }],
-        },
-        {
-          label: 'Reference',
-          items: [
-            { label: 'Supported models', slug: 'docs/reference/models' },
-            { label: 'Hardware support', slug: 'docs/reference/hardware' },
-            { label: 'CLI reference', slug: 'docs/reference/cli' },
-            { label: 'The .jlm format', slug: 'docs/reference/jlm' },
-            { label: 'Benchmarks', slug: 'docs/reference/benchmarks' },
-          ],
-        },
-      ],
+      // The use / operate / contribute routes, shared with llms.txt.
+      sidebar,
     }),
   ],
 })

@@ -203,6 +203,7 @@ and their limitations; [scripts/vs-llamacpp.sh](scripts/vs-llamacpp.sh) measures
 
 ## Documentation
 
+- [Recipes](docs/recipes/README.md): tested paths to a running server, a connected client, tools, conversion, placement and diagnosis
 - [CLI and conversion](docs/cli.md) · [Server](docs/server.md) · [Docker](docs/docker.md) · [Devices](docs/devices.md)
 - [Runtime](docs/runtime.md) · [Memory and placement](docs/placement.md) · [Vision](docs/vision.md)
 - [Go library and desktop app](docs/embedding-go.md) · [Terminal app](docs/tui.md) · [Model API](engine/model/)
