@@ -180,10 +180,12 @@ type Config struct {
 	// QuantizeAct (the same bits in one launch). The A/B arm and the
 	// bisection switch.
 	NoOperandFuse bool
-	// NoGemmInt8 refuses the staged int8 GEMM (kernels.GemmInt8), leaving a
-	// prompt chunk the m16n8 binary16 GEMM or MatVecMMA: the A/B arm and the
-	// bisection switch for it.
-	NoGemmInt8 bool
+	// PreferGemmInt8 puts a prompt chunk's matvecs on the staged int8 GEMM
+	// (kernels.GemmInt8, sm_80 on) ahead of the m16n8 binary16 GEMM. Off by
+	// default: on an L4 and an A100 the binary16 GEMM read Llama-3.2-1B's
+	// prompt at 0.75 and 0.91 of llama.cpp where this one read 0.67 and 0.78
+	// (gpu-kernels.md "The sm_80+ prompt"). The A/B arm.
+	PreferGemmInt8 bool
 	// NoVoltaMoE keeps a batched mixture's expert matvecs on the dp4a grouped
 	// kernel where sm_70's grouped GemmVolta -- or Metal's grouped GemmTile --
 	// would run them (moegroup.go): the A/B arm for that, and its bisection

@@ -1117,11 +1117,11 @@ func (g *devTier) int8GemmOn() bool {
 // its tokens. Its blockings are f16Tiles' (the same 16-row m-tiles and 8-token
 // n-tiles), chosen by the same fill. False where the device lacks the
 // instruction, the format has no int8 decode, or no tile divides the shape.
-// NoMMA and NoGemmInt8 refuse it.
+// Only Config.PreferGemmInt8 asks for it; NoMMA refuses it.
 func (g *devTier) int8Gemm(m mv, ntok int) (mv, bool) {
 	// A build reached from inside a submission takes g.mu (subLock).
 	defer g.subUnlock(g.subLock())
-	if g.NoMMA || g.NoGemmInt8 || m.slots > 0 || !kernels.Int8OK(m.q) || !g.int8GemmOn() {
+	if !g.PreferGemmInt8 || g.NoMMA || m.slots > 0 || !kernels.Int8OK(m.q) || !g.int8GemmOn() {
 		return mv{}, false
 	}
 	fill := g.dev.Slots() / 16
