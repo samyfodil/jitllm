@@ -192,6 +192,13 @@ func serve(args []string) {
 	kvCache := fs.String("kv-cache", "",
 		"a directory sessions created with prompt_cache keep their prompt prefixes in; empty refuses such a session")
 	kvCacheMax := fs.String("kv-cache-max", "8G", "what -kv-cache may occupy before its least recently used pages go; 0 is unbounded")
+	imageFetch := fs.Bool("image-fetch", false,
+		"fetch a picture a chat request names by an http(s) URL (off: only inline base64 pictures are taken); "+
+			"private, loopback and link-local addresses are refused either way")
+	imageMax := fs.String("image-max", "20M", "the most encoded bytes one picture in a request may be")
+	imagePixels := fs.Int64("image-max-pixels", server.DefaultImageMaxPixels, "the most pixels (width x height) one picture may be")
+	imageCount := fs.Int("image-max-count", server.DefaultImageMaxImages, "the most pictures one request may carry")
+	imageTimeout := fs.Duration("image-fetch-timeout", server.DefaultImageFetchTimeout, "how long -image-fetch waits for one picture")
 	version := fs.String("version", version, "version string reported by GetServerInfo")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
@@ -223,6 +230,11 @@ func serve(args []string) {
 			fatal("-mem-cache-max: %v", err)
 		}
 		storeBytes = b
+	}
+
+	imageBytes, err := tier.ParseBytes(*imageMax)
+	if err != nil {
+		fatal("-image-max: %v", err)
 	}
 
 	var hostBytes uint64
@@ -279,6 +291,8 @@ func serve(args []string) {
 		MaxQueue:      *maxQueue,
 		RetryAfter:    *retry,
 		WarmLoads:     *warm,
+		Images: server.ImagePolicy{FetchRemote: *imageFetch, FetchTimeout: *imageTimeout,
+			MaxBytes: int64(imageBytes), MaxPixels: *imagePixels, MaxImages: *imageCount},
 	})
 	defer e.Close()
 

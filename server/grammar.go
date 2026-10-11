@@ -128,7 +128,7 @@ func oaResponseFormat(raw json.RawMessage) (string, error) {
 // toolStream reads a generate's tool calls, when its chat declares tools.
 func (lm *LoadedModel) toolStream(o GenerateOptions) *model.ToolStream {
 	ch := o.Prompt.Chat
-	if o.Prompt.Kind != PromptChat || ch == nil || len(ch.Tools) == 0 || lm.m.Vocab == nil {
+	if o.Prompt.Kind != PromptChat && o.Prompt.Kind != PromptSpans || ch == nil || len(ch.Tools) == 0 || lm.m.Vocab == nil {
 		return nil
 	}
 	return lm.m.NewToolStream(model.ParseToolSet(ch.Tools))
@@ -140,7 +140,7 @@ func (lm *LoadedModel) toolStream(o GenerateOptions) *model.ToolStream {
 // structured output. nil when the choice forces nothing.
 func (lm *LoadedModel) toolConstraint(o GenerateOptions, ids []int32) (*constraint, error) {
 	ch := o.Prompt.Chat
-	if o.Prompt.Kind != PromptChat || ch == nil || len(ch.Tools) == 0 || !ch.ToolChoice.Forces() {
+	if o.Prompt.Kind != PromptChat && o.Prompt.Kind != PromptSpans || ch == nil || len(ch.Tools) == 0 || !ch.ToolChoice.Forces() {
 		return nil, nil
 	}
 	if o.Grammar != "" {

@@ -53,6 +53,11 @@ jitllmd serve -addr 127.0.0.1:8080 -models ./models \
 | `-kv-f16` | engine's own | the KV cache width of every load that names none: `-kv-f16` binary16, `-kv-f16=false` f32 |
 | `-kv-cache DIR` | | where sessions created with `prompt_cache` keep their prompt prefixes; without it such a session is refused |
 | `-kv-cache-max SIZE` | `8G` | what `-kv-cache` may occupy before its least recently used pages go; 0 is unbounded |
+| `-image-max SIZE` | `20M` | the most encoded bytes one picture in a request may be |
+| `-image-max-pixels N` | 16777216 | the most pixels (width x height) one picture may be, read from its header before decoding |
+| `-image-max-count N` | 8 | the most pictures one request may carry |
+| `-image-fetch` | false | fetch a picture named by an `http(s)` URL; off, only inline base64 pictures are taken. Private, loopback and link-local addresses are refused either way |
+| `-image-fetch-timeout D` | `10s` | how long `-image-fetch` waits for one picture |
 
 More models can be loaded and unloaded while the server runs; see [Manage a running server](#manage-a-running-server). Requests beyond what a model runs at once wait in its queue; past `-max-queue` the server answers 429 with a `Retry-After`.
 
@@ -135,6 +140,20 @@ print(msg.content[0].text)
 ```
 
 `system` may be a string or a list of text blocks, and so may `content`. Supported sampling fields are `temperature`, `top_p`, `top_k` and `stop_sequences`. A stream is the named event sequence (`message_start`, `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop`), and `stop_reason` is `end_turn`, `max_tokens`, `stop_sequence` or `tool_use`.
+
+## Pictures
+
+On a model converted with its vision projector (`jitllm convert model.gguf mmproj.gguf out.jlm`), a chat request may carry pictures: `image_url` content parts on `/v1/chat/completions`, `image` blocks on `/v1/messages`, and `images` on a Connect `ChatMessage`. PNG, JPEG, WebP and GIF (its first frame) are taken, inline as base64:
+
+```json
+{"model": "smolvlm", "messages": [{"role": "user", "content": [
+  {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo..."}},
+  {"type": "text", "text": "What is in this picture?"}]}]}
+```
+
+The pictures keep the order you sent them and go where the model's own chat template puts its image markers, and the model's vision tower encodes each one as `jitllm run -image` does. They combine with `tools` and a forced `tool_choice`, with `n` (the prompt, picture included, is prefilled once), and with a continued session (the history keeps its earlier pictures).
+
+One picture may be 20 MiB and 4096x4096 pixels, and a request may carry 8 (`-image-max`, `-image-max-pixels`, `-image-max-count`). A picture named by an `http(s)` URL is not fetched unless the server runs with `-image-fetch`, and even then a private, loopback or link-local address is refused. A picture sent to a model without a vision tower, an unsupported, mismatched, oversized or undecodable picture, or a remote URL with fetching off is a 400 that names the part, never a reply from a model that did not see it. A request with pictures prefills alone rather than joining the step loop.
 
 ## Tool calls
 

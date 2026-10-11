@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"fmt"
+	"image"
 	"strings"
 	"time"
 
@@ -14,11 +16,21 @@ import (
 
 // InferenceService implements jitllm.v1.InferenceService. It holds a Backend
 // so its streaming path can be gated without a loaded model.
-type InferenceService struct{ B Backend }
+type InferenceService struct {
+	B Backend
+	// Images bounds a chat's pictures, as it does on the HTTP shims.
+	Images ImagePolicy
+}
 
 // generateOptions turns the wire request into the engine's one request shape,
-// the same struct the HTTP shims build.
+// the same struct the HTTP shims build, with the default picture limits.
 func generateOptions(m *v1.GenerateRequest) (GenerateOptions, error) {
+	return generateOptionsWith(m, ImagePolicy{})
+}
+
+// generateOptionsWith is generateOptions with a chat's pictures bounded by p.
+func generateOptionsWith(m *v1.GenerateRequest, p ImagePolicy) (GenerateOptions, error) {
+	p = p.withDefaults()
 	o := GenerateOptions{
 		SessionID:    m.SessionId,
 		ModelID:      m.ModelId,
@@ -43,22 +55,42 @@ func generateOptions(m *v1.GenerateRequest) (GenerateOptions, error) {
 	default:
 		o.Grammar = m.Grammar
 	}
-	switch p := m.Prompt.GetInput().(type) {
+	switch in := m.Prompt.GetInput().(type) {
 	case *v1.PromptInput_Text:
-		o.Prompt = Prompt{Kind: PromptText, Text: p.Text}
+		o.Prompt = Prompt{Kind: PromptText, Text: in.Text}
 	case *v1.PromptInput_TokenIds:
-		o.Prompt = Prompt{Kind: PromptIDs, IDs: p.TokenIds.GetIds()}
+		o.Prompt = Prompt{Kind: PromptIDs, IDs: in.TokenIds.GetIds()}
 	case *v1.PromptInput_Chat:
 		c := &ChatInput{
-			AddGenerationPrompt: p.Chat.GetAddGenerationPrompt(),
-			TemplateName:        p.Chat.GetTemplateName(),
+			AddGenerationPrompt: in.Chat.GetAddGenerationPrompt(),
+			TemplateName:        in.Chat.GetTemplateName(),
 		}
-		if p.Chat.System != nil {
-			c.System, c.HasSystem = p.Chat.GetSystem(), true
+		if in.Chat.System != nil {
+			c.System, c.HasSystem = in.Chat.GetSystem(), true
 		}
-		for _, msg := range p.Chat.GetMessages() {
-			c.Messages = append(c.Messages, chatMessage(msg.GetRole(), msg.GetContent()))
+		pics := &pictures{p: p}
+		for i, msg := range in.Chat.GetMessages() {
+			cm := chatMessage(msg.GetRole(), msg.GetContent())
+			for j, img := range msg.GetImages() {
+				err := pics.add(fmt.Sprintf("prompt.chat.messages[%d].images[%d]", i, j), func() (image.Image, error) {
+					mt := ""
+					if img.GetMediaType() != "" {
+						var ok bool
+						if mt, ok = imageMediaType(img.GetMediaType()); !ok {
+							return nil, fmt.Errorf("has media_type %q; the pictures accepted are image/png, "+
+								"image/jpeg, image/webp and image/gif", img.GetMediaType())
+						}
+					}
+					return p.decodeImage(img.GetData(), mt)
+				})
+				if err != nil {
+					return o, invalid("generate: %v", err)
+				}
+				cm.Images++
+			}
+			c.Messages = append(c.Messages, cm)
 		}
+		c.Images = pics.imgs
 		o.Prompt = Prompt{Kind: PromptChat, Chat: c}
 	case nil:
 		if !m.ContinueSession {
@@ -69,7 +101,7 @@ func generateOptions(m *v1.GenerateRequest) (GenerateOptions, error) {
 }
 
 func (s *InferenceService) Generate(ctx context.Context, req *connect.Request[v1.GenerateRequest], st *connect.ServerStream[v1.GenerateResponse]) error {
-	o, err := generateOptions(req.Msg)
+	o, err := generateOptionsWith(req.Msg, s.Images)
 	if err != nil {
 		return err
 	}
@@ -82,7 +114,7 @@ func (s *InferenceService) Generate(ctx context.Context, req *connect.Request[v1
 // Complete is the streaming path with the events collected: the same call
 // with a different sink.
 func (s *InferenceService) Complete(ctx context.Context, req *connect.Request[v1.GenerateRequest]) (*connect.Response[v1.CompleteResponse], error) {
-	o, err := generateOptions(req.Msg)
+	o, err := generateOptionsWith(req.Msg, s.Images)
 	if err != nil {
 		return nil, err
 	}

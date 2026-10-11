@@ -568,6 +568,13 @@ type Image struct {
 // ChatSpansImages is ChatSpans with each image's grid, which is where its rows
 // turn on an M-RoPE text model.
 func (m *Model) ChatSpansImages(msgs []ChatMessage, imgs []Image, addGenerationPrompt bool) ([]Span, error) {
+	return m.chatSpansImages(msgs, imgs, nil, ToolChoice{}, addGenerationPrompt)
+}
+
+// chatSpansImages is ChatSpansImages with a tool list and choice rendered as
+// ChatIDsToolChoice renders them.
+func (m *Model) chatSpansImages(msgs []ChatMessage, imgs []Image, tools []byte, choice ToolChoice,
+	addGenerationPrompt bool) ([]Span, error) {
 	n := 0
 	for _, x := range msgs {
 		n += x.Images
@@ -576,7 +583,7 @@ func (m *Model) ChatSpansImages(msgs []ChatMessage, imgs []Image, addGenerationP
 		return nil, fmt.Errorf("model: %d image(s) in the messages and %d embedding(s)", n, len(imgs))
 	}
 	if n == 0 {
-		ids, err := m.ChatIDs(msgs, addGenerationPrompt)
+		ids, err := m.ChatIDsToolChoice(msgs, tools, choice, addGenerationPrompt)
 		return []Span{{Tokens: ids}}, err
 	}
 	tw := m.Tower()
@@ -619,7 +626,7 @@ func (m *Model) ChatSpansImages(msgs []ChatMessage, imgs []Image, addGenerationP
 		}
 		images[i] = sp
 	}
-	return m.ChatSpansParts(msgs, images, addGenerationPrompt)
+	return m.chatSpansParts(msgs, images, tools, choice, addGenerationPrompt)
 }
 
 // ChatSpansParts is ChatSpans for pictures whose runs the caller has already
@@ -627,6 +634,13 @@ func (m *Model) ChatSpansImages(msgs []ChatMessage, imgs []Image, addGenerationP
 // image of the conversation goes. A projector that cuts a picture into an
 // overview and slices has no single embedding per image to hand ChatSpans.
 func (m *Model) ChatSpansParts(msgs []ChatMessage, images [][]Span, addGenerationPrompt bool) ([]Span, error) {
+	return m.chatSpansParts(msgs, images, nil, ToolChoice{}, addGenerationPrompt)
+}
+
+// chatSpansParts is ChatSpansParts with a tool list and choice rendered as
+// ChatIDsToolChoice renders them.
+func (m *Model) chatSpansParts(msgs []ChatMessage, images [][]Span, tools []byte, choice ToolChoice,
+	addGenerationPrompt bool) ([]Span, error) {
 	n := 0
 	for _, x := range msgs {
 		n += x.Images
@@ -642,7 +656,7 @@ func (m *Model) ChatSpansParts(msgs []ChatMessage, images [][]Span, addGeneratio
 	if !ok {
 		return nil, fmt.Errorf("model: no image markers for projector %q", tw.Cfg.Projector)
 	}
-	text, err := m.renderChat(msgs, nil, ToolChoice{}, addGenerationPrompt, mk)
+	text, err := m.renderChat(msgs, tools, choice, addGenerationPrompt, mk)
 	if err != nil {
 		return nil, err
 	}

@@ -146,6 +146,11 @@ Every client command takes `-addr` (`host:port`, `:port` or a full URL; default 
 | `-kv-f16` | engine's own | the KV cache width of every load that names none: `-kv-f16` binary16, `-kv-f16=false` f32 |
 | `-kv-cache DIR` | | where sessions created with `prompt_cache` keep their prompt prefixes; without it such a session is refused |
 | `-kv-cache-max SIZE` | `8G` | what `-kv-cache` may occupy before its least recently used pages go; 0 is unbounded |
+| `-image-max SIZE` | `20M` | the most encoded bytes one picture in a request may be |
+| `-image-max-pixels N` | 16777216 | the most pixels (width x height) one picture may be, read from its header before decoding |
+| `-image-max-count N` | 8 | the most pictures one request may carry |
+| `-image-fetch` | false | fetch a picture named by an `http(s)` URL; off, only inline base64 pictures are taken. Private, loopback and link-local addresses are refused either way |
+| `-image-fetch-timeout D` | `10s` | how long `-image-fetch` waits for one picture |
 | `-version S` | `dev` | the version `GetServerInfo` reports |
 
 ### run
