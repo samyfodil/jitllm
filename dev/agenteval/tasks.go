@@ -65,7 +65,7 @@ Confirm it answers a completion request, and leave it running when you finish.
 				ran("sent the server a request", "curl", "127.0.0.1:"),
 			},
 			Reference: `mkdir -p models && jitllm convert stories260K.gguf models/stories.jlm &&
-setsid jitllmd serve -addr 127.0.0.1:{port} -models models -load stories.jlm -id stories -devices cpu > server.log 2>&1 < /dev/null &
+nohup jitllmd serve -addr 127.0.0.1:{port} -models models -load stories.jlm -id stories -devices cpu > server.log 2>&1 < /dev/null &
 for i in $(seq 120); do curl -sf http://127.0.0.1:{port}/healthz && break; sleep 0.25; done
 curl -s http://127.0.0.1:{port}/v1/completions -H 'Content-Type: application/json' -d '` + greedy + `'`,
 		},
@@ -192,7 +192,8 @@ changed. ./jitllm/AGENTS.md has the project's rules.
 				return bugChecks(e)
 			},
 			Required: []requirement{ran("ran the server module's tests", "go", "test")},
-			Reference: `cd jitllm && sed -i 's/c.Single = parallel != nil \&\& \*parallel/c.Single = parallel != nil \&\& !*parallel/' server/tools.go &&
+			Reference: `cd jitllm && sed 's/c.Single = parallel != nil \&\& \*parallel/c.Single = parallel != nil \&\& !*parallel/' server/tools.go > server/tools.go.new &&
+mv server/tools.go.new server/tools.go &&
 cd server && go test -count=1 -run 'Tool' .`,
 		},
 	}

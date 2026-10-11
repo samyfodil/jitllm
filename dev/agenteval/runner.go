@@ -88,6 +88,7 @@ type env struct {
 	log  string // the shims' log
 	path string // PATH with the shims first
 	pid  int    // the server the setup started, if it started one
+	pgid int    // the agent's process group, which what it backgrounded stays in
 }
 
 func runTask(cfg config, t task, dir string) Result {
@@ -146,7 +147,11 @@ func runTask(cfg config, t task, dir string) Result {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	start := time.Now()
-	err = cmd.Run()
+	err = cmd.Start()
+	if err == nil {
+		e.pgid = cmd.Process.Pid
+		err = cmd.Wait()
+	}
 	res.WallSeconds = time.Since(start).Seconds()
 	res.TimedOut = ctx.Err() != nil
 	var ee *exec.ExitError
@@ -326,9 +331,19 @@ func (e *env) url(path string) string { return "http://127.0.0.1:" + e.port + pa
 // reap stops every process still running in the workspace: the servers the
 // setup started and any the agent left behind, however it detached them.
 func (e *env) reap() {
+	// Everywhere: the agent's process group (a server it backgrounded with
+	// nohup or & stays in it) and the server the setup started.
+	if e.pgid > 0 {
+		syscall.Kill(-e.pgid, syscall.SIGKILL)
+	}
+	if e.pid > 0 {
+		syscall.Kill(e.pid, syscall.SIGKILL)
+	}
+	// On Linux, also whatever left the group (setsid) but runs in the
+	// workspace; other systems have no /proc to find it by.
 	procs, err := os.ReadDir("/proc")
 	if err != nil {
-		return // not Linux: the process group kill on the agent is all there is
+		return
 	}
 	for _, p := range procs {
 		pid, err := strconv.Atoi(p.Name())
