@@ -222,7 +222,7 @@ func TestPooledStatesAnswerAsFreshOnes(t *testing.T) {
 
 func (e *Engine) encodeText(t *testing.T, lm *LoadedModel, s string) []int32 {
 	t.Helper()
-	ids, err := e.encode(lm, Prompt{Kind: PromptText, Text: s})
+	ids, err := e.encode(lm, Prompt{Kind: PromptText, Text: s}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

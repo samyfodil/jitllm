@@ -857,7 +857,7 @@ func (e *Engine) BindTarget(o *GenerateOptions, sessionID, modelName string) err
 	if err != nil {
 		return err
 	}
-	o.ModelID = lm.id
+	o.ModelID, o.ModelName = lm.id, modelName
 	return nil
 }
 

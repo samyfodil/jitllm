@@ -513,6 +513,25 @@ func TestTheShimsOverTheRealEngine(t *testing.T) {
 	}
 }
 
+// TestAnErrorNamesTheModelAsTheRequestDid: a model loaded under an id and
+// addressed by its file name is named in an error as the request named it --
+// a client that sent "stories260K" cannot act on an id it never saw.
+func TestAnErrorNamesTheModelAsTheRequestDid(t *testing.T) {
+	_, _, c := loadedEngine(t, smallModel, "small", LoadOptions{})
+	for _, name := range []string{"stories260K", "small"} {
+		for path, body := range map[string]string{
+			oaChat: `{"model":"` + name + `","messages":[{"role":"user","content":"hi"}]}`,
+			anMsgs: `{"model":"` + name + `","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`,
+		} {
+			resp := do(t, "POST", c.url+path, body)
+			e := readErr(t, resp)
+			if !strings.Contains(e.Error.Message, `model "`+name+`"`) {
+				t.Errorf("%s addressed as %q: the error names something else: %s", path, name, e.Error.Message)
+			}
+		}
+	}
+}
+
 // deref prints an optional string field.
 func deref(p *string) string {
 	if p == nil {
