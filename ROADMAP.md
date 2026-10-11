@@ -406,3 +406,15 @@ carries it, so that stays home. The choice would be made per step from the
 measured transfer rate against the host's, and the block's home stays on the
 host. The wider prize is GPU prompt speed for the blocks a partial placement
 leaves home, the common case on consumer machines.
+
+## 19. Coding agents on a local model, one command
+
+**Not started.** `jitllm` starts a known coding agent (Claude Code, Codex,
+opencode, aider and others) already pointed at a running `jitllmd`: it finds
+the server (or a given address), picks or loads a model fit for the agent
+(tool calling, context length), and launches the agent with its base URL, key
+and model set in the way that agent reads them (its OpenAI- or
+Anthropic-compatible endpoint, environment or config), without touching the
+agent's own settings files. `jitllm agents` lists which it found installed and
+which can run against the loaded model, naming what is missing (tool calling,
+context, a vision projector) when one cannot.
