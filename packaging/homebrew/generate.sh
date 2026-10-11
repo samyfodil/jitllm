@@ -60,12 +60,12 @@ cask "jitllm" do
   binary "#{appdir}/jitllm.app/Contents/Resources/bin/jitllm"
   binary "#{appdir}/jitllm.app/Contents/Resources/bin/jitllmd"
 
-  uninstall launchctl: "org.jitllm.app.jitllmd",
+  uninstall launchctl: "org.jitllm.app.service",
             quit:      "org.jitllm.app"
 
   zap trash: [
     "~/Library/Application Support/jitllm",
-    "~/Library/LaunchAgents/org.jitllm.app.jitllmd.plist",
+    "~/Library/LaunchAgents/org.jitllm.app.service.plist",
     "~/Library/Logs/jitllm",
   ]
 end
