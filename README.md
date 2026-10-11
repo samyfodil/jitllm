@@ -124,8 +124,18 @@ One binary, `jitllmd`, many models and many sessions at once:
 ## Desktop app
 
 Model downloads, conversion, text and image chat, and a live view of where each
-block of the model sits, in one window. Install it with `| sh -s -- desktop` (or
-take its archive from the Releases page) and run `jitllm-desktop`.
+block of the model sits, in one window. Get `jitllm.app` (`.dmg`) on macOS or
+the setup or portable `.exe` on Windows from the
+[latest release](https://github.com/jitllm/jitllm/releases/latest), or install it
+from a terminal and run `jitllm-desktop`:
+
+```sh
+curl -fsSL https://jitllm.org/install.sh | sh -s -- desktop
+```
+
+```powershell
+$env:JITLLM_PROGRAMS = "desktop"; irm https://jitllm.org/install.ps1 | iex
+```
 
 <p align="center">
 <picture><source media="(prefers-color-scheme: light)" srcset="website/public/shots/chat-light.png"><img src="website/public/shots/chat-dark.png" width="400" alt="The desktop app's Chat screen: a reply with its thinking folded, sampling controls, and the rate and bandwidth of the reply"></picture>
@@ -140,8 +150,16 @@ take its archive from the Releases page) and run `jitllm-desktop`.
 
 The same screens in a terminal, over SSH too, sharing the desktop app's settings
 and chats. The arrow keys move the model's blocks between the CPU and the GPU,
-and the conversation keeps its history across the move. Install it with
-`| sh -s -- tui` and run `jitllm-tui models/qwen3.jlm`.
+and the conversation keeps its history across the move. Install it and run
+`jitllm-tui models/qwen3.jlm`:
+
+```sh
+curl -fsSL https://jitllm.org/install.sh | sh -s -- tui
+```
+
+```powershell
+$env:JITLLM_PROGRAMS = "tui"; irm https://jitllm.org/install.ps1 | iex
+```
 
 <p align="center">
 <img src="website/public/shots/tui-chat.png" width="400" alt="The terminal app's Chat screen: Qwen3-30B-A3B answering, the engine panel beside it">
