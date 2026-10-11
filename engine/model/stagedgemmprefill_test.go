@@ -12,10 +12,10 @@ import (
 
 // TestStagedGemmPrefillMatchesTheHost prefills real models on CUDA with every
 // block placed and holds the prompt's logits AND the decode that reads the
-// chunk's KV to the host, in two arms: the default, whose prompt matvecs are
-// the staged int8 GEMM (kernels.GemmInt8, sm_80 on), and NoGemmInt8, whose
-// are the staged binary16 GEMM on the m16n8 instruction (GemmVolta's F16K,
-// sm_75 on). The chunk's attention accumulates on m16n8k8
+// chunk's KV to the host, in two arms: Config.PreferGemmInt8, whose prompt
+// matvecs are the staged int8 GEMM (kernels.GemmInt8, sm_80 on), and the
+// default, whose are the staged binary16 GEMM on the m16n8 instruction
+// (GemmVolta's F16K, sm_75 on). The chunk's attention accumulates on m16n8k8
 // (kernels.PagedAttnAccMMA) behind the m16n8k16 scores in both.
 //
 // The models cover the formats and features the GEMMs carry: Q4_K/Q6_K,
@@ -73,7 +73,7 @@ func TestStagedGemmPrefillMatchesTheHost(t *testing.T) {
 			}{{"int8", false}, {"binary16", true}} {
 				t.Run(arm.name, func(t *testing.T) {
 					g, err := tier.OpenWith(tier.WithAPI("ptx"), tier.WithDeviceTune(tier.TuneOff),
-						tier.WithConfig(func(c *tier.Config) { c.NoGemmInt8 = arm.noInt8 }))
+						tier.WithConfig(func(c *tier.Config) { c.PreferGemmInt8 = !arm.noInt8 }))
 					if err != nil || g == nil {
 						noDevice(t, "cuda", err)
 					}
@@ -143,16 +143,16 @@ func stagedGemmArm(t *testing.T, m *Model, g *tier.GPU, seq int, run func(*State
 	case (noInt8 || sm < 80) && sm >= 75 && st.GemmF16 == 0:
 		t.Fatalf("%s lowers the m16n8 binary16 instruction and built no GEMM on it: the int8 twin answered", g.Name())
 	case noInt8 && st.GemmInt8 != 0:
-		t.Fatalf("NoGemmInt8 and %d GemmInt8 matvecs: the arm is not the binary16 GEMM", st.GemmInt8)
+		t.Fatalf("no GemmInt8 asked and %d GemmInt8 matvecs: the arm is not the binary16 GEMM", st.GemmInt8)
 	}
 	t.Logf("%d FlashPrefill80 launches; fused operands: %d norms and %d activations wrote binary16, %d activations quantized",
 		st.FlashPrefill80, st.NormF16, st.ActF16Fused, st.QuantActs)
 	// From sm_80 the prompt's attention is FlashPrefill80 wherever a head is
-	// 128 wide or less, and the staged kernels with the m16n8k8 accumulate
-	// past it (gemma-2b's 256); a hybrid's attention blocks and a mixture's
-	// take them as well.
+	// 256 wide or less (gemma-2b's 256 splits its dims over two warps), and
+	// the staged kernels with the m16n8k8 accumulate past it; a hybrid's
+	// attention blocks and a mixture's take them as well.
 	if sm >= 80 {
-		if m.Cfg.HeadDim <= 128 && m.Cfg.HeadDimSWA <= 128 && st.FlashPrefill80 == 0 {
+		if m.Cfg.HeadDim <= 256 && m.Cfg.HeadDimSWA <= 256 && st.FlashPrefill80 == 0 {
 			t.Fatalf("%s: head width %d and no FlashPrefill80: the staged kernels answered", g.Name(), m.Cfg.HeadDim)
 		}
 		if st.FlashPrefill80+st.PagedAccMMA == 0 {

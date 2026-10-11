@@ -7,29 +7,38 @@ import (
 )
 
 // FlashPrefill80Rows is how many query rows one FlashPrefill80 workgroup
-// takes: four warps of sixteen.
-const FlashPrefill80Rows = 16 * flashWarps
+// takes: four warps of sixteen, or for a head wider than 128 two pairs of
+// warps, each pair sixteen rows with the head's dims split between them.
+func FlashPrefill80Rows(s FlashPrefill70Shape) int {
+	return 16 * flashWarps / flash80DimSplit(s.Dim)
+}
+
+// flash80DimSplit is how many warps share a row block's output dims: two
+// past a 128-wide head, whose accumulators one warp would spill.
+func flash80DimSplit(hd int) int {
+	if hd > 128 {
+		return 2
+	}
+	return 1
+}
 
 // FlashPrefill80Threads is FlashPrefill80's workgroup width.
 const FlashPrefill80Threads = 32 * flashWarps
 
 // FlashPrefill80Groups is how many workgroups FlashPrefill80 launches.
 func FlashPrefill80Groups(s FlashPrefill70Shape) int {
-	return s.Heads * (s.Rows / FlashPrefill80Rows) * flashPrefillSplits(s)
+	return s.Heads * (s.Rows / FlashPrefill80Rows(s)) * flashPrefillSplits(s)
 }
 
 // FlashPrefill80WhyNot is why FlashPrefill80 does not take a shape, or "".
-// A head wider than 128 is the one geometry it does not express yet: its
-// output accumulators alone (head/8 n-tiles of four) would pass the
-// register file's share a thread can hold without spilling.
 func FlashPrefill80WhyNot(s FlashPrefill70Shape) string {
 	switch {
 	case s.KVHeads <= 0 || s.Heads%s.KVHeads != 0:
 		return fmt.Sprintf("%d heads over %d kv heads", s.Heads, s.KVHeads)
-	case s.Dim%32 != 0 || s.Dim < 32 || s.Dim > 128:
-		return fmt.Sprintf("head width %d (a multiple of 32 up to 128)", s.Dim)
-	case s.Rows <= 0 || s.Rows%FlashPrefill80Rows != 0:
-		return fmt.Sprintf("%d rows, want a multiple of %d", s.Rows, FlashPrefill80Rows)
+	case s.Dim%32 != 0 || s.Dim < 32 || s.Dim > 256:
+		return fmt.Sprintf("head width %d (a multiple of 32 up to 256)", s.Dim)
+	case s.Rows <= 0 || s.Rows%FlashPrefill80Rows(s) != 0:
+		return fmt.Sprintf("%d rows, want a multiple of %d", s.Rows, FlashPrefill80Rows(s))
 	case s.Page <= 0:
 		return "the contiguous cache (FlashPrefill80 reads paged KV)"
 	case s.Softcap < 0:
@@ -73,13 +82,21 @@ func FlashPrefill80(s FlashPrefill70Shape) (*ir.Kernel, error) {
 	}
 	hd := s.Dim
 	P, S := s.Page, flashPrefillSplits(s)
-	const tk = 32 // keys a tile
+	// A head past 128 splits its dims over two warps (ds) and stages its
+	// queries in shared memory rather than registers, and takes 16-key tiles
+	// so the queries, K and V still fit the 48 KiB a kernel may declare.
+	ds := flash80DimSplit(hd)
+	tk := 32 // keys a tile
+	if ds > 1 {
+		tk = 16
+	}
 	const qw = 16 // queries a warp
+	rowsWG := FlashPrefill80Rows(s)
 	gqa := s.Heads / s.KVHeads
 	kvDim := s.KVHeads * hd
 	qs := hd/2 + 4 // u32 stride of a staged K row: four apart, a fragment load conflict-free
-	const vs = tk/2 + 4
-	nd := hd / 8 // output n-tiles
+	vs := tk/2 + 4
+	nd := hd / 8 / ds // a warp's output n-tiles
 	ksteps := hd / 16
 	sh := ir.MMAShape{M: 16, N: 8, K: 16, Kind: ir.MMAF16}
 
@@ -98,6 +115,10 @@ func FlashPrefill80(s FlashPrefill70Shape) (*ir.Kernel, error) {
 
 	shK := b.Shared("fp8K", ir.U32, tk*qs)
 	shV := b.Shared("fp8V", ir.U32, hd*vs)
+	var shQ ir.Value
+	if ds > 1 {
+		shQ = b.Shared("fp8Q", ir.U32, rowsWG*qs)
+	}
 
 	tid := b.TID()
 	wg := b.CTAID()
@@ -110,12 +131,15 @@ func FlashPrefill80(s FlashPrefill70Shape) (*ir.Kernel, error) {
 	h := b.Rem(ir.U32, wg, c(int64(s.Heads)))
 	qb := b.Div(ir.U32, wg, c(int64(s.Heads)))
 	kvBase := b.Mul(ir.U32, b.Div(ir.U32, h, c(int64(gqa))), c(int64(hd)))
-	row0 := b.Mul(ir.U32, qb, c(FlashPrefill80Rows))
-	wrow0 := b.Add(ir.U32, row0, b.Mul(ir.U32, warp, c(qw)))
+	row0 := b.Mul(ir.U32, qb, c(int64(rowsWG)))
+	// Warp w is row block w/ds of the workgroup, dims dh*hd/ds on.
+	qwarp, dh := b.Div(ir.U32, warp, c(int64(ds))), b.Rem(ir.U32, warp, c(int64(ds)))
+	dimBase := b.Mul(ir.U32, dh, c(int64(hd/ds)))
+	wrow0 := b.Add(ir.U32, row0, b.Mul(ir.U32, qwarp, c(qw)))
 	// The workgroup's keys, [keyStart of its first row, keyEnd of its last),
 	// in 32-key tiles from a multiple of 32, which lie in one page each; this
 	// split's run of them.
-	span := tileSpanOf(b, pDesc, row0, b.Add(ir.U32, row0, c(FlashPrefill80Rows-1)))
+	span := tileSpanOf(b, pDesc, row0, b.Add(ir.U32, row0, c(int64(rowsWG-1))))
 	kStart, ntiles := span.tileRun(b, spl, S, tk)
 	hlo := b.Sub(ir.U32, span.hi, span.lo)
 
@@ -134,11 +158,35 @@ func FlashPrefill80(s FlashPrefill70Shape) (*ir.Kernel, error) {
 	}
 	q0, q1 := qAt(0), qAt(1)
 	for ks := range qa {
+		if ds > 1 {
+			break // staged below, read per tile
+		}
 		pk := func(base ir.Value, off int) ir.Value {
 			e := b.LoadV(ir.F32, pQ, base, int64(16*ks+off), 2)
 			return b.PackF16(e[0], e[1])
 		}
 		qa[ks] = []ir.Value{pk(q0, 0), pk(q1, 0), pk(q0, 8), pk(q1, 8)}
+	}
+
+	// A split head's queries, once, into shared memory as binary16 pairs: the
+	// first tile's barrier orders these stores before any fragment load.
+	nthQ := int64(FlashPrefill80Threads)
+	for it := int64(0); ds > 1 && it < int64(rowsWG*hd/2)/nthQ; it++ {
+		w := b.Add(ir.U32, tid, c(nthQ*it))
+		qi, p := b.Div(ir.U32, w, c(int64(hd/2))), b.Rem(ir.U32, w, c(int64(hd/2)))
+		src := b.Add(ir.U32, b.Mul(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, b.Add(ir.U32, row0, qi), c(int64(s.Heads))), h),
+			c(int64(hd))), b.Shl(ir.U32, p, c(1)))
+		e := b.LoadV(ir.F32, pQ, src, 0, 2)
+		b.Store(shQ, b.Add(ir.U32, b.Mul(ir.U32, qi, c(int64(qs))), p), b.PackF16(e[0], e[1]), 0)
+	}
+	qRow := b.Add(ir.U32, b.Mul(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, qwarp, c(qw)), lg), c(int64(qs))), lt)
+	qfrag := func(ks int) []ir.Value {
+		if ds == 1 {
+			return qa[ks]
+		}
+		w := int64(8 * ks)
+		return []ir.Value{b.Load(ir.U32, shQ, qRow, w), b.Load(ir.U32, shQ, qRow, w+int64(8*qs)),
+			b.Load(ir.U32, shQ, qRow, w+4), b.Load(ir.U32, shQ, qRow, w+int64(8*qs)+4)}
 	}
 
 	type state struct {
@@ -170,7 +218,7 @@ func FlashPrefill80(s FlashPrefill70Shape) (*ir.Kernel, error) {
 	// The run's tiles a page at a time: an outer loop over the pages it
 	// touches reads each page's id once, and the tiles inside it need no
 	// lookup.
-	kEnd := b.Add(ir.U32, kStart, b.Mul(ir.U32, ntiles, c(tk)))
+	kEnd := b.Add(ir.U32, kStart, b.Mul(ir.U32, ntiles, c(int64(tk))))
 	pg0 := pageDiv(b, kStart, P)
 	npg := b.Select(ir.U32, b.Lt(ir.U32, zeroU, ntiles),
 		b.Add(ir.U32, b.Sub(ir.U32, pageDiv(b, b.Sub(ir.U32, kEnd, c(1)), P), pg0), c(1)), zeroU)
@@ -191,8 +239,8 @@ func FlashPrefill80(s FlashPrefill70Shape) (*ir.Kernel, error) {
 	b.Barrier()
 	for it := int64(0); it < int64(tk*hd/2)/nth; it++ {
 		w := b.Add(ir.U32, tid, c(nth*it))
-		key := b.And(ir.U32, w, c(tk-1)) // consecutive threads, consecutive keys: coalesced
-		p := b.Shr(ir.U32, w, c(5))
+		key := b.And(ir.U32, w, c(int64(tk-1))) // consecutive threads, consecutive keys: coalesced
+		p := b.Shr(ir.U32, w, c(int64(log2(tk))))
 		// A page's K is [kvRow][P]: the tile's keys are adjacent.
 		e := b.Add(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, pid, c(int64(P*kvDim))),
 			b.Mul(ir.U32, b.Add(ir.U32, kvBase, b.Shl(ir.U32, p, c(1))), c(int64(P)))), b.Add(ir.U32, pageRem(b, k0, P), key))
@@ -215,7 +263,7 @@ func FlashPrefill80(s FlashPrefill70Shape) (*ir.Kernel, error) {
 		}
 		col := b.Add(ir.U32, kvBase, b.Shl(ir.U32, dq, c(2)))
 		v0, v1 := pagedV4(b, pV, pid, p0, col, P, kvDim, s.F16), pagedV4(b, pV, pid, p1, col, P, kvDim, s.F16)
-		base := b.Add(ir.U32, b.Mul(ir.U32, b.Shl(ir.U32, dq, c(2)), c(vs)), kp)
+		base := b.Add(ir.U32, b.Mul(ir.U32, b.Shl(ir.U32, dq, c(2)), c(int64(vs))), kp)
 		for x := 0; x < 4; x++ {
 			b.Store(shV, base, b.PackF16(b.Select(ir.F32, ok0, v0[x], zero), b.Select(ir.F32, ok1, v1[x], zero)), int64(x*vs))
 		}
@@ -229,7 +277,7 @@ func FlashPrefill80(s FlashPrefill70Shape) (*ir.Kernel, error) {
 		kRow := b.Add(ir.U32, b.Mul(ir.U32, b.Add(ir.U32, lg, c(int64(8*j))), c(int64(qs))), lt)
 		for ks := 0; ks < ksteps; ks++ {
 			bf := []ir.Value{b.Load(ir.U32, shK, kRow, int64(8*ks)), b.Load(ir.U32, shK, kRow, int64(8*ks+4))}
-			sacc[j] = b.MMA(sh, qa[ks], bf, sacc[j])
+			sacc[j] = b.MMA(sh, qfrag(ks), bf, sacc[j])
 		}
 	}
 	// The transform, then each row's running maximum and sum over its quad.
@@ -292,7 +340,7 @@ func FlashPrefill80(s FlashPrefill70Shape) (*ir.Kernel, error) {
 			b.PackF16(pf[2*kk+1][0], pf[2*kk+1][1]), b.PackF16(pf[2*kk+1][2], pf[2*kk+1][3]),
 		}
 		for n := 0; n < nd; n++ {
-			vRow := b.Add(ir.U32, b.Mul(ir.U32, b.Add(ir.U32, lg, c(int64(8*n))), c(vs)), lt)
+			vRow := b.Add(ir.U32, b.Mul(ir.U32, b.Add(ir.U32, b.Add(ir.U32, lg, dimBase), c(int64(8*n))), c(int64(vs))), lt)
 			bf := []ir.Value{b.Load(ir.U32, shV, vRow, int64(8*kk)), b.Load(ir.U32, shV, vRow, int64(8*kk+4))}
 			od[n] = b.MMA(sh, a, bf, od[n])
 		}
@@ -306,7 +354,7 @@ func FlashPrefill80(s FlashPrefill70Shape) (*ir.Kernel, error) {
 		b.SetPhi(m[r], mNext[r])
 		b.SetPhi(l[r], lNext[r])
 	}
-	b.SetPhi(k0, b.Add(ir.U32, k0, c(tk)))
+	b.SetPhi(k0, b.Add(ir.U32, k0, c(int64(tk))))
 	b.EndLoop()
 	for n := range o {
 		for x := range o[n] {
@@ -331,7 +379,11 @@ func FlashPrefill80(s FlashPrefill70Shape) (*ir.Kernel, error) {
 		}
 		lsum[r] = t
 	}
-	dimOf := func(n, x int) ir.Value { return b.Add(ir.U32, b.Shl(ir.U32, lt, c(1)), c(int64(8*n+x&1))) }
+	// A split head's two warps hold the same rows' maxima and sums, so both
+	// write the same partials; each writes its own dims.
+	dimOf := func(n, x int) ir.Value {
+		return b.Add(ir.U32, b.Add(ir.U32, b.Shl(ir.U32, lt, c(1)), dimBase), c(int64(8*n+x&1)))
+	}
 	if s.Splits > 0 {
 		// This run's partials for FlashAttentionMerge: the unnormalised sums,
 		// and each query's maximum (the finite stand-in its exponentials were

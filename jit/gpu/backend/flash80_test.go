@@ -14,10 +14,10 @@ import (
 // oracle as TestPagedFlashPrefill holds FlashPrefill70: every prefill case
 // (causal, windowed, chunked, bidirectional runs, rows at a later base, a
 // history across pages), GQA, one KV head, packed f16 V, a softcap and a
-// sink, head widths 64, 96 and 128, at no split, one and more than the keys
-// need; to FlashPrefill70's paged output on the same pool where the card
-// runs both; and demands failure through a wrong table and keyEnds one
-// short. A head wider than 128 is refused by name.
+// sink, head widths 64, 96, 128 and 256 (its dims split over two warps), at
+// no split, one and more than the keys need; to FlashPrefill70's paged
+// output on the same pool where the card runs both; and demands failure through a wrong table and keyEnds one
+// short. A head wider than 256 is refused by name.
 func TestPagedFlashPrefill80(t *testing.T) {
 	gpuLock(t)
 	devs := pagedDevices(t)
@@ -27,14 +27,23 @@ func TestPagedFlashPrefill80(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 	}
-	if why := kernels.FlashPrefill80WhyNot(kernels.FlashPrefill70Shape{Heads: 8, KVHeads: 8, Dim: 256, Rows: 64, Page: 64}); why == "" {
-		t.Fatal("a 256-wide head was taken; FlashPrefill80 declines it by name")
+	if why := kernels.FlashPrefill80WhyNot(kernels.FlashPrefill70Shape{Heads: 8, KVHeads: 8, Dim: 320, Rows: 64, Page: 64}); why == "" {
+		t.Fatal("a 320-wide head was taken; FlashPrefill80 declines it by name")
 	}
 	shapes := append(flashPrefillShapes[:len(flashPrefillShapes):len(flashPrefillShapes)],
 		struct {
 			fs   kernels.FlashPrefill70Shape
 			sink bool
-		}{kernels.FlashPrefill70Shape{Heads: 12, KVHeads: 4, Dim: 96, Scale: .102}, false})
+		}{kernels.FlashPrefill70Shape{Heads: 12, KVHeads: 4, Dim: 96, Scale: .102}, false},
+		// Past 128 the head's dims split over two warps (gemma-2b's 256).
+		struct {
+			fs   kernels.FlashPrefill70Shape
+			sink bool
+		}{kernels.FlashPrefill70Shape{Heads: 8, KVHeads: 4, Dim: 256, Scale: .0625}, false},
+		struct {
+			fs   kernels.FlashPrefill70Shape
+			sink bool
+		}{kernels.FlashPrefill70Shape{Heads: 8, KVHeads: 1, Dim: 256, Scale: .0625, Softcap: 50, F16: true}, true})
 	ran := 0
 	vdevs := mmaDevices(t, devs, ir.MMAVolta)
 	for _, d := range mmaDevices(t, devs, ir.MMAShape{M: 16, N: 8, K: 16, Kind: ir.MMAF16}) {
@@ -66,7 +75,7 @@ func TestPagedFlashPrefill80(t *testing.T) {
 									t.Fatalf("keyEnds one short passed (NMSE %.3g)", bad)
 								}
 								msg := fmt.Sprintf("NMSE %.3g", nmse)
-								if both && fs.Dim != 96 {
+								if both && (fs.Dim == 64 || fs.Dim == 128) {
 									ref, _, err := pagedFlashPrefill(t, d, fs, sh.sink, flash70Form, p, p.tab, p.desc, rows)
 									if err != nil {
 										t.Fatal(err)
