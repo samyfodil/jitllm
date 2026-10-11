@@ -235,6 +235,21 @@ The [performance overview](docs/performance.md) has every row with its
 hardware, backends and lengths, and where jitllm is still behind; the
 [scoreboard](docs/perf/current.md) has the commands and controls behind each.
 
+## Why Go?
+
+Most inference engines are written in C, C++ or Rust, and some of the best work
+is. The choice here is practical:
+
+- **It is the language the author knows best for writing a JIT**: emitting
+  machine code, mapping it executable and calling into it.
+- **It is portable.** One toolchain cross-compiles every target, and with no cgo
+  there is no C toolchain or vendor SDK per target.
+- **It compiles fast, so experiments are fast.** Most of this engine was found
+  by trying an idea and measuring it.
+
+The hot paths are generated machine code either way; Go carries the parts around
+them (paging, placement, scheduling).
+
 ## Build
 
 All you need is Go: **Go 1.26 or newer**, no C toolchain, no GPU SDK, no Python.
