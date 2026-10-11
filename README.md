@@ -3,7 +3,7 @@
 <h3 align="center">Your models. Your hardware. Full speed.</h3>
 
 <p align="center"><b>An operating system for LLM inference.</b><br>
-Generated kernels · models bigger than memory · layers that move mid-conversation</p>
+Generated kernels · models bigger than memory · runtime layer orchestration that maximizes performance</p>
 
 
 <p align="center">
