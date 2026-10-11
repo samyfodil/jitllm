@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // FromJSON decodes JSON into a Value, keeping every object's keys in the order
@@ -69,4 +70,13 @@ func decodeJSONValue(d *json.Decoder) (Value, error) {
 	default:
 		return FromGoValue(x), nil
 	}
+}
+
+// JSON is v encoded as JSON, keys in their order, in the form tojson writes.
+func (v Value) JSON() string {
+	var sb strings.Builder
+	if err := encodeValueJSON(&sb, v); err != nil {
+		return "null"
+	}
+	return sb.String()
 }

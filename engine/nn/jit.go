@@ -207,7 +207,11 @@ type JIT struct {
 	// a nil entry is a cached refusal. gemmCalls counts the MatMulPacked calls
 	// that ran it, since a decline is correct and therefore invisible.
 	wsGEMM map[wsKey]*cpu.Code
-	mout   []float32 // its padded [ntok][nrows+GEMMPad/4] output
+	// floatMM is the float GEMM per (type, token tile), under tiledMu; a nil
+	// entry is a cached refusal (floatmm.go).
+	floatMM      map[floatMMKey]*cpu.Code
+	floatMMCalls atomic.Int64
+	mout         []float32 // its padded [ntok][nrows+GEMMPad/4] output
 	// mmj is MatMulPacked's per-call state and the mm*Fn its pool regions,
 	// method values built once so a warm batched matmul allocates nothing.
 	mmj                                    mmJob
@@ -740,6 +744,12 @@ func (f *JIT) Close() error {
 		}
 	}
 	f.wsGEMM = nil
+	for _, c := range f.floatMM {
+		if c != nil {
+			c.Close()
+		}
+	}
+	f.floatMM = nil
 	f.tiledMu.Unlock()
 	for _, c := range f.kvWiden {
 		c.Close()

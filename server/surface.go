@@ -33,6 +33,10 @@ type Backend interface {
 	// Embed is the one embedding path; /v1/embeddings calls this and nothing
 	// else to produce vectors.
 	Embed(ctx context.Context, o EmbedOptions) (*EmbedResult, error)
+
+	// Decide is the one decision path; /v1/systemone calls this and nothing
+	// else to answer.
+	Decide(ctx context.Context, o DecideOptions) (*DecideResult, error)
 }
 
 // ModelSummary is the little a model list needs.
@@ -93,6 +97,7 @@ func CompatHandler(b Backend) http.Handler {
 	mux.HandleFunc("/v1/completions", c.openAICompletions)
 	mux.HandleFunc("/v1/models", c.openAIModels)
 	mux.HandleFunc("/v1/embeddings", c.openAIEmbeddings)
+	mux.HandleFunc("/v1/systemone", c.systemOne)
 	mux.HandleFunc("/v1/messages", c.anthropicMessages)
 	return mux
 }

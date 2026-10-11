@@ -121,6 +121,10 @@ type Emitters struct {
 	// Rows != 1 and nn simply has no f.code4 for that type.
 	RowMajorSupported func(t quant.Type) bool
 	RowMajor          func(s Spec) ([]byte, error)
+	// FloatMatMul is the float GEMM over a tile of 1..MaxFloatTokens tokens
+	// (EmitFloatMatMul): F32, F16 or BF16 rows read once for the tile, Args
+	// as the float matvec's plus OutStr between the tokens' outputs.
+	FloatMatMul func(t quant.Type, nt int) ([]byte, error)
 	// RowMajorGGUF reports whether the rest of the GGUF row-major machinery
 	// exists on this tier: nn.MatMul's token-tiled GEMM and AddShape's
 	// interleaved pack-width kernels. It does not on the SSE tier (a container
@@ -331,6 +335,7 @@ var primaryEmitters = Emitters{
 
 	RowMajorSupported: primaryRowMajorSupported,
 	RowMajor:          EmitNative,
+	FloatMatMul:       EmitFloatMatMul,
 	RowMajorGGUF:      true,
 	PackedSupported:   primaryPackedSupported,
 	// The packed emitters take the host's dot sequence at EMISSION time, as
@@ -429,6 +434,7 @@ var sseEmitters = Emitters{
 
 	RowMajorSupported: SupportedRowMajorSSE,
 	RowMajor:          EmitRowMajorSSE,
+	FloatMatMul:       EmitFloatMatMulSSE,
 	RowMajorGGUF:      false,
 	PackedSupported:   SupportedPackedSSE,
 	PackedMatVec:      EmitPackedMatVecSSE,

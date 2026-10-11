@@ -23,6 +23,8 @@ const (
 	ActSqrtSoftplus = kernels.ActSqrtSoftplus
 	// ActSitu is Kimi-K3's: both operands bounded by a scaled tanh.
 	ActSitu = kernels.ActSitu
+	// ActGELUErf is GELU with erf, transformers' and torch's default.
+	ActGELUErf = kernels.ActGELUErf
 )
 
 // Ungated and Gated are kernels.Ungated and kernels.Gated.

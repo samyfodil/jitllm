@@ -1,0 +1,10 @@
+{
+  "state": "The parcel arrived one day after the promised date. The box was dented but everything inside works. The customer wrote: fine I guess, but next time I might order elsewhere.",
+  "questions": {
+    "compensate": {"type": "noul", "instructions": "Should we offer compensation?", "criteria": {"true": "the customer was inconvenienced enough to deserve something", "false": "nothing went wrong that deserves compensation"}},
+    "churn": {"type": "noul", "instructions": "Is the customer likely to leave?", "criteria": {"true": "they signal they may stop ordering", "false": "they will keep ordering"}},
+    "damage": {"type": "noul", "instructions": "Was the item damaged?", "criteria": {"true": "the product itself is broken", "false": "the product works"}},
+    "tone": {"type": "choice", "instructions": "What is the customer's tone?", "criteria": {"happy": "pleased", "neutral": "neither pleased nor upset", "annoyed": "mildly upset", "angry": "very upset"}},
+    "issue": {"type": "choice", "instructions": "What went wrong?", "criteria": {"late": "delivery was late", "damaged": "the box or item was damaged", "wrong": "the wrong item came", "none": "nothing went wrong"}}
+  }
+}

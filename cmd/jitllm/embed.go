@@ -26,6 +26,8 @@ func embedCmd(args []string) error {
 	fs := flag.NewFlagSet("embed", flag.ExitOnError)
 	showIDs := fs.Bool("ids", false, "print the token ids to stderr")
 	lines := fs.Bool("lines", false, "embed every line of stdin instead of the text arguments")
+	dev := fs.String("devices", "auto", "where the blocks run, as run's -devices")
+	layers := fs.Int("gpu-layers", -1, "cap the blocks offered to the device; -1 fits as many as the card holds")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -53,8 +55,19 @@ func embedCmd(args []string) error {
 		return err
 	}
 	defer e.Close()
-	fmt.Fprintf(os.Stderr, "%s: %s, %d dims, %v pooling, loaded in %v\n",
-		fs.Arg(0), m.Cfg.Arch, m.Cfg.NEmbd, m.Pooling(), time.Since(t0).Round(time.Millisecond))
+	g, closeDev, devName, err := openDevices(*dev, 0, 0, m.StreamGroups())
+	if err != nil {
+		return err
+	}
+	defer closeDev()
+	if g != nil {
+		if err := e.SetDeviceLayers(g, *layers); err != nil {
+			return err
+		}
+		defer e.SetDeviceLayers(nil, 0)
+	}
+	fmt.Fprintf(os.Stderr, "%s: %s, %d dims, %v pooling, %d blocks on %s, loaded in %v\n",
+		fs.Arg(0), m.Cfg.Arch, m.Cfg.NEmbd, m.Pooling(), e.DeviceBlocks(), devName, time.Since(t0).Round(time.Millisecond))
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
 	one := func(text string) error {

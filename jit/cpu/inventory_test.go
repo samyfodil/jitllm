@@ -41,8 +41,11 @@ var elementwiseInventory = []struct {
 	// Kimi-K3's situ: both operands bounded by a scaled tanh, the gate's
 	// times its sigmoid.
 	{"actmul/situ", func() []byte { return EmitActMul(ActSitu) }},
+	// GELU with erf, transformers' and torch's default (ModernBERT, Laya).
+	{"actmul/gelu-erf", func() []byte { return EmitActMul(ActGELUErf) }},
 	{"act/silu", func() []byte { return EmitAct(ActSiLU) }},
 	{"act/gelu", func() []byte { return EmitAct(ActGELU) }},
+	{"act/gelu-erf", func() []byte { return EmitAct(ActGELUErf) }},
 	// quick-GELU, x*sigma(1.702x): CLIP's tower.
 	{"act/quickgelu", func() []byte { return EmitAct(ActQuickGELU) }},
 	// Squared ReLU, max(x,0)^2: Nemotron's ungated FFN.

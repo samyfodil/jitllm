@@ -1831,3 +1831,13 @@ Section 9 is kept current with what landed; the evidence for each is in
   9.8e-11/4.5e-12 device-vs-host on CUDA. The safetensors path is not built
   (every published K3 ships compressed-tensors MXFP4 experts), and no real
   checkpoint is held here (2.8T; the pruned75 derivative is 442.5 GiB).
+
+## 10. Decision models: added on the user's decision
+
+The user decided to add the decision-model family (models that answer typed
+questions in one forward pass and generate nothing: Laya, Clef-Flash, d1, Lev,
+and the open models that speak TypeSafe's `/v1/systemone`). The research, the
+four readout mechanisms and the build order are in
+`docs/design/decision-models.md`. Most of the family is a readout over a
+backbone jitllm already runs (qwen35, lfm2); Laya brings a new encoder
+architecture (ModernBERT) and Clef a joint head.

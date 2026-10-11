@@ -1,0 +1,10 @@
+{
+  "state": {"message": "Hi, I was charged twice for my order #4471 and I want a refund.", "plan": "pro", "order": {"id": 4471, "items": ["phone case", "charger"]}},
+  "questions": {
+    "intent": {"type": "choice", "instructions": "What does the customer want?", "criteria": {"refund": "wants money back", "cancel": "wants to cancel an order", "track": "wants to know where an order is", "other": "anything else"}},
+    "urgent": {"type": "noul", "instructions": "Does this need a human within the hour?"},
+    "frustration": {"type": "score", "instructions": "How frustrated is the customer?", "criteria": ["calm", "mildly annoyed", "annoyed", "angry"]},
+    "refund": {"type": "noul", "instructions": "Is a refund requested?", "criteria": {"true": "money back is asked", "false": "no money back is asked"}},
+    "team": {"type": "choice", "instructions": "Which team?", "criteria": {"billing": null, "shipping": null, "technical": null, "sales": null, "legal": null, "returns": null, "fraud": null, "accounts": null, "retention": null, "other": null}}
+  }
+}

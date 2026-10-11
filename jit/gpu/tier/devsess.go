@@ -75,6 +75,10 @@ type devSess struct {
 	// the set is the device's, and another session's picture may have been
 	// staged in it since.
 	winRuns []nn.KeyRun
+	// winPerRow says winRuns is one window a row (SetRowWindows: a symmetric
+	// sliding window, whose rows' windows overlap) rather than runs
+	// partitioning the rows.
+	winPerRow bool
 	// embPend is the prompt chunk EmbedRows promised and the next submission
 	// gathers (embed.go). Guarded by mu.
 	embPend *embPend
@@ -84,6 +88,9 @@ type devSess struct {
 	// winSegs is setWindows' [lo, hi) pairs, kept so a picture's windows
 	// allocate nothing past the first. Guarded by mu.
 	winSegs []int
+	// winBuf is the windows' upload, one [lo, hi) word pair a row, kept for
+	// the same reason: a warm call stages them again and allocates nothing.
+	winBuf []byte
 	// pleHost is the rows' per-layer embedding inputs for the next call
 	// (SetLayerInputs) and pleStage their padded staging.
 	pleHost, pleStage []float32
@@ -145,6 +152,10 @@ type lane struct {
 	// in this lane samples: the history, the penalized row, the first
 	// pass's candidates and the k that come home.
 	sampleArgs, samplePen, sampleV1, sampleI1, sampleV, sampleI backend.Buf
+	// The label pick's ids and the logits it gathers (pick.go), made the
+	// first time a call in this lane picks, and the ids' host staging.
+	pickIDs, pickOut backend.Buf
+	pickHost         []byte
 	// recs is a map, not one slot, because a token can issue more than one
 	// sequence (blocks under {0,gl} and a head-only call under {gl,gl}); one
 	// slot would have them evict each other, a capture per call. A recording
@@ -614,6 +625,7 @@ func (g *devTier) dropLane(l *lane) {
 		l.argmaxOut = nil
 	}
 	l.freeSample()
+	l.freePick()
 }
 
 // dropLanes frees every clone: what a device dropping its scratch, or closing,

@@ -32,17 +32,28 @@ type Embedder struct {
 	m   *Model
 	jit *nn.JIT
 	st  *State // a decoder embedding model's session; nil for an encoder
+	// seg is an encoder's segment State, the one its blocks are placed on a
+	// device through (encdev.go); nil until a device is attached.
+	seg *State
+	// wins is the row windows a ModernBERT local block is handed (devPrepare).
+	wins []nn.KeyRun
 
 	// The encoder's scratch, grown to the longest sequence seen.
 	cap                       int
 	x, xb, q, k, v, t, ff, gg []float32
-	att, acc, cs              []float32
+	att, acc, cs, csL         []float32
 	attStride                 int
 	pooled, norm, ones, dense []float32
+	// The attention kernel sets of the encoder's blocks and of a decision
+	// head's, which differ when their head widths do.
+	attnEnc, attnHead *nn.AttnSet
 
 	// afterBlock, when set, sees the residual after every encoder block --
 	// the per-layer bisection hook the correctness gates use.
 	afterBlock func(li int, x []float32)
+	// violation names one feature of the ModernBERT graph a test removes, to
+	// show its gate sees it (RULE 10). Empty everywhere but those tests.
+	violation string
 	// skipDense reads the vector out before any projection head, matching
 	// llama.cpp on a GGUF converted without the dense modules. Tests only.
 	skipDense bool
@@ -66,25 +77,18 @@ func (m *Model) NewEmbedder() (*Embedder, error) {
 	if !m.IsEmbedding() {
 		return nil, fmt.Errorf("model: %s is not an embedding model (its container sets no pooling)", m.Cfg.Arch)
 	}
+	if m.encMB() != nil {
+		// ModernBERT runs here for a decision head (NewDecider); pooling its
+		// residual into an embedding has no gate behind it yet.
+		return nil, fmt.Errorf("model: %s embeddings are not implemented; it runs as a decision model", m.Cfg.Arch)
+	}
 	e := &Embedder{m: m}
 	c := m.Cfg
 	if m.enc == nil {
 		st := m.NewState(min(c.NCtx, embedMaxSeq))
 		e.st, e.jit = st, st.jit
-	} else {
-		types := []quant.Type{quant.F32, m.embd.typ}
-		for i := range m.enc.blocks {
-			for _, w := range m.enc.blocks[i].weights() {
-				types = append(types, w.typ)
-			}
-		}
-		e.jit = nn.NewJIT(max(c.NEmbd, c.NFFN), max(c.NEmbd, c.NFFN), types, m.jit...)
-		if e.jit == nil {
-			return nil, fmt.Errorf("model: no code generator for the encoder on this host")
-		}
-		// f32 k and v at the residual's stride: the encoder's k/v are its
-		// projections, rows of NEmbd, the layout the tower's attention reads.
-		e.jit.AddAttn(c.HeadDim, c.NEmbd, cpu.KVF32)
+	} else if err := e.encoderJIT(); err != nil {
+		return nil, err
 	}
 	e.ones = make([]float32, c.NEmbd)
 	for i := range e.ones {
@@ -95,11 +99,61 @@ func (m *Model) NewEmbedder() (*Embedder, error) {
 	return e, nil
 }
 
+// encoderJIT builds the encoder's code generator and worker pool: every
+// weight type its matmuls read, and the attention kernels at each head width
+// it runs.
+func (e *Embedder) encoderJIT() error {
+	m, c := e.m, e.m.Cfg
+	types := []quant.Type{quant.F32, m.embd.typ}
+	width := max(c.NEmbd, c.NFFN)
+	if mb := m.enc.mb; mb != nil {
+		for i := range mb.blocks {
+			for _, w := range mb.blocks[i].weights() {
+				types = append(types, w.typ)
+			}
+		}
+		for i := range mb.head {
+			for _, w := range mb.head[i].weights() {
+				types = append(types, w.typ)
+			}
+		}
+		if mb.head != nil {
+			types = append(types, mb.sc.typ, mb.scOut.typ)
+			width = max(width, mb.headFFN)
+		}
+	} else {
+		for i := range m.enc.blocks {
+			for _, w := range m.enc.blocks[i].weights() {
+				types = append(types, w.typ)
+			}
+		}
+	}
+	e.jit = nn.NewJIT(width, width, types, m.jit...)
+	if e.jit == nil {
+		return fmt.Errorf("model: no code generator for the encoder on this host")
+	}
+	// f32 k and v at the residual's stride: the encoder's k/v are its
+	// projections, rows of NEmbd, the layout the tower's attention reads.
+	e.jit.AddAttn(c.HeadDim, c.NEmbd, cpu.KVF32)
+	// A decision head's attention is its own geometry (its head count is the
+	// reference's, not the encoder's), so its kernels are a set of their own.
+	e.attnEnc = e.jit.Attn()
+	e.attnHead = e.attnEnc
+	if mb := m.enc.mb; mb != nil && mb.head != nil {
+		e.attnHead = e.jit.AttnSetFor(c.NEmbd/mb.headHeads, c.NEmbd/mb.headHeads, c.NEmbd, cpu.KVF32)
+	}
+	return nil
+}
+
 // Close releases the embedder's worker pool or session.
 func (e *Embedder) Close() {
 	if e.st != nil {
 		e.st.Close()
 		return
+	}
+	if e.seg != nil {
+		e.seg.Close()
+		e.seg = nil
 	}
 	if e.jit != nil {
 		e.jit.Close()
@@ -129,10 +183,15 @@ func (e *Embedder) grow(n int) {
 	e.cap = n
 	e.x, e.xb = make([]float32, n*d), make([]float32, n*d)
 	e.q, e.k, e.v, e.t = make([]float32, n*d), make([]float32, n*d), make([]float32, n*d), make([]float32, n*d)
-	e.ff = make([]float32, n*c.NFFN, ffnPad(n*c.NFFN))
-	e.gg = make([]float32, n*c.NFFN, ffnPad(n*c.NFFN))
+	ffn, heads := c.NFFN, c.NHead
+	if mb := e.m.encMB(); mb != nil {
+		ffn, heads = max(ffn, mb.headFFN), max(heads, mb.headHeads)
+		e.csL = make([]float32, n*max(c.NRot, 2))
+	}
+	e.ff = make([]float32, n*ffn, ffnPad(n*ffn))
+	e.gg = make([]float32, n*ffn, ffnPad(n*ffn))
 	e.attStride = nn.SoftmaxPad(n)
-	e.att = make([]float32, c.NHead*e.attStride)
+	e.att = make([]float32, heads*e.attStride)
 	e.acc = make([]float32, c.NHead*c.HeadDim)
 	e.cs = make([]float32, n*max(c.NRot, 2))
 }

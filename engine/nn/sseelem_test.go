@@ -90,6 +90,7 @@ func TestElementwiseEntryPointsComputeOnTheSSETier(t *testing.T) {
 	gatedRef := map[ActKind]func(a, b float64) float64{
 		ActSiLU:        func(a, b float64) float64 { return oracle.SiLU(a) * b },
 		ActGELU:        func(a, b float64) float64 { return oracle.GELUTanh(a) * b },
+		ActGELUErf:     func(a, b float64) float64 { return oracle.GELUErf(a) * b },
 		ActSwiGLUOAI:   oracle.SwiGLUOAI,
 		ActSwiGLUClamp: oracle.SwiGLUClamp,
 		ActSitu:        oracle.Situ,
@@ -103,6 +104,7 @@ func TestElementwiseEntryPointsComputeOnTheSSETier(t *testing.T) {
 	ungatedRef := map[ActKind]func(a, _ float64) float64{
 		ActSiLU:      func(a, _ float64) float64 { return oracle.SiLU(a) },
 		ActGELU:      func(a, _ float64) float64 { return oracle.GELUTanh(a) },
+		ActGELUErf:   func(a, _ float64) float64 { return oracle.GELUErf(a) },
 		ActQuickGELU: func(a, _ float64) float64 { return quick(a) },
 		ActReLU2:     func(a, _ float64) float64 { r := math.Max(a, 0); return r * r },
 		ActReLU:      func(a, _ float64) float64 { return math.Max(a, 0) },
