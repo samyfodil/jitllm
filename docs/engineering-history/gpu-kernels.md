@@ -5440,6 +5440,35 @@ A100's (binary16 with float32 sums at the full rate, int8 at twice it) or
 an Ada card's (int8 at four times the float32-accumulate rate), and the rows
 that matter have to be taken there.
 
+### The three items left after the GEMMs
+
+Per-launch device time of a warm 512-row Llama-3.2-1B Q4_K_M prompt on the
+RTX 3050 Ti, the arms interleaved twice in one sitting (before: NoFlashPrefill,
+NoOperandFuse, WithKVPrewarm(false); the binary16 arms NoGemmInt8 as well).
+The card swings tens of percent between passes, so these are counts of where
+the time sits, not a rate:
+
+    attention (int8 arm)     scores 6.6-8.6 + softmax 4.3-5.5 + accumulate 6.5-9.7 ms
+                             -> FlashPrefill80 2.9-4.9 ms
+    operands (int8 arm)      ActMul 4.9-8.3 + Quantize (33 launches) 3.9-6.9 ms
+                             -> QuantizeAct 5.8-8.3 + Quantize (17) 0.7-0.8 ms
+    operands (binary16 arm)  ActMul 6.2-6.7 + ActF16T (72) 6.8-7.4 + RMSNorm 2.7-4.6 ms
+                             -> ActMulF16T 4.7-6.6 + RMSNormF16TRows 3.2 + ActF16T (24) 1.1 ms
+    first prompt (int8 arm)  171 ms against a warm 136-137
+                             -> 113-116 against a warm 119-130
+
+- **FlashPrefill80** is FlashPrefill70 in FlashAttention-2's layout, so the
+  score fragment is the next product's A fragment and P never reaches shared
+  memory. Heads past 128 are declined by name.
+- **The fused operands.** A first form gave each thread a whole
+  (token, sub-block) as ActF16T does. It was slower than the two launches it
+  replaced: the norm's second phase had 64 of 1024 threads busy per row, and
+  each thread ran a sub-block's exponentials 16 to 32 deep. One output word a
+  thread (`f16WordElems`, a word's two elements by arithmetic) is the form
+  that ships.
+- **The KV prewarm** moves the pool's growth into placement: 100-200 ms more
+  placement on the laptop, and the first prompt reads as warm.
+
 ## Measurements once cited in jit/gpu/tier's comments
 
 The tier's comments state the engineering reason and the class of card; the
