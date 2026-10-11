@@ -1149,7 +1149,9 @@ type ChatInput struct {
 	ToolChoice model.ToolChoice
 }
 
-// Prompt is what a generate runs: the member Kind names is the one read.
+// Prompt is what a generate runs: the member Kind names is the one read. A
+// chat with pictures, laid out as PromptSpans, keeps its Chat beside the
+// spans for its tools.
 type Prompt struct {
 	Kind  PromptKind
 	Text  string
@@ -1424,12 +1426,11 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		if err != nil {
 			return err
 		}
-		o.Prompt = Prompt{Kind: PromptSpans, Spans: sp}
+		// Chat stays beside the spans: its tools are what a forced call's
+		// grammar and the reply's call parsing read.
+		o.Prompt = Prompt{Kind: PromptSpans, Spans: sp, Chat: o.Prompt.Chat}
 	}
 	if o.Prompt.Kind == PromptSpans {
-		if o.Continue {
-			return fmt.Errorf("%w: a span prompt starts its sequence; it cannot continue one", ErrInvalid)
-		}
 		if len(o.Prompt.Spans) == 0 {
 			return fmt.Errorf("%w: the prompt is empty", ErrInvalid)
 		}
@@ -1455,7 +1456,17 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	// Room for this generate's history, parking idle sessions of the model
 	// if its KV budget is short (preempt.go), and this session back if it
 	// was the one parked.
-	if err := e.admitKV(s, len(ids)+tokenLimit(o.MaxTokens, s.st.MaxSeq()-s.st.Pos()-len(ids))); err != nil {
+	// tail is the prompt's last token ids, which a forced tool call's grammar
+	// reads; npos is the positions the prompt takes, a picture's rows included.
+	tail, npos := ids, len(ids)
+	if spans {
+		npos = model.SpanPositions(o.Prompt.Spans, lm.m.Cfg.NEmbd)
+		tail = nil
+		for i := len(o.Prompt.Spans) - 1; i >= 0 && tail == nil; i-- {
+			tail = o.Prompt.Spans[i].Tokens
+		}
+	}
+	if err := e.admitKV(s, npos+tokenLimit(o.MaxTokens, s.st.MaxSeq()-s.st.Pos()-npos)); err != nil {
 		return err
 	}
 	spec := s.spec
@@ -1468,7 +1479,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 			"from one verification and reads back no distribution for each", ErrInvalid)
 	}
 	var con *constraint
-	if tc, err := lm.toolConstraint(o, ids); err != nil {
+	if tc, err := lm.toolConstraint(o, tail); err != nil {
 		return err
 	} else if tc != nil {
 		if o.IgnoreEOS {
@@ -1552,7 +1563,13 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		first, err = sp.Start(ids, &sampler)
 	case spans:
 		prompted = model.SpanPositions(o.Prompt.Spans, lm.m.Cfg.NEmbd)
-		logits, err = s.st.PrefillCachedMixed(o.Prompt.Spans...)
+		if o.Continue {
+			// A continued session's history holds its earlier pictures as
+			// rows already; the new spans follow them.
+			logits, err = s.st.PrefillMixed(o.Prompt.Spans...)
+		} else {
+			logits, err = s.st.PrefillCachedMixed(o.Prompt.Spans...)
+		}
 		restored = s.st.KVRestored()
 	case (s.cached || store) && !o.Continue:
 		logits, err = s.st.PrefillCached(ids)
@@ -1751,9 +1768,6 @@ func (e *Engine) generateN(ctx context.Context, o GenerateOptions, emit func(Eve
 		return fmt.Errorf("%w: several choices run on fresh sessions of a model; "+
 			"a named session or continue_session takes one", ErrInvalid)
 	}
-	if o.Prompt.Kind == PromptSpans || o.Prompt.Chat != nil && len(o.Prompt.Chat.Images) > 0 {
-		return fmt.Errorf("%w: several choices of a prompt with a picture are not built", ErrInvalid)
-	}
 	if o.Speculation != nil && o.Speculation.Enabled {
 		return fmt.Errorf("%w: speculation with several choices is not built: the choices prefill "+
 			"through a shared prompt store, which a Speculator does not use", ErrInvalid)
@@ -1882,13 +1896,6 @@ func pictureSpans(s *Session, o GenerateOptions) ([]model.Span, error) {
 		return nil, fmt.Errorf("%w: model %q carries no chat template, which is where a picture's "+
 			"markers go", ErrInvalid, lm.id)
 	}
-	if o.Continue {
-		return nil, fmt.Errorf("%w: a prompt with a picture starts its sequence; it cannot continue one", ErrInvalid)
-	}
-	if len(chat.Tools) > 0 || chat.ToolChoice != (model.ToolChoice{}) {
-		return nil, fmt.Errorf("%w: tools beside a picture are not built: the picture's prompt is "+
-			"rendered without the tool list", ErrInvalid)
-	}
 	n := 0
 	for _, m := range chat.Messages {
 		n += m.Images
@@ -1901,7 +1908,7 @@ func pictureSpans(s *Session, o GenerateOptions) ([]model.Span, error) {
 	if chat.HasSystem {
 		msgs = append([]model.ChatMessage{{Role: "system", Content: chat.System}}, msgs...)
 	}
-	sp, err := s.st.ChatPictureSpans(msgs, chat.Images, chat.AddGenerationPrompt)
+	sp, err := s.st.ChatPictureSpans(msgs, chat.Images, chat.Tools, chat.ToolChoice, chat.AddGenerationPrompt)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}

@@ -40,8 +40,10 @@ type Picture struct {
 // puts its image markers: each picture laid out as its tower takes it -- Llama
 // 4's tiles (Llama4Spans), MiniCPM-V's overview and slices (PictureSpans), or
 // one Picture preprocessed on this State's vision segment. The prompt's
-// prefill encodes them, or the image cache answers.
-func (s *State) ChatPictureSpans(msgs []ChatMessage, imgs []image.Image, addGenerationPrompt bool) ([]Span, error) {
+// prefill encodes them, or the image cache answers. tools and choice are
+// rendered as ChatIDsToolChoice renders them (nil for none).
+func (s *State) ChatPictureSpans(msgs []ChatMessage, imgs []image.Image, tools []byte, choice ToolChoice,
+	addGenerationPrompt bool) ([]Span, error) {
 	tw := s.m.Tower()
 	if tw == nil {
 		return nil, fmt.Errorf("model: %d image(s) and this model has no vision tower", len(imgs))
@@ -55,7 +57,7 @@ func (s *State) ChatPictureSpans(msgs []ChatMessage, imgs []image.Image, addGene
 			}
 			pics[i] = Image{Picture: pc}
 		}
-		return s.m.ChatSpansImages(msgs, pics, addGenerationPrompt)
+		return s.m.chatSpansImages(msgs, pics, tools, choice, addGenerationPrompt)
 	}
 	parts := make([][]Span, len(imgs))
 	for i, img := range imgs {
@@ -65,7 +67,7 @@ func (s *State) ChatPictureSpans(msgs []ChatMessage, imgs []image.Image, addGene
 		}
 		parts[i] = sp
 	}
-	return s.m.ChatSpansParts(msgs, parts, addGenerationPrompt)
+	return s.m.chatSpansParts(msgs, parts, tools, choice, addGenerationPrompt)
 }
 
 // pictureRun is the i-th picture's run of the prompt, markers included, for
