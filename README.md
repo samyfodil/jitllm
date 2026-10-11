@@ -35,6 +35,10 @@ Generated kernels · models bigger than memory · layers that move mid-conversat
 <a href="docs/embedding-go.md">Embed</a>
 </p>
 
+<a id="the-five-principles"></a>
+<a id="how-it-works"></a>
+<a id="memory-and-placement"></a>
+
 ## The engine
 
 - **Kernels written for the machine in front of it.** Every kernel is emitted
@@ -138,16 +142,6 @@ macOS and Windows on x86-64 and arm64. GPUs need only their driver.
 > ([#34](https://github.com/jitllm/jitllm/issues/34)). To stay on the
 > tested path, pick the Vulkan device explicitly (`-devices vulkan:0`).
 
-To build from source instead, with **Go 1.26 or newer** and no C toolchain:
-
-```sh
-git clone https://github.com/jitllm/jitllm.git && cd jitllm
-go build ./cmd/jitllm
-(cd server && go build -o ../jitllmd ./cmd/jitllmd)
-(cd ui && CGO_ENABLED=0 go build -o ../jitllm-desktop .)
-(cd tui && go build -o ../jitllm-tui .)
-```
-
 ## Quick start
 
 ```sh
@@ -210,23 +204,33 @@ from the code, is [docs/models.md](docs/models.md); the [vision guide](docs/visi
 
 ## Performance
 
-Results vary by model, hardware and workload. The [scoreboard](docs/perf/current.md)
-compares engines measured in the same pass on the same machine, with hardware,
-backends, prompt lengths and generation lengths alongside the results.
-The [performance overview](docs/performance.md) preserves the comparison tables
-and their limitations; [scripts/vs-llamacpp.sh](scripts/vs-llamacpp.sh) measures your machine.
+Every ratio is jitllm's rate over the other engine's, measured in the same pass
+on the same machine:
 
-## Documentation
+- **Up to 4.62x llama.cpp's prefill** (Qwen3-Next-80B on four V100s), ahead on
+  34 of 35 models and faster decode on all 35, from 0.4B to 120B.
+- **Up to 5.8x sooner to the first token than vLLM 0.18.1** and 1.26x its decode
+  (Llama-3.1-8B, one V100), and **up to 5.53x its batched decode**.
+- **Up to 3.72x llama.cpp's batched decode** at 16 to 128 sequences (V100).
+- **Up to 1.53x llama.cpp's decode on an Apple M4** (Metal), up to 1.67x its
+  prefill on the M4's CPU.
+- **Up to 1.67x llama.cpp's prefill on a 12-core Xeon**, and up to 6x
+  mistral.rs's decode.
 
-- [CLI and conversion](docs/cli.md) · [Server](docs/server.md) · [Docker](docs/docker.md) · [Devices](docs/devices.md)
-- [Runtime](docs/runtime.md) · [Memory and placement](docs/placement.md) · [Vision](docs/vision.md)
-- [Go library and desktop app](docs/embedding-go.md) · [Terminal app](docs/tui.md) · [Model API](engine/model/)
-- [Project docs](docs/) · [Testing](docs/testing.md) · [Roadmap](ROADMAP.md)
-- [Contributing](CONTRIBUTING.md) · [Project rules](AGENTS.md)
+The [performance overview](docs/performance.md) has every row with its
+hardware, backends and lengths, and where jitllm is still behind; the
+[scoreboard](docs/perf/current.md) has the commands and controls behind each.
 
-<a id="the-five-principles"></a>
-<a id="how-it-works"></a>
-<a id="memory-and-placement"></a>
-The [five principles](docs/runtime.md#the-five-principles) govern every execution
-path. See [how it works](docs/runtime.md#how-it-works) for the runtime, or
-[memory and placement](docs/placement.md) for budgets and relocation.
+## Build
+
+All you need is Go: **Go 1.26 or newer**, no C toolchain, no GPU SDK, no Python.
+
+```sh
+git clone https://github.com/jitllm/jitllm.git && cd jitllm
+go build ./cmd/jitllm
+(cd server && go build -o ../jitllmd ./cmd/jitllmd)
+(cd ui && CGO_ENABLED=0 go build -o ../jitllm-desktop .)
+(cd tui && go build -o ../jitllm-tui .)
+```
+
+Each is one static binary that finds CUDA, Vulkan or Metal at run time.
