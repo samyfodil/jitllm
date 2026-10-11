@@ -2,6 +2,10 @@
 
 <h3 align="center">Your models. Your hardware. Full speed.</h3>
 
+<p align="center"><b>An operating system for LLM inference.</b><br>
+Generated kernels · models bigger than memory · layers that move mid-conversation</p>
+
+
 <p align="center">
 <a href="https://github.com/jitllm/jitllm/releases/latest"><img src="https://img.shields.io/github/v/release/jitllm/jitllm" alt="Latest release"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 license"></a>
@@ -18,9 +22,6 @@
 <img src="https://img.shields.io/badge/macOS-arm64%20%7C%20x86--64-000000?logo=apple&logoColor=white" alt="macOS arm64 and x86-64">
 <img src="https://img.shields.io/badge/Windows-x86--64%20%7C%20arm64-0078D4" alt="Windows x86-64 and arm64">
 </p>
-
-<p align="center"><b>An operating system for LLM inference.</b><br>
-Generated kernels · models bigger than memory · layers that move mid-conversation</p>
 
 
 <p align="center">
