@@ -28,7 +28,8 @@
 Generated kernels · models bigger than memory · layers that move mid-conversation</p>
 
 <p align="center">
-<a href="#quick-start">Server/CLI</a> ·
+<a href="#quick-start">Server</a> ·
+<a href="docs/cli.md">CLI</a> ·
 <a href="#desktop-app">Desktop</a> ·
 <a href="#terminal-app">TUI</a> ·
 <a href="docs/embedding-go.md">Embed</a>
