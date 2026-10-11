@@ -1,12 +1,15 @@
 name: ci
 
+# Prose does not run the jobs, except docs/recipes: its command blocks are
+# tests (internal/srcgate.TestRecipesRun), run by the model-free job. The last
+# matching pattern wins.
 on:
   push:
     branches: [main]
-    paths-ignore: ["docs/**", "website/**", "**.md"]
+    paths: ["**", "!docs/**", "!website/**", "!**.md", "docs/recipes/**"]
   pull_request:
     branches: [main]
-    paths-ignore: ["docs/**", "website/**", "**.md"]
+    paths: ["**", "!docs/**", "!website/**", "!**.md", "docs/recipes/**"]
   workflow_dispatch:
 
 permissions:
