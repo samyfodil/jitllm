@@ -26,7 +26,7 @@ checksums.
 bundle:
 
 ```
-jitllm.app/Contents/Info.plist           bundle id io.github.samyfodil.jitllm, version from the tag
+jitllm.app/Contents/Info.plist           bundle id org.jitllm.app, version from the tag
 jitllm.app/Contents/MacOS/jitllm-desktop the desktop app
 jitllm.app/Contents/Resources/jitllm.icns drawn from app.IconAt, the window icon
 jitllm.app/Contents/Resources/bin/jitllm  the CLI
@@ -47,7 +47,7 @@ The app (`ui/install`, `ui/screen/cli.go`):
   `~/.local/bin` if the prompt is declined;
 - **Settings > Command line** links and unlinks them, and **Start the server
   at login** installs or removes the launchd user agent
-  `~/Library/LaunchAgents/io.github.samyfodil.jitllm.jitllmd.plist`, which
+  `~/Library/LaunchAgents/org.jitllm.app.jitllmd.plist`, which
   runs `jitllmd serve -addr 127.0.0.1:8080 -models <first model folder>`,
   restarting it if it crashes, logging to `~/Library/Logs/jitllm/jitllmd.log`.
 

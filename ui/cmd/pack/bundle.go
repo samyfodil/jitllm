@@ -12,7 +12,7 @@ import (
 
 // bundleID names the app to macOS: Launch Services, the Dock and the
 // settings an app keeps under ~/Library are keyed on it.
-const bundleID = "io.github.samyfodil.jitllm"
+const bundleID = "org.jitllm.app"
 
 // minMacOS is the oldest macOS the Go toolchain this module builds with runs
 // on.

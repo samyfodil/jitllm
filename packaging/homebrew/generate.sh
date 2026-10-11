@@ -60,12 +60,12 @@ cask "jitllm" do
   binary "#{appdir}/jitllm.app/Contents/Resources/bin/jitllm"
   binary "#{appdir}/jitllm.app/Contents/Resources/bin/jitllmd"
 
-  uninstall launchctl: "io.github.samyfodil.jitllm.jitllmd",
-            quit:      "io.github.samyfodil.jitllm"
+  uninstall launchctl: "org.jitllm.app.jitllmd",
+            quit:      "org.jitllm.app"
 
   zap trash: [
     "~/Library/Application Support/jitllm",
-    "~/Library/LaunchAgents/io.github.samyfodil.jitllm.jitllmd.plist",
+    "~/Library/LaunchAgents/org.jitllm.app.jitllmd.plist",
     "~/Library/Logs/jitllm",
   ]
 end
