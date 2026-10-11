@@ -1,5 +1,19 @@
 <p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/jitllm.svg"><img src="docs/assets/jitllm-light.svg" alt="jitllm" width="318"></picture></p>
 
+<h3 align="center">Your models. Your hardware. Full speed.</h3>
+
+<p align="center">
+<a href="https://github.com/jitllm/jitllm/releases/latest"><img src="https://img.shields.io/github/v/release/jitllm/jitllm" alt="Latest release"></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 license"></a>
+</p>
+
+<p align="center">
+<a href="#quick-start">Get started</a> ·
+<a href="#performance">Benchmarks</a> ·
+<a href="https://jitllm.org/docs/">Docs</a> ·
+<a href="https://github.com/jitllm/jitllm/releases/latest">Download</a>
+</p>
+
 <p align="center">
 <a href="#performance"><img src="docs/assets/readme/perf.png" width="400" alt="Performance: 4.62x llama.cpp's prefill on Qwen3-Next-80B (4x V100); 35 of 35 models decode and 34 of 35 prefill faster than on llama.cpp (V100); up to 4.08x sooner to the first token; up to 5.53x vLLM 0.18.1's batched decode; up to 1.53x llama.cpp's decode on an Apple M4"></a>
 <a href="#the-five-principles"><img src="docs/assets/readme/schedule.gif" width="400" alt="A simulation of placement: model blocks page from the .jlm onto a GPU and the CPU, and relocate, KV with them, as a GPU is added, the placement changes and the GPU is removed"></a>
@@ -38,6 +52,53 @@ are [desktop](#desktop-app) and [terminal](#terminal-app) apps too.
 | Containers | [Docker](#docker) |
 | Inference inside a Go program | [Go library guide](docs/embedding-go.md) |
 | Chatting, and watching where each block runs | [Desktop app](#desktop-app) · [Terminal app](#terminal-app) |
+
+## The engine
+
+- **Kernels written for the machine in front of it.** Every kernel is emitted
+  at load for the model's shapes and weight formats: x86 (SSE, AVX2, AVX-512,
+  VNNI) and Arm (NEON, dot-product) machine code on the CPU, PTX for CUDA
+  (tensor cores from Volta on), SPIR-V for Vulkan, Metal shaders, and AMDGPU
+  for ROCm (not yet tested on AMD hardware). No vendor math library, no
+  interpreted fallback.
+- **Layers move mid-conversation.** Blocks relocate between the CPU and any
+  GPU, or from one GPU to another, carrying their KV pages and recurrent state,
+  and the answer stays the same.
+- **Models bigger than memory.** Disk, RAM and VRAM are one paged hierarchy:
+  weights page in on demand (read with O_DIRECT, never mmap), every expert of a
+  mixture is its own page so a token reads only the experts it routes to, and
+  KV history pages and streams through the card.
+- **Broad coverage, held to the reference.** 57 graphs (65 GGUF architecture names, 30 Hugging Face classes) and 17
+  vision projectors: dense, mixture-of-experts, MLA, gated-delta and
+  state-space hybrids, vision-language, embeddings and decision models, each
+  gated against llama.cpp or the model's own transformers class.
+- **No garbage on the hot path.** A warm decode token allocates nothing on the
+  Go heap, on the host and every GPU backend; weights and page frames live off
+  the heap.
+- **Faster tokens, same distribution.** Speculative decoding with a model's own
+  prediction head or prompt lookup, an int8 KV cache, prefix caching and
+  shared prefixes across sessions.
+
+## The server
+
+One binary, `jitllmd`, many models and many sessions at once:
+
+- **OpenAI, Anthropic and Connect APIs**: chat, completions, messages,
+  embeddings, Batches and Files, with streaming.
+- **Tool calling in each model's own format** (24 families, from Hermes and
+  Llama to gpt-oss Harmony, DeepSeek, Kimi and GLM), with `tool_choice`
+  enforced by constrained decoding, and **structured output** from a JSON
+  schema.
+- **Pictures** through `image_url` and `image` blocks on vision models,
+  log-probabilities, `n` choices from one prefill, and decision answers through
+  `/v1/systemone`.
+- **Continuous batching on the CPU and the GPU**, prompts fed in chunks beside
+  running decodes, KV-aware admission, and a **fairness level**
+  (`-fairness 0-100`) that time-slices sessions through the card by parking
+  them to the host and back, with per-request priority.
+- **A control plane**: load and unload models, create, park and resume
+  sessions, move blocks between devices (`jitllmd models`, `sessions`,
+  `place`, `stats`), and `/metrics` for Prometheus.
 
 ## Install
 
