@@ -28,11 +28,10 @@
 Generated kernels · models bigger than memory · layers that move mid-conversation</p>
 
 <p align="center">
-<a href="#quick-start">API server</a> ·
-<a href="#docker">Docker</a> ·
-<a href="docs/embedding-go.md">Go library</a> ·
-<a href="#desktop-app">Desktop app</a> ·
-<a href="#terminal-app">Terminal app</a>
+<a href="#quick-start">Server/CLI</a> ·
+<a href="#desktop-app">Desktop</a> ·
+<a href="#terminal-app">TUI</a> ·
+<a href="docs/embedding-go.md">Embed</a>
 </p>
 
 ## The engine
