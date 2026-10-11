@@ -50,7 +50,9 @@ func (g *devTier) prefillPass() (width, chunk int) {
 type pagedPrefill struct {
 	// flash is the one-kernel form, and fmerge its merge where the plan has
 	// sinks (the kernel's one split writes partials; the merge adds the sink).
-	flash, fmerge   backend.Kernel
+	flash, fmerge backend.Kernel
+	// flash80 says flash is kernels.FlashPrefill80, the m16n8k16 form.
+	flash80         bool
 	fGroups, fWidth int
 	fRows           int // the merge's threads: rows x heads x value
 	// The staged form: a variant per span, the pass folds, the planes.
@@ -143,6 +145,12 @@ func (g *devTier) initPagedPrefill(bs *blockScratch) error {
 				if pf.flash = comp(kernels.FlashPrefillTile(fs, t)); pf.flash != nil {
 					pf.fGroups, pf.fWidth = kernels.FlashPrefillTileGroups(fs, t), t.Threads()
 				}
+			}
+		case !g.kb.noAttnMMA && g.f16GemmK() == 16 && kernels.FlashPrefill80WhyNot(fs) == "":
+			// sm_80 on: the whole attention in one kernel on m16n8k16.
+			if pf.flash = comp(kernels.FlashPrefill80(fs)); pf.flash != nil {
+				pf.fGroups, pf.fWidth = kernels.FlashPrefill80Groups(fs), kernels.FlashPrefill80Threads
+				pf.flash80 = true
 			}
 		case !g.NoVolta && (hd == 64 || hd == 128) && rows%kernels.FlashPrefill70Rows == 0 && g.sm70():
 			if pf.flash = comp(kernels.FlashPrefill70(fs)); pf.flash != nil {
@@ -496,6 +504,9 @@ func (pf *pagedPrefill) prefillWrites(w func(backend.Buf, []byte)) {
 
 // on70 reports that the staged form runs on sm_70's m8n8k4 pair.
 func (pf *pagedPrefill) on70() bool { return pf.flash == nil && pf.mode == prefillMMA70 }
+
+// on80 reports that the prompt's attention is kernels.FlashPrefill80.
+func (pf *pagedPrefill) on80() bool { return pf.flash != nil && pf.flash80 }
 
 // accOnMMA reports that the staged form's accumulate is PagedAttnAccMMA.
 func (pf *pagedPrefill) accOnMMA() bool { return pf.flash == nil && pf.mode == prefillMMAAcc }

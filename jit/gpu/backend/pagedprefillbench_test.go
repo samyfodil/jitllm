@@ -309,8 +309,8 @@ func prefillAB(t *testing.T, d backend.Device, kern string, volta, mma16 bool, h
 		pf := cf
 		pf.KStride, pf.Page, pf.Splits = 0, page, splits
 		tile := d.API() == "msl"
-		kc, cG, cW := flashPrefillBuild(t, cf, tile)
-		kp, pG, pW := flashPrefillBuild(t, pf, tile)
+		kc, cG, cW := flashPrefillBuild(t, cf, formOf(tile))
+		kp, pG, pW := flashPrefillBuild(t, pf, formOf(tile))
 		fc, fp := compile(kc, nil), compile(kp, nil)
 		what = fmt.Sprintf("%s, paged splits %d", kc.Name, splits)
 		dst := out

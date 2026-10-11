@@ -59,7 +59,7 @@ func pagedPrefillPasses(t *testing.T, d backend.Device, s kernels.FlashShape, f 
 	fs := kernels.FlashPrefill70Shape{Heads: s.Heads, KVHeads: s.KVHeads, Dim: s.Dim, Rows: R, Scale: s.Scale, Softcap: s.Softcap,
 		Page: s.Page, Splits: s.Splits, F16: s.F16}
 	if flash {
-		k, g, w := flashPrefillBuild(t, fs, tile)
+		k, g, w := flashPrefillBuild(t, fs, formOf(tile))
 		fk, fG, fW = compile(k, nil), g, w
 	} else {
 		switch {

@@ -145,10 +145,30 @@ func stagedGemmArm(t *testing.T, m *Model, g *tier.GPU, seq int, run func(*State
 	case noInt8 && st.GemmInt8 != 0:
 		t.Fatalf("NoGemmInt8 and %d GemmInt8 matvecs: the arm is not the binary16 GEMM", st.GemmInt8)
 	}
-	// The accumulate rides the m16n8k16 scores, so from sm_80; a hybrid's
-	// attention blocks and a mixture's take it as well.
-	if st.PagedAccMMA == 0 && sm >= 80 {
-		t.Fatalf("%s: no prompt attention accumulated on m16n8k8: the FMA tiles answered", g.Name())
+	t.Logf("%d FlashPrefill80 launches; fused operands: %d norms and %d activations wrote binary16, %d activations quantized",
+		st.FlashPrefill80, st.NormF16, st.ActF16Fused, st.QuantActs)
+	// From sm_80 the prompt's attention is FlashPrefill80 wherever a head is
+	// 128 wide or less, and the staged kernels with the m16n8k8 accumulate
+	// past it (gemma-2b's 256); a hybrid's attention blocks and a mixture's
+	// take them as well.
+	if sm >= 80 {
+		if m.Cfg.HeadDim <= 128 && m.Cfg.HeadDimSWA <= 128 && st.FlashPrefill80 == 0 {
+			t.Fatalf("%s: head width %d and no FlashPrefill80: the staged kernels answered", g.Name(), m.Cfg.HeadDim)
+		}
+		if st.FlashPrefill80+st.PagedAccMMA == 0 {
+			t.Fatalf("%s: no prompt attention on the matrix unit's accumulate: the FMA tiles answered", g.Name())
+		}
+	}
+	// The operands their producers write: a block whose matvecs are all a
+	// binary16 GEMM (QuantSkipped counts them) has its norms and its
+	// activation write the operand; any other gated block on the int8 path
+	// quantizes in its activation's launch. A dense gated FFN is in every
+	// model here.
+	switch {
+	case st.QuantSkipped > 0 && st.NormF16+st.ActF16Fused == 0:
+		t.Fatalf("%d blocks ran every matvec as a binary16 GEMM and no norm or activation wrote their operand", st.QuantSkipped)
+	case st.GemmInt8 > 0 && st.QuantActs == 0 && m.Cfg.NExpert == 0:
+		t.Fatalf("%d int8 GEMMs and no activation quantized in its own launch", st.GemmInt8)
 	}
 }
 

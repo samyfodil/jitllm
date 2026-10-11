@@ -12,11 +12,35 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
-// flashPrefillBuild builds one flash prefill kernel for a shape: FlashPrefill70
-// or, when tile, FlashPrefillTile at FlashTileFor's blocking, with its launch.
-func flashPrefillBuild(t *testing.T, fs kernels.FlashPrefill70Shape, tile bool) (*ir.Kernel, int, int) {
+// flashForm is which flash prefill kernel a gate builds.
+type flashForm int
+
+const (
+	flash70Form   flashForm = iota // FlashPrefill70, m8n8k4
+	flashTileForm                  // FlashPrefillTile, Metal's simdgroup matrices
+	flash80Form                    // FlashPrefill80, m16n8k16
+)
+
+// formOf is the form a tile flag names: the tile, else sm_70's.
+func formOf(tile bool) flashForm {
+	if tile {
+		return flashTileForm
+	}
+	return flash70Form
+}
+
+// flashPrefillBuild builds one flash prefill kernel for a shape in form, with
+// its launch.
+func flashPrefillBuild(t *testing.T, fs kernels.FlashPrefill70Shape, form flashForm) (*ir.Kernel, int, int) {
 	t.Helper()
-	if !tile {
+	if form == flash80Form {
+		k, err := kernels.FlashPrefill80(fs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return k, kernels.FlashPrefill80Groups(fs), kernels.FlashPrefill80Threads
+	}
+	if form == flash70Form {
 		k, err := kernels.FlashPrefill70(fs)
 		if err != nil {
 			t.Fatal(err)
@@ -37,10 +61,10 @@ func flashPrefillBuild(t *testing.T, fs kernels.FlashPrefill70Shape, tile bool) 
 // pagedFlashPrefill runs a paged flash prefill kernel (and, at Splits > 0, the
 // merge, with the sink when sink) over the pool through tab and desc, and
 // returns the output and its NMSE against the oracle.
-func pagedFlashPrefill(t *testing.T, d backend.Device, fs kernels.FlashPrefill70Shape, sink, tile bool, p *pagedPool, tab, desc []uint32, rows []pagedRow) ([]float64, float64, error) {
+func pagedFlashPrefill(t *testing.T, d backend.Device, fs kernels.FlashPrefill70Shape, sink bool, form flashForm, p *pagedPool, tab, desc []uint32, rows []pagedRow) ([]float64, float64, error) {
 	t.Helper()
 	fs.Rows = len(rows)
-	k, groups, threads := flashPrefillBuild(t, fs, tile)
+	k, groups, threads := flashPrefillBuild(t, fs, form)
 	// The kernel under test is the paged one.
 	if !strings.Contains(k.Name, "paged") || k.Params[len(k.Params)-1].Name != "pRow" || k.Params[len(k.Params)-2].Name != "pTab" {
 		t.Fatalf("not the paged kernel: %s %v", k.Name, k.Params)
@@ -106,11 +130,11 @@ func pagedFlashPrefill(t *testing.T, d backend.Device, fs kernels.FlashPrefill70
 
 // contigFlash runs the contiguous FlashPrefill70 (or FlashPrefillTile) on the
 // same history and queries with the case's sliding window baked in.
-func contigFlash(t *testing.T, d backend.Device, fs kernels.FlashPrefill70Shape, tile bool, p *pagedPool, rows []pagedRow, window int) []float64 {
+func contigFlash(t *testing.T, d backend.Device, fs kernels.FlashPrefill70Shape, form flashForm, p *pagedPool, rows []pagedRow, window int) []float64 {
 	t.Helper()
 	kc, vc, L, kStride := contigCache(p, rows)
 	fs.Rows, fs.Page, fs.Splits, fs.F16, fs.KStride, fs.Window = len(rows), 0, 0, false, kStride, window
-	k, groups, threads := flashPrefillBuild(t, fs, tile)
+	k, groups, threads := flashPrefillBuild(t, fs, form)
 	c, err := d.Compile(k)
 	if err != nil {
 		t.Fatal(err)
@@ -182,20 +206,20 @@ func TestPagedFlashPrefill(t *testing.T) {
 								fs.Page, fs.Splits = page, splits
 								t.Run(fmt.Sprintf("P%d/%s/h%d-%d/d%d/f16%v/cap%g/sink%v/S%d", page, c.name, fs.Heads, fs.KVHeads, fs.Dim, fs.F16, fs.Softcap, sh.sink, splits), func(t *testing.T) {
 									p := newPrefillPool(rand.New(rand.NewSource(int64(page+fs.Dim+c.pos0))), page, fs.KVHeads*fs.Dim, fs.F16, false, false, rows)
-									got, nmse, err := pagedFlashPrefill(t, d, fs, sh.sink, tile, p, p.tab, p.desc, rows)
+									got, nmse, err := pagedFlashPrefill(t, d, fs, sh.sink, formOf(tile), p, p.tab, p.desc, rows)
 									if err != nil || nmse > 1e-5 {
 										t.Fatalf("shuffled pages: NMSE %.3g, %v", nmse, err)
 									}
-									if _, bad, err := pagedFlashPrefill(t, d, fs, sh.sink, tile, p, p.wrong, p.desc, rows); err == nil && bad < 1e-4 {
+									if _, bad, err := pagedFlashPrefill(t, d, fs, sh.sink, formOf(tile), p, p.wrong, p.desc, rows); err == nil && bad < 1e-4 {
 										t.Fatalf("a wrong table passed (NMSE %.3g): the table is not read", bad)
 									}
-									if _, bad, err := pagedFlashPrefill(t, d, fs, sh.sink, tile, p, p.tab, shortDesc(p.desc), rows); err == nil && bad < 1e-4 {
+									if _, bad, err := pagedFlashPrefill(t, d, fs, sh.sink, formOf(tile), p, p.tab, shortDesc(p.desc), rows); err == nil && bad < 1e-4 {
 										t.Fatalf("keyEnds one short passed (NMSE %.3g)", bad)
 									}
 									msg := fmt.Sprintf("NMSE %.3g", nmse)
 									// The contiguous kernel has no sink, no f16 V and no chunked window.
 									if !sh.sink && !fs.F16 && c.window >= 0 {
-										ref := contigFlash(t, d, fs, tile, p, rows, c.window)
+										ref := contigFlash(t, d, fs, formOf(tile), p, rows, c.window)
 										n := realRowsNMSE(got, ref, rows)
 										if math.IsNaN(n) || n > 1e-5 {
 											t.Fatalf("paged against contiguous: NMSE %.3g", n)

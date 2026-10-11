@@ -84,7 +84,7 @@ func TestPagedGatesLeakNothing(t *testing.T) {
 		}
 		fs := kernels.FlashPrefill70Shape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: page, Splits: 2}
 		if d.API() == "msl" || volta[d] {
-			if _, _, err := pagedFlashPrefill(t, d, fs, true, d.API() == "msl", pp, pp.tab, pp.desc, prows); err != nil {
+			if _, _, err := pagedFlashPrefill(t, d, fs, true, formOf(d.API() == "msl"), pp, pp.tab, pp.desc, prows); err != nil {
 				t.Fatal(err)
 			}
 		}
