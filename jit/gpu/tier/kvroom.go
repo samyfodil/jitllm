@@ -76,6 +76,46 @@ func (g *GPU) PromiseKV(positions int) {
 	}
 }
 
+// PrewarmKV is nn.KVPrewarmer: every device's pool grows so each of its
+// layers has positions positions' worth of free pages, where the device's
+// budget has the room as it stands -- nothing is paged out for it, and the
+// pages go to no sequence, so another session can take them as it would
+// take a page any growth made. A layer it cannot grow is left as it is; the
+// first prompt grows it as it always did.
+func (g *GPU) PrewarmKV(positions int) {
+	for _, d := range g.devs {
+		d.prewarmKV(positions)
+	}
+}
+
+// prewarmKV is PrewarmKV on one device.
+func (g *devTier) prewarmKV(positions int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	kp := g.kvp
+	if !g.paged || kp == nil || positions <= 0 || kp.p <= 0 {
+		return
+	}
+	pages := (positions + kp.p - 1) / kp.p
+	for _, l := range kp.layers {
+		// DeepSeek V4's entries grow at their own rate with their block.
+		if l.rate > 0 || len(l.free) >= pages {
+			continue
+		}
+		// At least a doubling, so growKVLayer grows to exactly this and asks
+		// for no more room than room() was asked for.
+		want := max(l.n+pages-len(l.free), 2*l.n)
+		if want > kp.maxPages(l) || !g.room(kp.pageBytes(l)*uint64(want)) || !g.keepsSlot(kp.pageBytes(l)*uint64(want-l.n)) {
+			continue
+		}
+		before := l.n
+		if err := g.growKVLayer(kp, l, want); err != nil {
+			continue
+		}
+		g.KVPrewarmPages += l.n - before
+	}
+}
+
 // promisedBytes is what the promise needs beyond the pool's free pages, at
 // one page of every layer a page. Callers hold g.mu.
 func (g *devTier) promisedBytes() uint64 {

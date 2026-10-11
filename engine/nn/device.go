@@ -1179,6 +1179,15 @@ type SeqKVDevice interface {
 // names -devices gives them; see DeviceName). It places a block or the head on
 // the device a placement names, says where each went, and pins a block where
 // it is.
+// KVPrewarmer is a device whose paged KV pool can grow ahead of the history
+// written into it. PrewarmKV makes room for positions more positions in every
+// placed block's pool where the device's budget has it free -- without paging
+// weights out and without giving the pages to any sequence -- so the first
+// prompt a State runs does not grow the pool inside its own time.
+type KVPrewarmer interface {
+	PrewarmKV(positions int)
+}
+
 type NamedDevice interface {
 	PrepLayerOn(name string, li int, p *LayerPlan, w *LayerWeights) (bool, error)
 	PrepHeadOn(name string, h *Head) (bool, error)

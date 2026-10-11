@@ -174,6 +174,12 @@ type Config struct {
 	// device to the int8 path's precision (model's hybrid batch gate) asks for
 	// that with this one knob on every backend.
 	NoVolta bool
+	// NoOperandFuse keeps a prompt chunk's norm and gated activation apart
+	// from the GEMM operand they feed: RMSNorm then ActF16T, ActMul then
+	// ActF16T or Quantize, instead of RMSNormF16TRows, ActMulF16T and
+	// QuantizeAct (the same bits in one launch). The A/B arm and the
+	// bisection switch.
+	NoOperandFuse bool
 	// NoGemmInt8 refuses the staged int8 GEMM (kernels.GemmInt8), leaving a
 	// prompt chunk the m16n8 binary16 GEMM or MatVecMMA: the A/B arm and the
 	// bisection switch for it.
@@ -559,9 +565,10 @@ type Stats struct {
 	// budget and is reported apart because it is constant in the context
 	// length, where the KV cache grows.
 	RecBytes uint64
-	// KVGrows is how many times the position capacity doubled: zero on a
-	// session that never outran its first page, and the way to tell "the
-	// capacity was big enough" from "growth never ran".
+	// KVGrows is how many times a KV pool layer's buffers grew (growKVLayer):
+	// zero on a session that never outran the pages placement and PrewarmKV
+	// gave it, and the way to tell "the pool was big enough" from "growth
+	// never ran".
 	KVGrows int
 	Served  int // matvecs served on the device
 	// Forgotten counts lone-matvec copies dropped because the host said the
@@ -637,6 +644,15 @@ type Stats struct {
 	// GemmInt8 counts batched matvecs built as kernels.GemmInt8, the staged
 	// int8 GEMM (sm_80 on, devTier.int8Gemm).
 	GemmInt8 int
+	// NormF16, ActF16Fused and QuantActs count a prompt chunk's fused operand
+	// launches: a norm that wrote the binary16 GEMM's operand
+	// (RMSNormF16TRows), a gated activation that did (ActMulF16T), and one
+	// that quantized for the int8 matvec (QuantizeAct). Each is a conversion
+	// launch, and a pass over the float row, that did not run.
+	NormF16, ActF16Fused, QuantActs int
+	// KVPrewarmPages counts pages a pool grew ahead of its history
+	// (PrewarmKV): the growth a State's first prompt no longer pays.
+	KVPrewarmPages int
 	// GroupedVolta counts a batched mixture's expert matvecs run as grouped
 	// GemmVolta on sm_70's tensor cores, or grouped GemmTile on Metal, rather
 	// than the dp4a grouped matvec.
@@ -844,6 +860,10 @@ type Stats struct {
 	// binary16 instruction (kernels.PagedAttnAccMMA, sm_75 on): the selection
 	// check that the weighted sum of V left the FMA tiles.
 	PagedAccMMA int
+	// FlashPrefill80 counts prompt attention launches of
+	// kernels.FlashPrefill80, scores, softmax and accumulate in one kernel
+	// on m16n8k16 (sm_80 on).
+	FlashPrefill80 int
 	// PagedPrefillPasses counts the passes those launches ran over a history
 	// longer than one launch attends -- the selection check for the fold.
 	PagedPrefillPasses int
@@ -1024,6 +1044,10 @@ func (s *Stats) add(o Stats) {
 	s.VoltaGemm += o.VoltaGemm
 	s.GemmF16 += o.GemmF16
 	s.GemmInt8 += o.GemmInt8
+	s.NormF16 += o.NormF16
+	s.ActF16Fused += o.ActF16Fused
+	s.QuantActs += o.QuantActs
+	s.KVPrewarmPages += o.KVPrewarmPages
 	s.GroupedVolta += o.GroupedVolta
 	s.MLAScores70 += o.MLAScores70
 	s.MLAAcc70 += o.MLAAcc70
@@ -1101,6 +1125,7 @@ func (s *Stats) add(o Stats) {
 	s.RecCarryBytes += o.RecCarryBytes
 	s.PagedPrefill70 += o.PagedPrefill70
 	s.PagedAccMMA += o.PagedAccMMA
+	s.FlashPrefill80 += o.FlashPrefill80
 	s.PagedPrefillPasses += o.PagedPrefillPasses
 	s.EmbedLaunches += o.EmbedLaunches
 	s.HeadFolds += o.HeadFolds

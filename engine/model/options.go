@@ -30,6 +30,9 @@ type modelOpts struct {
 	// noStreamTrial keeps an auto-streamed placement without measuring it
 	// against the host; see WithStreamTrial.
 	noStreamTrial bool
+	// noKVPrewarm leaves a device's KV pools at their first frame after
+	// placement (WithKVPrewarm).
+	noKVPrewarm bool
 	// experts is WithExperts' choice.
 	experts string
 	// trialAA makes the stream trial an A/A self-control (WithStreamTrialAA).
@@ -122,6 +125,12 @@ func WithStreamTrialAA(on bool) Option { return func(l *loadOpts) { l.opt.trialA
 // card could hold resident is measured against running them on the host
 // (State.initStreamTrial) and the faster kept. On by default.
 func WithStreamTrial(on bool) Option { return func(l *loadOpts) { l.opt.noStreamTrial = !on } }
+
+// WithKVPrewarm sets whether a State that places blocks on a device grows the
+// device's KV pools ahead, by one prompt chunk, into the room placement left
+// (nn.KVPrewarmer), so its first prompt does not grow them inside its own
+// time. On by default; off is the A/B arm.
+func WithKVPrewarm(on bool) Option { return func(l *loadOpts) { l.opt.noKVPrewarm = !on } }
 
 // WithProfile arms the per-op nanosecond counters OpProfile reports.
 func WithProfile(on bool) Option { return func(l *loadOpts) { l.opt.profile = on } }

@@ -1155,7 +1155,16 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 	if err := s.finishPlacement(); err != nil {
 		return err
 	}
-	return s.reserveRows()
+	if err := s.reserveRows(); err != nil {
+		return err
+	}
+	// Last, so the blocks, the head and the prompt's scratch have taken their
+	// room first: the pool grows ahead into what is left, one prompt chunk's
+	// worth at most.
+	if pw, ok := d.(nn.KVPrewarmer); ok && s.devCount() > 0 && !s.m.opt.noKVPrewarm {
+		pw.PrewarmKV(min(s.maxSeq, nn.MaxDevicePrefillChunk))
+	}
+	return nil
 }
 
 // reserveRows makes the devices hold every row's history before any is

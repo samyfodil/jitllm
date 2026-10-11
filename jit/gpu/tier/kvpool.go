@@ -365,6 +365,7 @@ func (g *devTier) growKVLayer(kp *kvPool, l *kvLayerPool, want int) error {
 		g.charge(delta)
 		l.charged += delta
 		l.n = n
+		g.KVGrows++
 		return nil
 	}
 	return fmt.Errorf("%w: a layer's %d more page(s) need %d bytes", ErrKVCapacity, want-l.n, pb*uint64(want-l.n))
