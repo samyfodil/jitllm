@@ -27,7 +27,7 @@ import (
 // and the resume.
 func convertCmd(args []string) error {
 	fs := flag.NewFlagSet("convert", flag.ContinueOnError)
-	outDir := fs.String("o", "", "directory a downloaded model lands in")
+	outDir := fs.String("o", "", "directory the converted container (and a downloaded source) lands in")
 	q8 := fs.Bool("q8", false, "safetensors only: store every weight matrix as Q8_0 "+
 		"(lossy; the default carries the float bytes exactly, and bf16 widens to f32)")
 	chatTpl := fs.String("chat-template", "", "store this file's chat template(s) in place of "+
@@ -84,20 +84,12 @@ func convertCmd(args []string) error {
 			"mmproj: the two-file contract is GGUF's, and a HuggingFace tower "+
 			"lives in the model directory", src, mmproj)
 	}
-	// The default output is derived AFTER the fetch, and it goes to the model
-	// directory (defaultModelDir: JITLLM_MODELS, or the models disk the repo's
-	// links point at) whatever disk the source is on. With no model directory
-	// on this host it lands beside the source.
+	// The default output is derived AFTER the fetch (see defaultDest).
 	beside := false
 	if dst == "" {
-		dir := defaultModelDir()
-		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
-			// Say so: defaultModelDir resolves the relative name "models",
-			// so from a directory without one the container lands beside the
-			// source, possibly a multi-GB file on the main disk.
-			dir, beside = "", true
+		if dst, beside, err = defaultDest(src, *outDir); err != nil {
+			return err
 		}
-		dst = convert.DestFor(src, dir)
 	}
 	if src == dst {
 		return fmt.Errorf("jitllm convert: refusing to write %s over itself", src)
@@ -274,4 +266,27 @@ func sourceBytes(src string) (int64, error) {
 		return 0, fmt.Errorf("jitllm convert: %s holds no weight file", src)
 	}
 	return n, nil
+}
+
+// defaultDest is where a conversion with no output path writes: into -o's
+// directory when one is given, whatever the source is (a local file as much as
+// a download), otherwise into the model directory (defaultModelDir:
+// JITLLM_MODELS, or the models disk the repo's links point at) whatever disk
+// the source is on. With neither on this host it lands beside the source, and
+// beside says so.
+func defaultDest(src, outDir string) (dst string, beside bool, err error) {
+	if outDir != "" {
+		if err := os.MkdirAll(outDir, 0o755); err != nil {
+			return "", false, fmt.Errorf("jitllm convert: -o %s: %w", outDir, err)
+		}
+		return convert.DestFor(src, outDir), false, nil
+	}
+	dir := defaultModelDir()
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		// Say so: defaultModelDir resolves the relative name "models", so
+		// from a directory without one the container lands beside the
+		// source, possibly a multi-GB file on the main disk.
+		return convert.DestFor(src, ""), true, nil
+	}
+	return convert.DestFor(src, dir), false, nil
 }

@@ -113,5 +113,5 @@ jitllm run stories260K.gguf "Once upon a time"
 | `missing block_count/embedding_length/head_count` | the GGUF's metadata is incomplete or for another architecture | re-download; a hand-edited GGUF is not a model |
 | `ErrNotImplemented` naming a projector | a vision projector outside the list | convert the text model alone |
 | a key spelled two ways that disagree is refused | the config contradicts itself | fix the config, or use the publisher's GGUF |
-| `no model directory here, so it lands beside the source` | a local file with no output path | give the output path, or set `JITLLM_MODELS` |
+| `no model directory here, so it lands beside the source` | a local file with no output path | give the output path or `-o DIR`, or set `JITLLM_MODELS` |
 | the download stops | network or Hugging Face rate limits | rerun the same command; it resumes |
