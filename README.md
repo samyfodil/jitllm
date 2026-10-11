@@ -8,6 +8,7 @@
 </p>
 
 <p align="center">
+<a href="https://jitllm.org"><b>jitllm.org</b></a> ·
 <a href="#quick-start">Get started</a> ·
 <a href="#performance">Benchmarks</a> ·
 <a href="https://jitllm.org/docs/">Docs</a> ·
