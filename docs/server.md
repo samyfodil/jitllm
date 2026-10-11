@@ -109,8 +109,14 @@ multicast or unspecified address refused as it is dialled. Every refusal is a
 to a model with no tower ("model X does not accept images"), an unsupported
 or mismatched type, a picture over a limit, undecodable bytes, a remote URL
 with fetching off (the message says how to turn it on), and an audio or file
-part. A request with pictures prefills alone rather than as a row of the step
-loop, and refuses `n` above 1, `tools`, and `continue_session`.
+part. The Connect API takes pictures as `ChatMessage.images` (`ChatImage`:
+the bytes and an optional `media_type`) under the same limits;
+`ApplyChatTemplate` refuses one. Pictures combine with `tools` (the template
+renders the tool list, and a forced `tool_choice` runs under the tool
+grammar), with `n` (the prompt, picture included, is prefilled once and the
+other choices restore it), and with `continue_session` (the session's history
+already holds its earlier pictures; the new turn's follow). A request with
+pictures prefills alone rather than as a row of the step loop.
 
 With each other: `logprobs` on a constrained reply are the raw distribution's,
 before the grammar's mask, as vLLM's default does; `n` with a grammar
