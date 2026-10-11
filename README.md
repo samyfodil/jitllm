@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-<a href="https://jitllm.org"><b>jitllm.org</b></a> ·
+<a href="https://jitllm.org">jitllm.org</a> ·
 <a href="#quick-start">Get started</a> ·
 <a href="#performance">Benchmarks</a> ·
 <a href="https://jitllm.org/docs/">Docs</a> ·
@@ -25,15 +25,15 @@
 </p>
 
 <p align="center"><b>An operating system for LLM inference.</b><br>
-Kernels generated for your hardware, models bigger than memory, and execution
-that moves between CPU and GPUs without losing the conversation.</p>
+Generated kernels · models bigger than memory · layers that move mid-conversation</p>
 
-| Use jitllm for | Start here |
-|---|---|
-| Serving models over an API | [Quick start](#quick-start) · [Server reference](docs/server.md) |
-| Containers | [Docker](#docker) |
-| Inference inside a Go program | [Go library guide](docs/embedding-go.md) |
-| Chatting, and watching where each block runs | [Desktop app](#desktop-app) · [Terminal app](#terminal-app) |
+<p align="center">
+<a href="#quick-start">API server</a> ·
+<a href="#docker">Docker</a> ·
+<a href="docs/embedding-go.md">Go library</a> ·
+<a href="#desktop-app">Desktop app</a> ·
+<a href="#terminal-app">Terminal app</a>
+</p>
 
 ## The engine
 
